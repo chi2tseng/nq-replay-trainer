@@ -66,13 +66,13 @@ function normalizeAtms(obj) { // migrate v1 {tp,qty} -> {targets:[...]}
 
 // ---------- chart ----------
 const chart = LightweightCharts.createChart($('chart'), {
-  layout: { background: { color: '#0e1116' }, textColor: '#d1d4dc' },
-  grid: { vertLines: { color: '#1c2230' }, horzLines: { color: '#1c2230' } },
+  layout: { background: { color: '#0b0e11' }, textColor: '#eaecef', attributionLogo: false },
+  grid: { vertLines: { color: '#1b2027' }, horzLines: { color: '#1b2027' } },
   crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-  rightPriceScale: { borderColor: '#2a2f3a' },
-  timeScale: { borderColor: '#2a2f3a', timeVisible: true, secondsVisible: true, rightOffset: 6 },
+  rightPriceScale: { borderColor: '#2b3139' },
+  timeScale: { borderColor: '#2b3139', timeVisible: true, secondsVisible: true, rightOffset: 6 },
 });
-const candle = chart.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
+const candle = chart.addCandlestickSeries({ upColor: '#0ecb81', downColor: '#f6465d', borderVisible: false, wickUpColor: '#0ecb81', wickDownColor: '#f6465d' });
 const vol = chart.addHistogramSeries({ priceScaleId: 'vol', priceFormat: { type: 'volume' } });
 chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
 function sizeChart() { const el = $('chart'); const w = el.clientWidth, h = el.clientHeight; if (!w || !h) return; chart.resize(w - 1, h, true); chart.resize(w, h, true); } // double-resize: LWC no-ops a resize to the same size, so nudge then set
@@ -111,7 +111,7 @@ const ripsterPrimitive = {
               const f1 = candle.priceToCoordinate(cl.fast[i + 1]), s1 = candle.priceToCoordinate(cl.slow[i + 1]);
               if (f0 == null || s0 == null || f1 == null || s1 == null) continue;
               ctx.beginPath(); ctx.moveTo(x0, f0); ctx.lineTo(x1, f1); ctx.lineTo(x1, s1); ctx.lineTo(x0, s0); ctx.closePath();
-              ctx.globalAlpha = cl.st.a; ctx.fillStyle = cl.st.dir ? (cl.fast[i] >= cl.slow[i] ? '#26a69a' : '#ef5350') : cl.st.fill; ctx.fill(); ctx.globalAlpha = 1;
+              ctx.globalAlpha = cl.st.a; ctx.fillStyle = cl.st.dir ? (cl.fast[i] >= cl.slow[i] ? '#0ecb81' : '#f6465d') : cl.st.fill; ctx.fill(); ctx.globalAlpha = 1;
             }
             for (const w of ['fast', 'slow']) {
               ctx.beginPath(); let st = false;
@@ -172,10 +172,10 @@ let annotations = loadJSON('rt_annotations', []);   // {baseTime, position, colo
 let drawings = loadJSON('rt_drawings', []);         // {type:'hl'|'tl'|'ray'|'box', p1:{t,p}, p2?:{t,p}, color}
 let pendingPt = null;                                // first click of a 2-point drawing
 const ANN = {
-  au:    { position: 'belowBar', color: '#26a69a', shape: 'arrowUp',   text: '' },
-  ad:    { position: 'aboveBar', color: '#ef5350', shape: 'arrowDown', text: '' },
-  long:  { position: 'belowBar', color: '#26a69a', shape: 'arrowUp',   text: 'LONG' },
-  short: { position: 'aboveBar', color: '#ef5350', shape: 'arrowDown', text: 'SHORT' },
+  au:    { position: 'belowBar', color: '#0ecb81', shape: 'arrowUp',   text: '' },
+  ad:    { position: 'aboveBar', color: '#f6465d', shape: 'arrowDown', text: '' },
+  long:  { position: 'belowBar', color: '#0ecb81', shape: 'arrowUp',   text: 'LONG' },
+  short: { position: 'aboveBar', color: '#f6465d', shape: 'arrowDown', text: 'SHORT' },
 };
 const TOOLBTN = { start: 'btnPickStart', au: 'annUp', ad: 'annDown', long: 'annLong', short: 'annShort', hl: 'drwHL', tl: 'drwTL', ray: 'drwRay', box: 'drwBox' };
 function placeAnnotation(t, baseTime) { const a = ANN[t]; if (!a) return; annotations.push({ baseTime, ...a }); saveJSON('rt_annotations', annotations); refreshMarkers(); }
@@ -227,7 +227,7 @@ function aggregate(base, m) {
   return out;
 }
 function cd(b) { return { time: b.time, open: b.open, high: b.high, low: b.low, close: b.close }; }
-function vd(b) { return { time: b.time, value: b.volume, color: b.close >= b.open ? 'rgba(38,166,154,.4)' : 'rgba(239,83,80,.4)' }; }
+function vd(b) { return { time: b.time, value: b.volume, color: b.close >= b.open ? 'rgba(14,203,129,.35)' : 'rgba(246,70,93,.35)' }; }
 const mBucket = (ts) => Math.floor(ts / (tf * 60)) * (tf * 60);
 
 // ---------- init ----------
@@ -295,10 +295,10 @@ function stepBack() {
 function play() {
   if (playing) return pause();
   if (idx >= bars.length - 1) return;
-  playing = true; $('btnPlay').textContent = '⏸';
+  playing = true; $('btnPlay').textContent = 'pause';
   timer = setInterval(stepFwd, 1000 / Number($('speedSelect').value));
 }
-function pause() { playing = false; $('btnPlay').textContent = '▶'; clearInterval(timer); timer = null; }
+function pause() { playing = false; $('btnPlay').textContent = 'play_arrow'; clearInterval(timer); timer = null; }
 function rthOpenIdx(s) { for (let i = s.start; i <= s.end; i++) { const m = etMinutes(baseBars[i].time); if (m >= 570 && m < 960) return i; } return s.start; }  // first bar in 09:30–15:59 ET = US cash open (skips the 18:00 ET Globex open)
 function gotoSession(i) {
   if (locked()) return toast('有部位/掛單時不能跳轉');
@@ -342,7 +342,7 @@ function openPosition(side, px, t, atmName, mult) {
   orders = [];
   if (a.sl > 0) orders.push({ type: 'stop', price: rnd(side === 'long' ? px - a.sl * TICK : px + a.sl * TICK), qty: totalQty });
   tgts.sort((x, y) => x.ticks - y.ticks).forEach(tg => orders.push({ type: 'target', ticks: tg.ticks, qty: tg.qty, price: rnd(side === 'long' ? px + tg.ticks * TICK : px - tg.ticks * TICK) }));
-  addMarker(t, side === 'long' ? 'belowBar' : 'aboveBar', side === 'long' ? '#26a69a' : '#ef5350', side === 'long' ? 'arrowUp' : 'arrowDown', `${side === 'long' ? 'L' : 'S'}${totalQty} ${f2(px)}`);
+  addMarker(t, side === 'long' ? 'belowBar' : 'aboveBar', side === 'long' ? '#0ecb81' : '#f6465d', side === 'long' ? 'arrowUp' : 'arrowDown', `${side === 'long' ? 'L' : 'S'}${totalQty} ${f2(px)}`);
   drawLines(); renderLive();
 }
 
@@ -411,7 +411,7 @@ function exitQty(q, px, t, type) {
   const pnl = netTicks * INSTR.tickValue * q;
   const risk = (position.slTicks || 0) * INSTR.tickValue * q;
   trades.push({ entryTime: position.entryTime, exitTime: t, side: position.side, qty: q, entry: position.entry, exit: px, ticks: netTicks, pnl, R: risk > 0 ? pnl / risk : null, atm: position.atm, exitType: type });
-  addMarker(t, long ? 'aboveBar' : 'belowBar', pnl >= 0 ? '#26a69a' : '#ef5350', long ? 'arrowDown' : 'arrowUp', usd(pnl));
+  addMarker(t, long ? 'aboveBar' : 'belowBar', pnl >= 0 ? '#0ecb81' : '#f6465d', long ? 'arrowDown' : 'arrowUp', usd(pnl));
   saveJSON('rt_trades', trades);
   position.qty -= q;
   if (position.qty <= 0) { position = null; orders = []; }
@@ -427,8 +427,8 @@ function drawLines() {
   if (entryOrder) lines.push(pl(entryOrder.price, '#f0b90b', LightweightCharts.LineStyle.Dotted, entryOrder.kind === 'limit' ? 'LMT' : 'STP'));
   if (position) {
     lines.push(pl(position.entry, '#8b93a7', LightweightCharts.LineStyle.Dotted, 'ENTRY'));
-    const stop = orders.find(o => o.type === 'stop'); if (stop) lines.push(pl(stop.price, '#ef5350', LightweightCharts.LineStyle.Dashed, 'STOP'));
-    orders.filter(o => o.type === 'target').forEach((tg, i) => lines.push(pl(tg.price, '#26a69a', LightweightCharts.LineStyle.Dashed, 'T' + (i + 1))));
+    const stop = orders.find(o => o.type === 'stop'); if (stop) lines.push(pl(stop.price, '#f6465d', LightweightCharts.LineStyle.Dashed, 'STOP'));
+    orders.filter(o => o.type === 'target').forEach((tg, i) => lines.push(pl(tg.price, '#0ecb81', LightweightCharts.LineStyle.Dashed, 'T' + (i + 1))));
   }
 }
 function addMarker(baseTime, position_, color, shape, text) { markers.push({ baseTime, position: position_, color, shape, text }); refreshMarkers(); }
@@ -504,7 +504,7 @@ function drawEquity() {
   const lo = Math.min(0, ...eq), hi = Math.max(0, ...eq), rng = (hi - lo) || 1;
   const x = i => 4 + i * (W - 8) / Math.max(1, eq.length - 1), y = v => H - 6 - (v - lo) / rng * (H - 12);
   ctx.strokeStyle = '#2a2f3a'; ctx.beginPath(); ctx.moveTo(0, y(0)); ctx.lineTo(W, y(0)); ctx.stroke();
-  ctx.strokeStyle = s >= 0 ? '#26a69a' : '#ef5350'; ctx.lineWidth = 1.5; ctx.beginPath(); eq.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))); ctx.stroke();
+  ctx.strokeStyle = s >= 0 ? '#0ecb81' : '#f6465d'; ctx.lineWidth = 1.5; ctx.beginPath(); eq.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))); ctx.stroke();
 }
 
 // ---------- ATM editor ----------
