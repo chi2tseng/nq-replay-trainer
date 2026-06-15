@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>NQ Replay Trainer</title>
-<link rel="stylesheet" href="src/styles.css?v=8" />
+<link rel="stylesheet" href="src/styles.css?v=9" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,400..600,0..1,0&display=block">
@@ -19,6 +19,7 @@
       <span id="symbol">NQ</span>
       <select id="dataSelect" title="資料集"></select>
       <select id="tfSelect" title="時間週期"></select>
+      <select id="chartTypeSelect" title="圖表類型 Chart type"><option value="candles">蠟燭 Candles</option><option value="hollow">空心 Hollow</option><option value="ha">平均足 Heikin-Ashi</option><option value="bars">美國線 Bars</option><option value="line">折線 Line</option><option value="area">面積 Area</option></select>
       <select id="sessionSelect" title="跳到某個交易日"></select>
     </div>
 
@@ -178,6 +179,6 @@
   </footer>
 
 </div>
-<script src="src/app.js?v=8"></script>
+<script src="src/app.js?v=9"></script>
 </body>
 </html>

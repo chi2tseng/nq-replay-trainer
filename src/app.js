@@ -72,8 +72,8 @@ const chart = LightweightCharts.createChart($('chart'), {
   rightPriceScale: { borderColor: '#2b3139' },
   timeScale: { borderColor: '#2b3139', timeVisible: true, secondsVisible: true, rightOffset: 6 },
 });
-const candle = chart.addCandlestickSeries({ upColor: '#0ecb81', downColor: '#f6465d', borderVisible: false, wickUpColor: '#0ecb81', wickDownColor: '#f6465d' });
-const vol = chart.addHistogramSeries({ priceScaleId: 'vol', priceFormat: { type: 'volume' } });
+let candle = chart.addCandlestickSeries({ upColor: '#0ecb81', downColor: '#f6465d', borderVisible: false, wickUpColor: '#0ecb81', wickDownColor: '#f6465d' });
+let vol = chart.addHistogramSeries({ priceScaleId: 'vol', priceFormat: { type: 'volume' } });
 chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
 function sizeChart() { const el = $('chart'); const w = el.clientWidth, h = el.clientHeight; if (!w || !h) return; chart.resize(w - 1, h, true); chart.resize(w, h, true); } // double-resize: LWC no-ops a resize to the same size, so nudge then set
 new ResizeObserver(sizeChart).observe($('chartwrap'));
@@ -733,7 +733,124 @@ function aggregate(base, m) {
   }
   return out;
 }
-function cd(b) { return { time: b.time, open: b.open, high: b.high, low: b.low, close: b.close }; }
+// ===== chart-type module (defines chart-type-aware cd + setChartType) =====
+/* =====================================================================
+ * CHART-TYPE SELECTOR  — swap the main price series at runtime
+ * Candles · Hollow candles · Heikin-Ashi · Bars (OHLC) · Line · Area
+ *
+ * Mechanism: every reveal/feed in the app routes its bar->point mapping
+ * through cd(b). We make cd() chart-type-aware (this is the ONLY seam the
+ * reveal code needs), keep a precomputed Heikin-Ashi array, and provide
+ * setChartType() which removes the old price series, creates the new one,
+ * re-feeds revealed data, re-applies markers + price-lines, and re-attaches
+ * the Ripster + drawings primitives onto the new series.
+ *
+ * REQUIRES (one-line edits, see wiring): `const candle` -> `let candle`,
+ * `const vol` -> `let vol`, replace the existing `function cd(b)` with the
+ * one below, and call rebuildHA() inside rebuildTf().
+ * ===================================================================== */
+
+let chartType = loadJSON('rt_charttype', 'candles');   // candles|hollow|ha|bars|line|area
+let haBars = [];                                       // precomputed Heikin-Ashi OHLC, index-aligned to bars[]
+
+// ---- Binance-dark palette for the price series ----
+const CT_UP = '#0ecb81', CT_DOWN = '#f6465d', CT_LINE = '#fcd535', CT_TXT = '#eaecef';
+const CT_TRANSPARENT = 'rgba(0,0,0,0)';
+
+// Heikin-Ashi (recursive -> must be precomputed over the whole TF array).
+// haClose=(o+h+l+c)/4 ; haOpen=avg(prevHaOpen,prevHaClose) ; high/low extend to haO/haC.
+function rebuildHA() {
+  haBars = new Array(bars.length);
+  let pO, pC;
+  for (let i = 0; i < bars.length; i++) {
+    const b = bars[i];
+    const haC = (b.open + b.high + b.low + b.close) / 4;
+    const haO = i === 0 ? (b.open + b.close) / 2 : (pO + pC) / 2;
+    haBars[i] = { time: b.time, open: haO, high: Math.max(b.high, haO, haC), low: Math.min(b.low, haO, haC), close: haC };
+    pO = haO; pC = haC;
+  }
+}
+
+// ---- chart-type-aware bar -> series-point mapper ----
+// REPLACES the app's original `function cd(b)` (which only returned OHLC).
+// Candle/hollow/bars: {time,open,high,low,close}. line/area: {time,value}.
+// ha: looked up by index from haBars (NOT recomputable from a single bar).
+// Hollow look: per-bar transparent body on up-bars (+colored border/wick).
+function cd(b) {
+  if (chartType === 'line' || chartType === 'area') return { time: b.time, value: b.close };
+  if (chartType === 'ha') {
+    let h = haBars[b.__i];                                  // fast path: index stamped on bars[]
+    if (!h) { const j = bars.indexOf(b); h = (j >= 0 && haBars[j]) ? haBars[j] : b; } // fallback if __i missing
+    return { time: h.time, open: h.open, high: h.high, low: h.low, close: h.close };
+  }
+  if (chartType === 'hollow') {
+    const up = b.close >= b.open;
+    return { time: b.time, open: b.open, high: b.high, low: b.low, close: b.close,
+             color: up ? CT_TRANSPARENT : CT_DOWN, borderColor: up ? CT_UP : CT_DOWN, wickColor: up ? CT_UP : CT_DOWN };
+  }
+  return { time: b.time, open: b.open, high: b.high, low: b.low, close: b.close }; // candles / bars
+}
+
+// ---- create the correct series for the active chart type ----
+function makePriceSeries() {
+  switch (chartType) {
+    case 'bars':
+      return chart.addBarSeries({ upColor: CT_UP, downColor: CT_DOWN, thinBars: false });
+    case 'line':
+      return chart.addLineSeries({ color: CT_LINE, lineWidth: 2, lastValueVisible: true, priceLineVisible: true });
+    case 'area':
+      return chart.addAreaSeries({ lineColor: CT_LINE, topColor: 'rgba(252,213,53,0.28)', bottomColor: 'rgba(252,213,53,0.02)', lineWidth: 2 });
+    case 'hollow':   // hollow = candlestick with per-bar transparent up-bodies (see cd()); set defaults too
+      return chart.addCandlestickSeries({ upColor: CT_TRANSPARENT, downColor: CT_DOWN, borderUpColor: CT_UP, borderDownColor: CT_DOWN, borderVisible: true, wickUpColor: CT_UP, wickDownColor: CT_DOWN });
+    case 'ha':
+    case 'candles':
+    default:
+      return chart.addCandlestickSeries({ upColor: CT_UP, downColor: CT_DOWN, borderVisible: false, wickUpColor: CT_UP, wickDownColor: CT_DOWN });
+  }
+}
+
+// ---- THE swap. Removes old price series, builds new, re-feeds revealed
+//      slice, re-applies markers + price lines, re-attaches primitives. ----
+function setChartType(type) {
+  if (type === chartType && candle) return;
+  chartType = type;
+  saveJSON('rt_charttype', chartType);
+
+  // make sure HA + index stamps exist for the current bars[]
+  stampBarIndices();
+  if (chartType === 'ha') rebuildHA();
+
+  // 1) tear down current price series (drops its primitives + price lines with it)
+  if (candle) { try { chart.removeSeries(candle); } catch (e) {} }
+  lines = [];                       // those PriceLine handles died with the old series
+
+  // 2) build + assign the new series to the SAME `candle` variable the whole app uses
+  candle = makePriceSeries();
+
+  // 3) re-feed exactly what is currently revealed (idx = last revealed TF bar)
+  candle.setData(bars.slice(0, idx + 1).map(cd));
+
+  // 4) re-attach overlays. Primitives read `candle` via closure, so after the
+  //    reassignment above they already point at the new series; we just need to
+  //    bind them to the new series object and force a repaint.
+  if (candle.attachPrimitive) {
+    candle.attachPrimitive(ripsterPrimitive);
+    candle.attachPrimitive(indicatorPrimitive);
+    candle.attachPrimitive(drawingsPrimitive);
+  }
+
+  // 5) re-apply markers (entries/exits/annotations) and order/position price lines
+  refreshMarkers();
+  drawLines();
+  repaintOverlays();
+
+  updateChartTypeUI();
+}
+
+// stamp bars[i].__i = i so cd()'s HA path is O(1); cheap + idempotent
+function stampBarIndices() { for (let i = 0; i < bars.length; i++) bars[i].__i = i; }
+
+function updateChartTypeUI() { const s = $('chartTypeSelect'); if (s && s.value !== chartType) s.value = chartType; }
 function vd(b) { return { time: b.time, value: b.volume, color: b.close >= b.open ? 'rgba(14,203,129,.35)' : 'rgba(246,70,93,.35)' }; }
 const mBucket = (ts) => Math.floor(ts / (tf * 60)) * (tf * 60);
 
@@ -760,6 +877,7 @@ async function loadDataset(url) {
   baseIdx = ds ? rthOpenIdx(ds) : Math.floor(baseBars.length / 2);
   syncIdxFromBase();
   sizeChart(); hardReveal(); chart.timeScale().fitContent();
+  if (chartType && chartType !== 'candles') { const _t = chartType; chartType = '__'; setChartType(_t); }
   requestAnimationFrame(sizeChart); setTimeout(sizeChart, 300); setTimeout(sizeChart, 1200);
   if (!wired) { wire(); wired = true; }
   renderAll();
@@ -777,7 +895,7 @@ function buildTfSelect() { $('tfSelect').innerHTML = TF_OPTIONS.map(m => `<optio
 function buildDataSelect() { $('dataSelect').innerHTML = DATASETS.map((ds, i) => `<option value="${i}" ${i === dataIdx ? 'selected' : ''}>${ds.label}</option>`).join(''); }
 
 // ---------- timeframe / index bookkeeping ----------
-function rebuildTf() { bars = aggregate(baseBars, tf); computeRipster(); computeIndicators(); oscCompute(); }
+function rebuildTf() { bars = aggregate(baseBars, tf); computeRipster(); computeIndicators(); oscCompute(); stampBarIndices(); rebuildHA(); }
 function tfIndexAtBase(bi) { // TF-bar index whose bucket contains baseBars[bi]
   const t = baseBars[bi].time; let lo = 0, hi = bars.length - 1, ans = 0;
   while (lo <= hi) { const mid = (lo + hi) >> 1; if (bars[mid].time <= t) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
@@ -1097,6 +1215,7 @@ function wire() {
   $('indEma').checked = emaOn; $('indEma').onchange = (e) => setEMA(e.target.checked);
   $('emaPeriods').value = emaPeriods.join(','); $('emaPeriods').onchange = (e) => setEmaPeriods(e.target.value);
   wireOsc();
+  $('chartTypeSelect').value = chartType; $('chartTypeSelect').onchange = (e) => setChartType(e.target.value);
 
   $('entryType').onchange = () => { $('entryPriceRow').style.display = $('entryType').value === 'market' ? 'none' : ''; if ($('entryType').value !== 'market' && !$('entryPrice').value) $('entryPrice').value = f2(curPx()); };
   $('btnBuy').onclick = () => onEntryButton('long');
