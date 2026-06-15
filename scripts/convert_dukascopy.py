@@ -1,9 +1,20 @@
-"""Convert a Dukascopy 'USA 100' (Nasdaq-100 CFD) m1 JSON export -> data/NQ_deep_1m.json.
-Free deep history that tracks NQ within a small basis. dukascopy-node JSON rows:
-  {timestamp(ms), open, high, low, close, volume}. Prices are the INDEX (decimals), so we
-snap to the 0.25 NQ tick grid to keep the simulator's tick math consistent.
+"""Convert a Dukascopy index-CFD m1 JSON export -> data/<out>.json.
+
+Usage: python convert_dukascopy.py [instrument] [out.json] [tick]
+  defaults: usatechidxusd  NQ_deep_1m.json  0.25   (Nasdaq-100 / NQ)
+  ES (S&P 500):  python convert_dukascopy.py usa500idxusd ES_deep_1m.json 0.25
+  Dow (YM):      python convert_dukascopy.py usa30idxusd  YM_deep_1m.json 1
+
+Free deep history that tracks the matching CME future within a small basis.
+dukascopy-node rows: {timestamp(ms), open, high, low, close, volume}. Prices are the
+INDEX (decimals), so we snap to the instrument's tick grid to keep tick math consistent.
 """
-import json, os, glob, datetime
+import json, os, glob, datetime, sys
+
+INSTR   = sys.argv[1] if len(sys.argv) > 1 else "usatechidxusd"
+OUTNAME = sys.argv[2] if len(sys.argv) > 2 else "NQ_deep_1m.json"
+TICK    = float(sys.argv[3]) if len(sys.argv) > 3 else 0.25
+
 try:
     from zoneinfo import ZoneInfo
     _ET = ZoneInfo("America/New_York")
@@ -15,12 +26,11 @@ except Exception:                                  # no IANA tzdata -> UTC appro
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 d = os.path.join(HERE, "..", "data")
-cands = sorted(glob.glob(os.path.join(d, "duka", "usatechidxusd-m1-*.json")))
+cands = sorted(glob.glob(os.path.join(d, "duka", INSTR + "-m1-*.json")))
 if not cands:
-    raise SystemExit("no dukascopy file in data/duka — run the dukascopy-node fetch first")
+    raise SystemExit(f"no dukascopy file in data/duka for {INSTR} — run the dukascopy-node fetch first")
 src = max(cands, key=os.path.getsize)    # widest range = most data
 rows = json.load(open(src))
-TICK = 0.25
 def rt(x): return round(round(x / TICK) * TICK, 2)
 
 by_t = {}
@@ -35,10 +45,10 @@ for r in rows:
                "volume": int(round((r.get("volume") or 0) * 1000))}  # duka vol is relative, scaled for display only
 bars = [by_t[t] for t in sorted(by_t)]
 
-out = os.path.join(d, "NQ_deep_1m.json")
+out = os.path.join(d, OUTNAME)
 with open(out, "w") as f:
     json.dump(bars, f)
-print(f"wrote {len(bars)} 1-min bars -> {os.path.normpath(out)}  (src {os.path.basename(src)})")
+print(f"wrote {len(bars)} 1-min bars -> {os.path.normpath(out)}  (src {os.path.basename(src)}, tick {TICK})")
 if bars:
     f0 = datetime.datetime.utcfromtimestamp(bars[0]["time"])
     f1 = datetime.datetime.utcfromtimestamp(bars[-1]["time"])

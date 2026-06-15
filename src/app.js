@@ -4,10 +4,12 @@
  * + NinjaTrader-style ATM (multi-target scale-out, breakeven, trailing). Fills are always
  * simulated on the underlying 30-second sub-bars, so accuracy is timeframe-independent. */
 
-const INSTR = { symbol: 'NQ', tickSize: 0.25, tickValue: 5 }; // NQ: $20/pt -> $5/tick
+let INSTR = { symbol: 'NQ', tickSize: 0.25, tickValue: 5 }; // active contract spec (per-dataset; NQ: $20/pt -> $5/tick)
 const DATASETS = [
-  { id: 'deep', label: 'Nasdaq100 1m · 深歷史 3.5個月 (Dukascopy)', url: 'data/NQ_deep_1m.json' },
-  { id: 'tick', label: 'NQ 30s · 6/7–6/12 (真實 tick)', url: 'data/NQ_30s.json' },
+  { id: 'deep', label: 'NQ · Nasdaq100 1m 深歷史 3.5月 (Dukascopy)', url: 'data/NQ_deep_1m.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },     // $20/pt
+  { id: 'es',   label: 'ES · S&P 500 1m 深歷史 3.5月 (Dukascopy)',   url: 'data/ES_deep_1m.json', instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
+  { id: 'ym',   label: 'YM · 道瓊 1m 深歷史 3.5月 (Dukascopy)',       url: 'data/YM_deep_1m.json', instr: { symbol: 'YM', tickSize: 1, tickValue: 5 } },        // $5/pt
+  { id: 'tick', label: 'NQ · 30s 6/7–6/12 (真實 tick)', url: 'data/NQ_30s.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
 ];
 const STD_TF = [1, 2, 3, 5, 10, 15, 30, 60];   // standard minute timeframes
 let BASE_TF = 1;        // base bar resolution (minutes) — auto-detected per dataset
@@ -16,7 +18,7 @@ let wired = false, dataIdx = 0;
 
 // ---------- helpers ----------
 const $ = (id) => document.getElementById(id);
-const TICK = INSTR.tickSize;
+let TICK = INSTR.tickSize;   // reassigned per-dataset in loadDataset(); rnd()/tcount() read it at call time
 const rnd = (p) => Math.round(p / TICK) * TICK;
 const f2 = (p) => p.toFixed(2);
 const tcount = (a, b) => Math.round((a - b) / TICK);
@@ -612,6 +614,13 @@ const drawingsPrimitive = {
             if (d.type === 'box') { const x = Math.min(x1, x2), y = Math.min(y1, y2), w = Math.abs(x2 - x1), h = Math.abs(y2 - y1); ctx.globalAlpha = 0.12; ctx.fillRect(x, y, w, h); ctx.globalAlpha = 1; ctx.strokeRect(x, y, w, h); }
             else { ctx.beginPath(); ctx.moveTo(x1, y1); if (d.type === 'ray') { const dx = x2 - x1, dy = y2 - y1, tx = dx >= 0 ? W : 0, s = dx !== 0 ? (tx - x1) / dx : 0; ctx.lineTo(dx !== 0 ? tx : x2, dx !== 0 ? y1 + dy * s : y2); } else ctx.lineTo(x2, y2); ctx.stroke(); }
           }
+          // editable anchor handles (small dots) so placed drawings can be grabbed + dragged
+          for (const d of drawings) {
+            if (d.type === 'hl' || d.type === 'measure') continue;   // hl = full-width line; measure draws its own dots
+            const hs = [d.p1]; if (d.p2) hs.push(d.p2);
+            if (d.type === 'box' && d.p2) { hs.push({ t: d.p2.t, p: d.p1.p }, { t: d.p1.t, p: d.p2.p }); }
+            for (const pt of hs) { const hx = X(pt.t), hy = Y(pt.p); if (hx == null || hy == null) continue; ctx.beginPath(); ctx.arc(hx, hy, 3.5, 0, 7); ctx.fillStyle = '#0b0e11'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = d.color || '#d1d4dc'; ctx.stroke(); }
+          }
           if (pendingPt) { const x = X(pendingPt.t), y = Y(pendingPt.p); if (x != null && y != null) { ctx.fillStyle = '#f0b90b'; ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fill(); } }
         });
         window.__drw = { n: ((window.__drw || {}).n || 0) + 1, ok: true };
@@ -674,7 +683,7 @@ function drawMeasure(ctx, d, X, Y) {
 }
 
 // ---------- chart tools: drag stop/target/entry lines + click tools (set-start / annotations) ----------
-let tool = '', drag = null;
+let tool = '', drag = null, dragH = null;   // dragH = drawing-anchor being dragged (endpoint edit)
 let annotations = loadJSON('rt_annotations', []);   // {baseTime, position, color, shape, text}
 let drawings = loadJSON('rt_drawings', []);         // {type:'hl'|'tl'|'ray'|'box', p1:{t,p}, p2?:{t,p}, color}
 let pendingPt = null;                                // first click of a 2-point drawing
@@ -696,6 +705,35 @@ function draggableLines() {
   return a;
 }
 function nearestLine(y) { let best = null, bd = 7; for (const L of draggableLines()) { const ly = candle.priceToCoordinate(L.get()); if (ly == null) continue; const d = Math.abs(ly - y); if (d < bd) { bd = d; best = L; } } return best; }
+// ---- drawing endpoint editing: hit-test + drag the anchors of placed drawings ----
+// Each handle exposes apply(time, price) that writes back into the drawing's p1/p2 in place.
+// HL = horizontal full-width line, so only price is editable (horiz:true, time ignored).
+function drawingHandles() {
+  const out = [], ts = chart.timeScale();
+  const X = (t) => ts.timeToCoordinate(t), Y = (p) => candle.priceToCoordinate(p);
+  for (const d of drawings) {
+    if (d.type === 'hl') { const y = Y(d.p1.p); if (y != null) out.push({ horiz: true, hy: y, apply: (t, p) => { d.p1.p = p; } }); continue; }
+    const x1 = X(d.p1.t), y1 = Y(d.p1.p), x2 = d.p2 ? X(d.p2.t) : null, y2 = d.p2 ? Y(d.p2.p) : null;
+    if (x1 != null && y1 != null) out.push({ hx: x1, hy: y1, apply: (t, p) => { if (t != null) d.p1.t = t; d.p1.p = p; } });
+    if (d.p2 && x2 != null && y2 != null) out.push({ hx: x2, hy: y2, apply: (t, p) => { if (t != null) d.p2.t = t; d.p2.p = p; } });
+    if (d.type === 'box' && d.p2) {   // box: also let the two cross-corners drag (each writes one t + one p)
+      if (x2 != null && y1 != null) out.push({ hx: x2, hy: y1, apply: (t, p) => { if (t != null) d.p2.t = t; d.p1.p = p; } });
+      if (x1 != null && y2 != null) out.push({ hx: x1, hy: y2, apply: (t, p) => { if (t != null) d.p1.t = t; d.p2.p = p; } });
+    }
+  }
+  return out;
+}
+function nearestHandle(x, y) {
+  let best = null, bd = 9;
+  for (const h of drawingHandles()) { const dd = h.horiz ? Math.abs(h.hy - y) : Math.hypot(h.hx - x, h.hy - y); if (dd < bd) { bd = dd; best = h; } }
+  return best;
+}
+// map a chart-x pixel to the nearest revealed bar's time (snap to bar grid, clamp to 0..idx)
+function xToTime(x) {
+  const lg = chart.timeScale().coordinateToLogical(x); if (lg == null) return null;
+  let i = Math.round(lg); i = Math.max(0, Math.min(Math.min(idx, bars.length - 1), i));
+  return bars[i] ? bars[i].time : null;
+}
 chart.subscribeClick(param => {
   if (!tool || param.time == null) return;
   const i = bars.findIndex(b => b.time === param.time);
@@ -706,20 +744,35 @@ chart.subscribeClick(param => {
   if (price != null) handleDrawClick(tool, param.time, price);
 });
 $('chart').addEventListener('mousedown', e => {
-  if (!locked()) return;                          // only stop/target/entry lines are draggable
-  const L = nearestLine(e.clientY - $('chart').getBoundingClientRect().top);
+  if (e.button !== 0 || tool) return;             // left-button only; while a tool is armed, clicks place points
+  const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
+  const h = nearestHandle(x, y);                  // a drawing anchor takes priority (2-D hit = more specific)
+  if (h) { dragH = h; chart.applyOptions({ handleScroll: false, handleScale: false }); e.preventDefault(); return; }
+  if (!locked()) return;                          // stop/target/entry lines are draggable only while in a trade
+  const L = nearestLine(y);
   if (L) { drag = L; chart.applyOptions({ handleScroll: false, handleScale: false }); e.preventDefault(); }
 });
 window.addEventListener('mousemove', e => {
+  if (dragH) {                                    // editing a drawing endpoint: snap price to tick, time to bar grid
+    const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
+    const p = candle.coordinateToPrice(y);
+    if (p != null) { dragH.apply(dragH.horiz ? null : xToTime(x), rnd(p)); repaintOverlays(); }
+    return;
+  }
   if (!drag) return;
   const p = candle.coordinateToPrice(e.clientY - $('chart').getBoundingClientRect().top);
   if (p != null) { drag.set(rnd(p)); drawLines(); renderLive(); }
 });
-window.addEventListener('mouseup', () => { if (drag) { drag = null; chart.applyOptions({ handleScroll: true, handleScale: true }); } });
+window.addEventListener('mouseup', () => {
+  if (dragH) { dragH = null; saveJSON('rt_drawings', drawings); chart.applyOptions({ handleScroll: true, handleScale: true }); return; }
+  if (drag) { drag = null; chart.applyOptions({ handleScroll: true, handleScale: true }); }
+});
 $('chart').addEventListener('mousemove', e => {
-  if (drag) return;
+  if (drag || dragH) return;
   if (tool) { $('chart').style.cursor = 'crosshair'; return; }
-  $('chart').style.cursor = nearestLine(e.clientY - $('chart').getBoundingClientRect().top) ? 'ns-resize' : '';
+  const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
+  if (nearestHandle(x, y)) { $('chart').style.cursor = 'move'; return; }   // hovering a drawing anchor
+  $('chart').style.cursor = (locked() && nearestLine(y)) ? 'ns-resize' : '';
 });
 
 // ---------- timeframe aggregation ----------
@@ -856,16 +909,20 @@ const mBucket = (ts) => Math.floor(ts / (tf * 60)) * (tf * 60);
 
 // ---------- init ----------
 init();
-async function init() { buildDataSelect(); initLayout(); await loadDataset(DATASETS[0].url); }
+async function init() { buildDataSelect(); initLayout(); await loadDataset(DATASETS[0]); }
 
 function detectBaseTf(b) { let mn = Infinity; for (let i = 1; i < Math.min(b.length, 800); i++) { const dl = b[i].time - b[i - 1].time; if (dl > 0 && dl < mn) mn = dl; } return mn === Infinity ? 1 : Math.max(0.5, mn / 60); }
 function buildTfOptions() { TF_OPTIONS = [BASE_TF, ...STD_TF.filter(m => m > BASE_TF)]; }
 
-async function loadDataset(url) {
+async function loadDataset(ds) {
+  const url = typeof ds === 'string' ? ds : ds.url;   // tolerate a bare url too
   let data;
   try { const r = await fetch(url + (url.includes('?') ? '&' : '?') + 'v=' + Date.now()); if (!r.ok) throw 0; data = await r.json(); } // cache-bust so regenerated data files always load fresh
   catch (e) { toast('此資料集還沒準備好'); return false; }
   pause(); position = null; entryOrder = null; orders = []; markers = []; tool = ''; pendingPt = null;
+  if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; }   // switch active contract spec (tick grid + $/tick + symbol)
+  if ($('symbol')) $('symbol').textContent = INSTR.symbol;
+  if ($('entryPrice')) $('entryPrice').step = String(TICK);
   baseBars = data;
   BASE_TF = detectBaseTf(baseBars); buildTfOptions();
   tf = BASE_TF < 1 ? 1 : BASE_TF;                 // default view: 1m when base is sub-minute, else base
@@ -873,8 +930,8 @@ async function loadDataset(url) {
   $('startSlider').max = baseBars.length - 1;
   rebuildTf();
   // default: park at the US cash open (09:30 ET) of the 2nd available trading day
-  const ds = sessions[1] || sessions[0];
-  baseIdx = ds ? rthOpenIdx(ds) : Math.floor(baseBars.length / 2);
+  const startSes = sessions[1] || sessions[0];
+  baseIdx = startSes ? rthOpenIdx(startSes) : Math.floor(baseBars.length / 2);
   syncIdxFromBase();
   sizeChart(); hardReveal(); chart.timeScale().fitContent();
   if (chartType && chartType !== 'candles') { const _t = chartType; chartType = '__'; setChartType(_t); }
@@ -1191,7 +1248,7 @@ function wire() {
   $('btnNextDay').onclick = nextDay;
   $('sessionSelect').onchange = (e) => gotoSession(+e.target.value);
   $('tfSelect').onchange = (e) => setTf(+e.target.value);
-  $('dataSelect').onchange = async (e) => { if (locked()) { $('dataSelect').value = dataIdx; return toast('有部位/掛單時不能換資料集'); } const i = +e.target.value; const ok = await loadDataset(DATASETS[i].url); if (ok) dataIdx = i; else $('dataSelect').value = dataIdx; };
+  $('dataSelect').onchange = async (e) => { if (locked()) { $('dataSelect').value = dataIdx; return toast('有部位/掛單時不能換資料集'); } const i = +e.target.value; const ok = await loadDataset(DATASETS[i]); if (ok) dataIdx = i; else $('dataSelect').value = dataIdx; };
   $('speedSelect').onchange = () => { if (playing) { pause(); play(); } };
   $('startSlider').oninput = (e) => setStart(+e.target.value);
   $('btnPickStart').onclick = () => { if (locked()) { return toast('有部位/掛單時不能設起點'); } setTool('start'); };
@@ -1245,4 +1302,8 @@ function wire() {
 function switchTab(t) { $('tabTrades').classList.toggle('active', t); $('tabDash').classList.toggle('active', !t); $('panelTrades').classList.toggle('hidden', !t); $('panelDash').classList.toggle('hidden', t); if (!t) renderDash(); }
 
 // debug hook (harmless; used for automated verification)
-window.__rt = { state: () => ({ tf, idx, baseIdx, bars: bars.length, base: baseBars.length, pos: position && { ...position }, orders: orders.map(o => ({ ...o })), entryOrder }), bar: (i) => bars[i], sub: (i) => baseBars[i], agg: (m) => aggregate(baseBars, m), dresize: (w, h) => chart.resize(w, h, true), sc: sizeChart, chartOpts: () => chart.options(), priceToY: (p) => candle.priceToCoordinate(p), coordToPrice: (y) => candle.coordinateToPrice(y), chartRect: () => $('chart').getBoundingClientRect(), setTool: (t) => setTool(t), getTool: () => tool, placeAnn: (t, time) => placeAnnotation(t, time), annCount: () => annotations.length, ripster: () => ({ on: ripsterOn, clouds: ripsterData.length }), drawCount: () => drawings.length, addDraw: (t, time, price) => handleDrawClick(t, time, price), rthOpenET: (i) => etMinutes(baseBars[rthOpenIdx(sessions[i])].time), nextDay, prevDay, curSession: () => currentSessionIdx() };
+window.__rt = { state: () => ({ tf, idx, baseIdx, bars: bars.length, base: baseBars.length, pos: position && { ...position }, orders: orders.map(o => ({ ...o })), entryOrder }), bar: (i) => bars[i], sub: (i) => baseBars[i], agg: (m) => aggregate(baseBars, m), dresize: (w, h) => chart.resize(w, h, true), sc: sizeChart, chartOpts: () => chart.options(), priceToY: (p) => candle.priceToCoordinate(p), coordToPrice: (y) => candle.coordinateToPrice(y), chartRect: () => $('chart').getBoundingClientRect(), setTool: (t) => setTool(t), getTool: () => tool, placeAnn: (t, time) => placeAnnotation(t, time), annCount: () => annotations.length, ripster: () => ({ on: ripsterOn, clouds: ripsterData.length }), drawCount: () => drawings.length, addDraw: (t, time, price) => handleDrawClick(t, time, price), rthOpenET: (i) => etMinutes(baseBars[rthOpenIdx(sessions[i])].time), nextDay, prevDay, curSession: () => currentSessionIdx(),
+  instr: () => ({ ...INSTR, TICK }),
+  handles: () => drawingHandles().map(h => ({ horiz: !!h.horiz, hx: h.hx, hy: h.hy })),
+  drawingsList: () => drawings.map(d => ({ type: d.type, p1: d.p1 && { ...d.p1 }, p2: d.p2 && { ...d.p2 } })),
+  editAt: (x, y, nx, ny) => { const h = nearestHandle(x, y); if (!h) return null; const p = candle.coordinateToPrice(ny); if (p == null) return { noprice: true }; h.apply(h.horiz ? null : xToTime(nx), rnd(p)); saveJSON('rt_drawings', drawings); repaintOverlays(); return { moved: true }; } };
