@@ -1,0 +1,9 @@
+# raw vendor data dumps (large; converted JSON in data/*.json is what the app uses)
+data/duka/
+data/duka_test/
+
+node_modules/
+*.log
+*.output
+.DS_Store
+Thumbs.db
