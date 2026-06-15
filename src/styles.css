@@ -71,7 +71,9 @@ input[type=checkbox]{
    ========================================================================= */
 #app{
   display:grid;
-  grid-template-rows:46px 1fr 252px;
+  /* rows: toolbar | main | gutterRow | bottom.  side-width & bottom-height are
+     driven by CSS vars that JS updates on gutter drag (single source of truth). */
+  grid-template-rows:46px minmax(0,1fr) 6px var(--bottom-h,252px);
   height:100vh;min-height:560px;
   background:var(--bg);
 }
@@ -131,7 +133,11 @@ input[type=checkbox]{
 /* =========================================================================
    Main: chart + side panel
    ========================================================================= */
-#main{display:grid;grid-template-columns:1fr 320px;min-height:0}
+/* cols: chart | gutterCol | side.  minmax(0,1fr) + min-width:0 let the chart
+   column actually SHRINK (a default grid track won't go below its content). */
+#main{display:grid;grid-template-columns:minmax(0,1fr) 6px var(--side-w,320px);min-height:0}
+#main>#chartwrap{min-width:0;min-height:0}
+#main>#side{min-width:0}
 #chartwrap{position:relative;border-right:1px solid var(--line);background:var(--bg)}
 #chart{position:absolute;inset:0}
 
@@ -371,14 +377,15 @@ td.neg{color:var(--red)}
 
 /* Icon-only TRANSPORT buttons: center the lone glyph, keep them compact/square-ish.
    These have no text node, so flex-centering the single <span> is enough. */
-#btnToStart, #btnStepBack, #btnStepFwd, #btnPickStart{
+#btnToStart, #btnStepBack, #btnStepFwd, #btnPickStart, #btnFit{
   display: inline-flex; align-items: center; justify-content: center;
   padding: 5px 8px; line-height: 1;
 }
 #btnToStart .material-symbols-outlined,
 #btnStepBack .material-symbols-outlined,
 #btnStepFwd .material-symbols-outlined,
-#btnPickStart .material-symbols-outlined{ font-size: 20px; }
+#btnPickStart .material-symbols-outlined,
+#btnFit .material-symbols-outlined{ font-size: 20px; }
 
 /* Play/pause: the whole button is the font (ligature text set by JS).
    Override the old #btnPlay.play{font-size:14px} so the glyph is icon-sized,
@@ -412,21 +419,26 @@ td.neg{color:var(--red)}
 .material-symbols-outlined:not(:defined){ color: transparent; }
 /* ===================== Resizable layout gutters ===================== */
 /* ---- resizable layout gutters ---- */
-.gutter{background:transparent;z-index:5;position:relative;touch-action:none;user-select:none}
-.gutter::before{content:"";position:absolute;background:var(--line);transition:background .12s}
+.gutter{background:transparent;z-index:6;position:relative;touch-action:none;user-select:none}
+.gutter::before{content:"";position:absolute;background:var(--line);transition:background .12s,width .12s,height .12s}
+/* fat invisible grab-zone so the thin seam is easy to grab */
+.gutter::after{content:"";position:absolute}
 /* vertical gutter (between chart and #side): drag side-panel width */
 .gutter.col{cursor:col-resize}
 .gutter.col::before{top:0;bottom:0;left:50%;width:1px;transform:translateX(-50%)}
+.gutter.col::after{top:0;bottom:0;left:-5px;right:-5px}
 /* horizontal gutter (between #main and #bottom): drag bottom-panel height */
 .gutter.row{cursor:row-resize}
 .gutter.row::before{left:0;right:0;top:50%;height:1px;transform:translateY(-50%)}
+.gutter.row::after{left:0;right:0;top:-5px;bottom:-5px}
 /* hover / active highlight in brand amber */
 .gutter:hover::before,.gutter.dragging::before{background:var(--brand)}
 .gutter.col:hover::before,.gutter.col.dragging::before{width:3px}
 .gutter.row:hover::before,.gutter.row.dragging::before{height:3px}
-/* while dragging: kill selection + keep the resize cursor everywhere */
-body.resizing{user-select:none;cursor:default}
-body.resizing.col-active,body.resizing *{cursor:inherit}
+/* while dragging: kill selection + keep the resize cursor everywhere on screen */
+body.resizing{user-select:none}
+body.resizing-x,body.resizing-x *{cursor:col-resize!important}
+body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 /* the gutters now own the seams — drop the duplicate hairlines they replace */
 #chartwrap{border-right:none}
 #bottom{border-top:none}
@@ -464,6 +476,30 @@ body.resizing.col-active,body.resizing *{cursor:inherit}
 #chartLegend .ll-chg{font-weight:600;margin-left:2px}
 #chartLegend .up{color:var(--green)}
 #chartLegend .down{color:var(--red)}
+
+/* ===== On-chart indicator legend (TradingView-style: stacked rows top-left) ===== */
+#indLegend{
+  position:absolute; left:10px; top:36px; z-index:6;   /* sits just under the OHLCV legend */
+  display:flex; flex-direction:column; align-items:flex-start; gap:2px;
+  max-width:calc(100% - 70px);
+  font-size:11px; line-height:1.3;
+  -webkit-user-select:none; user-select:none;
+}
+#indLegend .il-row{
+  display:flex; align-items:center; gap:6px; width:auto;
+  padding:1px 7px 1px 5px; border-radius:5px; cursor:pointer;
+  background:rgba(14,17,22,.62); border:1px solid transparent;
+  white-space:nowrap; transition:background .1s, border-color .1s, opacity .1s;
+}
+#indLegend .il-row:hover{ background:rgba(30,35,41,.95); border-color:var(--line); }
+#indLegend .il-row.off{ opacity:.5; }
+#indLegend .il-row.off:hover{ opacity:.85; }
+#indLegend .il-eye{ font-size:15px; color:var(--dim); }
+#indLegend .il-row:hover .il-eye{ color:var(--txt); }
+#indLegend .il-name{ font-weight:700; letter-spacing:.2px; }
+#indLegend .il-params{ color:var(--dim); font-size:10px; }
+#indLegend .il-vals{ color:var(--txt); font-variant-numeric:tabular-nums; font-family:var(--mono); }
+#indLegend .il-vals b{ font-weight:700; }
 
 /* ===================== Indicator swatches ===================== */
 /* 指標 toggles — reuse existing .card / .row.chk styling; swatch chips per indicator */

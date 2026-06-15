@@ -24,12 +24,19 @@ const f2 = (p) => p.toFixed(2);
 const tcount = (a, b) => Math.round((a - b) / TICK);
 const usd = (n) => (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(2);
 const pad = (n) => String(n).padStart(2, '0');
-const tFmt = (ts) => { const d = new Date(ts * 1000); return `${pad(d.getUTCMonth()+1)}/${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`; };
-const dayKey = (ts) => { const d = new Date(ts * 1000); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}`; };
+// --- all wall-clock DISPLAY is US-Eastern (the market's session clock), DST-correct via Intl ---
 const etFmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
-const tradingDayKey = (ts) => etFmt.format(new Date((ts + 6 * 3600) * 1000)); // futures trading day = ET date (18:00 ET boundary shifted to midnight, DST-correct)
 const etHM = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const etDMHMS = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+function etP(ts) { const o = {}; for (const x of etDMHMS.formatToParts(new Date(ts * 1000))) o[x.type] = x.value; return o; }
+const tFmt = (ts) => { const o = etP(ts); return `${o.month}/${o.day} ${o.hour}:${o.minute}:${o.second} ET`; };  // US cash open reads 09:30:00 ET
+const dayKey = (ts) => { const d = new Date(ts * 1000); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}`; };
+const tradingDayKey = (ts) => etFmt.format(new Date((ts + 6 * 3600) * 1000)); // futures trading day = ET date (18:00 ET boundary shifted to midnight, DST-correct)
 function etMinutes(ts) { const p = etHM.formatToParts(new Date(ts * 1000)); let h = 0, m = 0; for (const x of p) { if (x.type === 'hour') h = +x.value; else if (x.type === 'minute') m = +x.value; } return h * 60 + m; } // minutes since midnight ET (DST-correct)
+// ET formatters for the LWC time axis (tick labels) + crosshair label — timestamps are UTC epoch s
+const _TM = (window.LightweightCharts && LightweightCharts.TickMarkType) || { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 };
+function etTickFmt(ts, type) { const o = etP(ts); if (type === _TM.Year || type === _TM.Month || type === _TM.DayOfMonth) return `${o.month}/${o.day}`; if (type === _TM.TimeWithSeconds) return `${o.hour}:${o.minute}:${o.second}`; return `${o.hour}:${o.minute}`; }
+const etCrosshairFmt = (ts) => { const o = etP(ts); return `${o.month}/${o.day} ${o.hour}:${o.minute} ET`; };
 const loadJSON = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const saveJSON = (k, v) => localStorage.setItem(k, JSON.stringify(v));
 
@@ -72,7 +79,8 @@ const chart = LightweightCharts.createChart($('chart'), {
   grid: { vertLines: { color: '#1b2027' }, horzLines: { color: '#1b2027' } },
   crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
   rightPriceScale: { borderColor: '#2b3139' },
-  timeScale: { borderColor: '#2b3139', timeVisible: true, secondsVisible: true, rightOffset: 6 },
+  localization: { timeFormatter: etCrosshairFmt },                 // crosshair label in ET
+  timeScale: { borderColor: '#2b3139', timeVisible: true, secondsVisible: true, rightOffset: 6, tickMarkFormatter: etTickFmt }, // axis labels in ET (open = 09:30)
 });
 let candle = chart.addCandlestickSeries({ upColor: '#0ecb81', downColor: '#f6465d', borderVisible: false, wickUpColor: '#0ecb81', wickDownColor: '#f6465d' });
 let vol = chart.addHistogramSeries({ priceScaleId: 'vol', priceFormat: { type: 'volume' } });
@@ -80,32 +88,54 @@ chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } })
 function sizeChart() { const el = $('chart'); const w = el.clientWidth, h = el.clientHeight; if (!w || !h) return; chart.resize(w - 1, h, true); chart.resize(w, h, true); } // double-resize: LWC no-ops a resize to the same size, so nudge then set
 new ResizeObserver(sizeChart).observe($('chartwrap'));
 window.addEventListener('resize', sizeChart);
+function fitChart() { chart.timeScale().fitContent(); }   // auto-zoom to show all revealed bars (revealed = the only data fed to the series)
 
-// ---------- resizable layout (drag gutters to resize #side width & #bottom height) ----------
-const LAYOUT_DEFAULTS = { side: 320, bottom: 252 }, LAYOUT_MIN = { side: 220, bottom: 120 }, SIDE_MIN_CHART = 360, BOTTOM_MIN_MAIN = 220, TOOLBAR_H = 46;
-let layout = Object.assign({}, LAYOUT_DEFAULTS, loadJSON('rt_layout', {}));
+// ---------- resizable layout (drag gutters to size #side width & #bottom height) ----------
+// Single source of truth = two CSS vars (--side-w, --bottom-h) the grid reads; JS just sets them.
+const LAYOUT_DEFAULTS = { side: 320, bottom: 252 }, LAYOUT_MIN = { side: 240, bottom: 130 }, SIDE_MIN_CHART = 420, BOTTOM_MIN_MAIN = 240, TOOLBAR_H = 46, GUTTER = 6;
+let layout = Object.assign({}, LAYOUT_DEFAULTS, loadJSON('rt_layout2', {}));   // rt_layout2: fresh key (old saved values were degenerate)
 function clampLayout(L) {
   const vw = window.innerWidth, vh = window.innerHeight;
-  const maxSide = Math.max(LAYOUT_MIN.side, vw - SIDE_MIN_CHART), maxBottom = Math.max(LAYOUT_MIN.bottom, vh - TOOLBAR_H - BOTTOM_MIN_MAIN);
+  const maxSide = Math.max(LAYOUT_MIN.side, vw - SIDE_MIN_CHART - GUTTER);
+  const maxBottom = Math.max(LAYOUT_MIN.bottom, vh - TOOLBAR_H - GUTTER - BOTTOM_MIN_MAIN);
   L.side = Math.round(Math.min(maxSide, Math.max(LAYOUT_MIN.side, L.side)));
   L.bottom = Math.round(Math.min(maxBottom, Math.max(LAYOUT_MIN.bottom, L.bottom)));
   return L;
 }
+let _rzRAF = 0;
 function applyLayout(persist) {
   clampLayout(layout);
-  const main = $('main'), app = $('app');
-  if (main) main.style.gridTemplateColumns = `1fr 6px ${layout.side}px`;
-  if (app) app.style.gridTemplateRows = `${TOOLBAR_H}px 1fr 6px ${layout.bottom}px`;
-  if (persist) saveJSON('rt_layout', { side: layout.side, bottom: layout.bottom });
-  if (typeof sizeChart === 'function') sizeChart();
+  const r = document.documentElement.style;
+  r.setProperty('--side-w', layout.side + 'px');
+  r.setProperty('--bottom-h', layout.bottom + 'px');
+  if (persist) saveJSON('rt_layout2', { side: layout.side, bottom: layout.bottom });
+  // resize the chart bitmaps on the next frame — coalesces rapid drag moves (LWC resize is heavy)
+  if (!_rzRAF) _rzRAF = requestAnimationFrame(() => { _rzRAF = 0; if (typeof sizeChart === 'function') sizeChart(); if (typeof oscResize === 'function') oscResize(); });
 }
 function attachGutter(el, axis) {
   if (!el) return;
-  let startPos = 0, startVal = 0;
-  function onMove(e) { if (axis === 'x') layout.side = startVal + (startPos - e.clientX); else layout.bottom = startVal + (startPos - e.clientY); applyLayout(false); }
-  function onUp(e) { el.releasePointerCapture && el.releasePointerCapture(e.pointerId); window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); el.classList.remove('dragging'); document.body.classList.remove('resizing'); saveJSON('rt_layout', { side: layout.side, bottom: layout.bottom }); }
-  el.addEventListener('pointerdown', (e) => { if (e.button !== 0) return; startPos = axis === 'x' ? e.clientX : e.clientY; startVal = axis === 'x' ? layout.side : layout.bottom; el.setPointerCapture && el.setPointerCapture(e.pointerId); el.classList.add('dragging'); document.body.classList.add('resizing'); window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp); e.preventDefault(); });
-  el.addEventListener('dblclick', () => { if (axis === 'x') layout.side = LAYOUT_DEFAULTS.side; else layout.bottom = LAYOUT_DEFAULTS.bottom; applyLayout(true); });
+  const key = axis === 'x' ? 'side' : 'bottom', cls = axis === 'x' ? 'resizing-x' : 'resizing-y';
+  let startPos = 0, startVal = 0, active = false;
+  function onMove(e) {
+    if (!active) return;
+    const cur = axis === 'x' ? e.clientX : e.clientY;
+    layout[key] = startVal + (startPos - cur);     // side/bottom grow as you drag toward them (left / up)
+    applyLayout(false); e.preventDefault();
+  }
+  function onUp() {
+    if (!active) return; active = false;
+    window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp);
+    el.classList.remove('dragging'); document.body.classList.remove('resizing', cls);
+    saveJSON('rt_layout2', { side: layout.side, bottom: layout.bottom });
+  }
+  el.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    active = true; startPos = axis === 'x' ? e.clientX : e.clientY; startVal = layout[key];
+    el.classList.add('dragging'); document.body.classList.add('resizing', cls);
+    window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp);
+    e.preventDefault();
+  });
+  el.addEventListener('dblclick', () => { layout[key] = LAYOUT_DEFAULTS[key]; applyLayout(true); });
 }
 function initLayout() { applyLayout(false); attachGutter($('gutterCol'), 'x'); attachGutter($('gutterRow'), 'y'); window.addEventListener('resize', () => applyLayout(false)); }
 
@@ -173,6 +203,7 @@ function legendBarFor(param) {
 }
 function legendCmpClass(val, ref) { return val > ref ? 'up' : (val < ref ? 'down' : ''); }
 function renderLegend(param) {
+  renderIndLegend(hoveredIndex(param));        // indicator readouts track the same crosshair bar
   const el = document.getElementById('chartLegend'); if (!el) return;
   if (!bars.length) { el.classList.remove('show'); return; }
   const got = legendBarFor(param); if (!got) { el.classList.remove('show'); return; }
@@ -186,6 +217,44 @@ function renderLegend(param) {
   el.classList.add('show');
 }
 function initChartLegend() { chart.subscribeCrosshairMove((param) => renderLegend(param)); renderLegend(null); }
+
+// ---- on-chart indicator legend (TradingView-style stacked rows; each row toggles its indicator) ----
+function hoveredIndex(param) {
+  if (param && param.time != null) { for (let k = Math.min(idx, bars.length - 1); k >= 0; k--) if (bars[k].time === param.time) return k; }
+  return Math.min(idx, bars.length - 1);
+}
+function fmtIndVal(v) { return (v == null || !isFinite(v)) ? '–' : f2(v); }
+function renderIndLegend(i) {
+  const el = $('indLegend'); if (!el) return;
+  if (!bars.length) { el.innerHTML = ''; return; }
+  if (i == null || i < 0 || i >= bars.length) i = Math.min(idx, bars.length - 1);
+  const rows = [];
+  const add = (key, on, color, title, params, vals) => rows.push(
+    `<div class="il-row${on ? '' : ' off'}" data-ind="${key}" title="點一下開/關">` +
+    `<span class="il-eye material-symbols-outlined">${on ? 'visibility' : 'visibility_off'}</span>` +
+    `<span class="il-name" style="color:${on ? color : 'var(--dim)'}">${title}</span>` +
+    (params ? `<span class="il-params">${params}</span>` : '') +
+    (on && vals ? `<span class="il-vals">${vals}</span>` : '') + `</div>`);
+  add('rip', ripsterOn, '#0ecb81', 'Ripster EMA 雲', '8·9 5·12 34·50 72·89 180·200', '');
+  add('vwap', vwapOn, VWAP_COLOR, 'VWAP', '', `<b>${fmtIndVal(vwapData[i])}</b>`);
+  add('bb', bbOn, BB_MID, 'BB', '20 2', `${fmtIndVal(bbData.up[i])} <b>${fmtIndVal(bbData.mid[i])}</b> ${fmtIndVal(bbData.lo[i])}`);
+  const emaVals = emaData.map(e => `<span style="color:${e.color}">${fmtIndVal(e.arr[i])}</span>`).join(' ');
+  add('ema', emaOn, '#42a5f5', 'EMA', emaPeriods.join(' '), emaVals);
+  el.innerHTML = rows.join('');
+}
+function toggleInd(which) {
+  if (which === 'rip') { ripsterOn = !ripsterOn; saveJSON('rt_ripster', ripsterOn); ripsterRepaint(); const c = $('ripsterToggle'); if (c) c.checked = ripsterOn; }
+  else if (which === 'vwap') { setVwap(!vwapOn); const c = $('indVwap'); if (c) c.checked = vwapOn; }
+  else if (which === 'bb') { setBB(!bbOn); const c = $('indBB'); if (c) c.checked = bbOn; }
+  else if (which === 'ema') { setEMA(!emaOn); const c = $('indEma'); if (c) c.checked = emaOn; }
+  renderIndLegend();
+}
+function initIndLegend() {
+  const el = $('indLegend'); if (!el) return;
+  el.addEventListener('mousedown', (e) => e.stopPropagation());   // clicking the legend must not start a chart drag
+  el.addEventListener('click', (e) => { const row = e.target.closest('.il-row'); if (row && row.dataset.ind) toggleInd(row.dataset.ind); });
+  renderIndLegend();
+}
 
 // ---------- indicators: Ripster EMA clouds (filled band between each EMA pair) ----------
 const RIPSTER = [   // Ripster EMA Clouds — pairs + per-cloud style; matches the default look (hl2 source)
@@ -318,8 +387,9 @@ function ensureOscChart() {
     grid: { vertLines: { color: OSC_COL.grid }, horzLines: { color: OSC_COL.grid } },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     rightPriceScale: { borderColor: OSC_COL.border, scaleMargins: { top: 0.1, bottom: 0.1 } },
+    localization: { timeFormatter: etCrosshairFmt },
     // keep BOTH time scales identical so columns line up 1:1 with the main chart
-    timeScale: { borderColor: OSC_COL.border, timeVisible: true, secondsVisible: true, rightOffset: 6, visible: false },
+    timeScale: { borderColor: OSC_COL.border, timeVisible: true, secondsVisible: true, rightOffset: 6, visible: false, tickMarkFormatter: etTickFmt },
     handleScale: { axisPressedMouseMove: { time: false } }, // x-zoom only via main chart
   });
 
@@ -581,9 +651,9 @@ if (candle.attachPrimitive) candle.attachPrimitive(indicatorPrimitive);
 function indicatorRepaint() { if (indicatorPrimitive._req) indicatorPrimitive._req(); }
 
 // ---------- toggles ----------
-function setVwap(on) { vwapOn = on; saveJSON('rt_vwap', vwapOn); indicatorRepaint(); }
-function setBB(on)   { bbOn = on;   saveJSON('rt_bb',   bbOn);   indicatorRepaint(); }
-function setEMA(on)  { emaOn = on;  saveJSON('rt_ema',  emaOn);  indicatorRepaint(); }
+function setVwap(on) { vwapOn = on; saveJSON('rt_vwap', vwapOn); indicatorRepaint(); renderIndLegend(); }
+function setBB(on)   { bbOn = on;   saveJSON('rt_bb',   bbOn);   indicatorRepaint(); renderIndLegend(); }
+function setEMA(on)  { emaOn = on;  saveJSON('rt_ema',  emaOn);  indicatorRepaint(); renderIndLegend(); }
 // optional: change the ribbon periods at runtime, e.g. setEmaPeriods("9,21,55,200")
 function setEmaPeriods(csv) {
   const list = String(csv).split(/[\s,]+/).map(s => parseInt(s, 10)).filter(n => Number.isFinite(n) && n >= 1).slice(0, 6);
@@ -1252,6 +1322,7 @@ function wire() {
   $('speedSelect').onchange = () => { if (playing) { pause(); play(); } };
   $('startSlider').oninput = (e) => setStart(+e.target.value);
   $('btnPickStart').onclick = () => { if (locked()) { return toast('有部位/掛單時不能設起點'); } setTool('start'); };
+  $('btnFit').onclick = fitChart;
   $('annUp').onclick = () => setTool('au');
   $('annDown').onclick = () => setTool('ad');
   $('annLong').onclick = () => setTool('long');
@@ -1265,8 +1336,9 @@ function wire() {
   $('drwMeasure').onclick = () => setTool('measure');
   $('drwClear').onclick = clearDrawings;
   $('ripsterToggle').checked = ripsterOn;
-  $('ripsterToggle').onchange = (e) => { ripsterOn = e.target.checked; saveJSON('rt_ripster', ripsterOn); ripsterRepaint(); };
+  $('ripsterToggle').onchange = (e) => { ripsterOn = e.target.checked; saveJSON('rt_ripster', ripsterOn); ripsterRepaint(); renderIndLegend(); };
   initChartLegend();
+  initIndLegend();
   $('indVwap').checked = vwapOn; $('indVwap').onchange = (e) => setVwap(e.target.checked);
   $('indBB').checked = bbOn; $('indBB').onchange = (e) => setBB(e.target.checked);
   $('indEma').checked = emaOn; $('indEma').onchange = (e) => setEMA(e.target.checked);
@@ -1297,6 +1369,7 @@ function wire() {
     else if (e.key === 's') onEntryButton('short'); else if (e.key === 'f') flatten();
     else if (e.key === '[' || e.key === 'ArrowLeft') { e.preventDefault(); prevDay(); }
     else if (e.key === ']' || e.key === 'ArrowRight') { e.preventDefault(); nextDay(); }
+    else if (e.key === '0') { e.preventDefault(); fitChart(); }
   });
 }
 function switchTab(t) { $('tabTrades').classList.toggle('active', t); $('tabDash').classList.toggle('active', !t); $('panelTrades').classList.toggle('hidden', !t); $('panelDash').classList.toggle('hidden', t); if (!t) renderDash(); }
