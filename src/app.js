@@ -235,6 +235,205 @@ if (candle.attachPrimitive) candle.attachPrimitive(ripsterPrimitive);
 function ripsterRepaint() { if (ripsterPrimitive._req) ripsterPrimitive._req(); }
 
 // ===================================================================
+//  OSCILLATOR SUB-PANE  — RSI(14) / MACD(12,26,9) in a 2nd LWC chart
+//  Lightweight Charts v4.2.3 has no native multi-pane, so we create a
+//  SECOND createChart() in #oscPane and keep its time axis locked to
+//  the main chart via bidirectional visible-logical-range sync.
+//  Reveal is mirrored to the candle reveal (slice 0..idx).
+//  Assumes in scope: chart, candle, bars, idx, rebuildTf, loadJSON,
+//  saveJSON, $, toast.  (Uses same color tokens as the app.)
+// ===================================================================
+
+// ---- palette (must be literal hex — a 2nd chart can't read CSS vars) ----
+const OSC_COL = {
+  bg:    '#0b0e11', grid: '#1b2027', border: '#2b3139', txt: '#707a8a',
+  rsi:   '#c026d3',                       // RSI line (magenta, distinct from Ripster)
+  guide: '#3a4150',                       // 30/70/50 guide lines
+  macd:  '#2962ff', signal: '#fcd535',    // MACD line / signal line
+  up:    '#0ecb81', down: '#f6465d',      // histogram + matches candle body colors
+};
+
+// ---- state ----
+let oscMode = loadJSON('rt_oscMode', 'rsi');   // 'rsi' | 'macd' | 'off'
+let oscChart = null, oscSyncing = false;       // reentrancy guard for range sync
+let rsiSeries = null, macdHist = null, macdLine = null, sigLine = null;
+let oscRsi = [], oscMacd = [];                 // full-length computed arrays (parallel to bars[])
+
+// ---- indicator math (TradingView-accurate) -------------------------------
+// Wilder's RSI(14): seed with simple averages over first `len` deltas, then RMA.
+function computeRSI(src, len) {
+  const n = src.length, out = new Array(n).fill(null);
+  if (n < len + 1) return out;
+  let gain = 0, loss = 0;
+  for (let i = 1; i <= len; i++) { const d = src[i] - src[i - 1]; if (d >= 0) gain += d; else loss -= d; }
+  let ag = gain / len, al = loss / len;
+  out[len] = al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+  for (let i = len + 1; i < n; i++) {
+    const d = src[i] - src[i - 1], g = d > 0 ? d : 0, l = d < 0 ? -d : 0;
+    ag = (ag * (len - 1) + g) / len; al = (al * (len - 1) + l) / len;
+    out[i] = al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+  }
+  return out;
+}
+// EMA over array; null until the series can be seeded (i >= len-1), SMA seed.
+function emaSeries(src, len) {
+  const n = src.length, out = new Array(n).fill(null), k = 2 / (len + 1);
+  if (n < len) return out;
+  let sum = 0; for (let i = 0; i < len; i++) sum += src[i];
+  let prev = sum / len; out[len - 1] = prev;
+  for (let i = len; i < n; i++) { prev = src[i] * k + prev * (1 - k); out[i] = prev; }
+  return out;
+}
+// MACD(12,26,9): macd=EMA12-EMA26, signal=EMA9(macd), hist=macd-signal.
+function computeMACD(src, fast, slow, sigLen) {
+  const n = src.length, ef = emaSeries(src, fast), es = emaSeries(src, slow);
+  const macd = new Array(n).fill(null);
+  for (let i = 0; i < n; i++) if (ef[i] != null && es[i] != null) macd[i] = ef[i] - es[i];
+  // signal = EMA of the dense (non-null) MACD tail, then re-aligned to original indices
+  const firstM = macd.findIndex(v => v != null);
+  const out = new Array(n).fill(null);
+  if (firstM < 0) return out;
+  const dense = macd.slice(firstM), sig = emaSeries(dense, sigLen);
+  for (let j = 0; j < dense.length; j++) {
+    const i = firstM + j;
+    out[i] = { macd: dense[j], signal: sig[j], hist: sig[j] == null ? null : dense[j] - sig[j] };
+  }
+  return out;
+}
+
+// ---- compute (call on rebuildTf + dataset load) --------------------------
+function oscCompute() {
+  const close = bars.map(b => b.close);
+  oscRsi = computeRSI(close, 14);
+  oscMacd = computeMACD(close, 12, 26, 9);
+}
+
+// ---- chart creation (lazy: only when first turned on) --------------------
+function ensureOscChart() {
+  if (oscChart) return;
+  oscChart = LightweightCharts.createChart($('oscPane'), {
+    layout: { background: { color: OSC_COL.bg }, textColor: OSC_COL.txt, fontSize: 10 },
+    grid: { vertLines: { color: OSC_COL.grid }, horzLines: { color: OSC_COL.grid } },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    rightPriceScale: { borderColor: OSC_COL.border, scaleMargins: { top: 0.1, bottom: 0.1 } },
+    // keep BOTH time scales identical so columns line up 1:1 with the main chart
+    timeScale: { borderColor: OSC_COL.border, timeVisible: true, secondsVisible: true, rightOffset: 6, visible: false },
+    handleScale: { axisPressedMouseMove: { time: false } }, // x-zoom only via main chart
+  });
+
+  // --- bidirectional time-range sync (guarded against feedback loop) ---
+  const mainTs = chart.timeScale(), oscTs = oscChart.timeScale();
+  mainTs.subscribeVisibleLogicalRangeChange(r => {
+    if (oscSyncing || !r) return; oscSyncing = true;
+    try { oscTs.setVisibleLogicalRange(r); } catch (e) {} oscSyncing = false;
+  });
+  oscTs.subscribeVisibleLogicalRangeChange(r => {
+    if (oscSyncing || !r) return; oscSyncing = true;
+    try { mainTs.setVisibleLogicalRange(r); } catch (e) {} oscSyncing = false;
+  });
+  // mirror crosshair from main -> osc so the vertical line tracks across both
+  chart.subscribeCrosshairMove(p => {
+    if (!oscChart) return;
+    if (p && p.time != null) { try { oscChart.setCrosshairPosition(0, p.time, oscRsiAnchor()); } catch (e) {} }
+    else oscChart.clearCrosshairPosition();
+  });
+
+  new ResizeObserver(oscResize).observe($('oscPane'));
+}
+// any series handle works as the crosshair anchor; pick whichever is live
+function oscRsiAnchor() { return rsiSeries || macdLine || macdHist; }
+
+function oscResize() {
+  if (!oscChart) return;
+  const el = $('oscPane'), w = el.clientWidth, h = el.clientHeight;
+  if (!w || !h) return;
+  oscChart.resize(w - 1, h, true); oscChart.resize(w, h, true); // double-resize (LWC no-ops same-size)
+}
+
+// ---- (re)build series for the current mode -------------------------------
+function oscBuildSeries() {
+  if (!oscChart) return;
+  // tear down whatever exists
+  [rsiSeries, macdHist, macdLine, sigLine].forEach(s => { if (s) try { oscChart.removeSeries(s); } catch (e) {} });
+  rsiSeries = macdHist = macdLine = sigLine = null;
+
+  if (oscMode === 'rsi') {
+    rsiSeries = oscChart.addLineSeries({ color: OSC_COL.rsi, lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
+    rsiSeries.applyOptions({ autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }) });
+    rsiSeries.createPriceLine({ price: 70, color: OSC_COL.guide, lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '70' });
+    rsiSeries.createPriceLine({ price: 50, color: OSC_COL.guide, lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: false });
+    rsiSeries.createPriceLine({ price: 30, color: OSC_COL.guide, lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '30' });
+  } else if (oscMode === 'macd') {
+    macdHist = oscChart.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false });
+    macdLine = oscChart.addLineSeries({ color: OSC_COL.macd, lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
+    sigLine  = oscChart.addLineSeries({ color: OSC_COL.signal, lineWidth: 1, priceLineVisible: false, lastValueVisible: true });
+  }
+}
+
+// ---- reveal helpers (mirror the candle reveal) ---------------------------
+// full hard reveal: slice 0..idx, like hardReveal() does for the candle.
+function oscHardReveal() {
+  if (oscMode === 'off') { if ($('oscPane')) $('oscPane').style.display = 'none'; return; }
+  ensureOscChart(); $('oscPane').style.display = '';
+  if (!rsiSeries && !macdLine) oscBuildSeries();
+  const hi = Math.min(idx, bars.length - 1);
+
+  if (oscMode === 'rsi' && rsiSeries) {
+    const d = [];
+    for (let i = 0; i <= hi; i++) if (oscRsi[i] != null) d.push({ time: bars[i].time, value: oscRsi[i] });
+    rsiSeries.setData(d);
+  } else if (oscMode === 'macd' && macdLine) {
+    const dl = [], ds = [], dh = [];
+    for (let i = 0; i <= hi; i++) {
+      const m = oscMacd[i]; if (!m) continue;
+      if (m.macd   != null) dl.push({ time: bars[i].time, value: m.macd });
+      if (m.signal != null) ds.push({ time: bars[i].time, value: m.signal });
+      if (m.hist   != null) dh.push({ time: bars[i].time, value: m.hist, color: m.hist >= 0 ? OSC_COL.up : OSC_COL.down });
+    }
+    macdLine.setData(dl); sigLine.setData(ds); macdHist.setData(dh);
+  }
+  oscResize();
+}
+// incremental reveal of the single newly-revealed bar (call from stepFwd()).
+function oscStepFwd() {
+  if (oscMode === 'off' || !oscChart) return;
+  const i = idx; if (i < 0 || i >= bars.length) return;
+  if (oscMode === 'rsi' && rsiSeries) {
+    if (oscRsi[i] != null) rsiSeries.update({ time: bars[i].time, value: oscRsi[i] });
+  } else if (oscMode === 'macd' && macdLine) {
+    const m = oscMacd[i]; if (!m) return;
+    if (m.macd   != null) macdLine.update({ time: bars[i].time, value: m.macd });
+    if (m.signal != null) sigLine.update({ time: bars[i].time, value: m.signal });
+    if (m.hist   != null) macdHist.update({ time: bars[i].time, value: m.hist, color: m.hist >= 0 ? OSC_COL.up : OSC_COL.down });
+  }
+}
+
+// ---- mode switch (selector handler) --------------------------------------
+function setOscMode(m) {
+  oscMode = m; saveJSON('rt_oscMode', m);
+  if (m === 'off') {
+    if (oscChart) { [rsiSeries, macdHist, macdLine, sigLine].forEach(s => { if (s) try { oscChart.removeSeries(s); } catch (e) {} }); rsiSeries = macdHist = macdLine = sigLine = null; }
+    if ($('oscPane')) $('oscPane').style.display = 'none';
+  } else {
+    ensureOscChart(); oscBuildSeries(); oscHardReveal();
+    // adopt the main chart's current visible range immediately
+    oscSyncing = true; try { oscChart.timeScale().setVisibleLogicalRange(chart.timeScale().getVisibleLogicalRange()); } catch (e) {} oscSyncing = false;
+  }
+}
+
+// ---- one-time wiring (call from wire()) ----------------------------------
+function wireOsc() {
+  const sel = $('oscSelect'); if (!sel) return;
+  sel.value = oscMode;
+  sel.onchange = (e) => setOscMode(e.target.value);
+  // initial paint (only builds the 2nd chart if not 'off')
+  oscCompute(); setOscMode(oscMode);
+}
+
+// debug hook (optional)
+window.__osc = () => ({ mode: oscMode, hasChart: !!oscChart, rsiLen: oscRsi.filter(v => v != null).length, macdLen: oscMacd.filter(v => v != null).length });
+
+// ===================================================================
 // PRICE-OVERLAY INDICATORS — session VWAP + Bollinger Bands + EMA ribbon
 // One custom Series Primitive (zOrder 'bottom') drawn under the candles.
 // Reuses the existing emaArr(); aligns to the app's real palette + helpers
@@ -578,7 +777,7 @@ function buildTfSelect() { $('tfSelect').innerHTML = TF_OPTIONS.map(m => `<optio
 function buildDataSelect() { $('dataSelect').innerHTML = DATASETS.map((ds, i) => `<option value="${i}" ${i === dataIdx ? 'selected' : ''}>${ds.label}</option>`).join(''); }
 
 // ---------- timeframe / index bookkeeping ----------
-function rebuildTf() { bars = aggregate(baseBars, tf); computeRipster(); computeIndicators(); }
+function rebuildTf() { bars = aggregate(baseBars, tf); computeRipster(); computeIndicators(); oscCompute(); }
 function tfIndexAtBase(bi) { // TF-bar index whose bucket contains baseBars[bi]
   const t = baseBars[bi].time; let lo = 0, hi = bars.length - 1, ans = 0;
   while (lo <= hi) { const mid = (lo + hi) >> 1; if (bars[mid].time <= t) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
@@ -587,13 +786,13 @@ function tfIndexAtBase(bi) { // TF-bar index whose bucket contains baseBars[bi]
 function syncIdxFromBase() { idx = tfIndexAtBase(baseIdx); }
 
 // ---------- reveal / replay ----------
-function hardReveal() { candle.setData(bars.slice(0, idx + 1).map(cd)); vol.setData(bars.slice(0, idx + 1).map(vd)); refreshMarkers(); drawLines(); renderLegend(null); }
+function hardReveal() { candle.setData(bars.slice(0, idx + 1).map(cd)); vol.setData(bars.slice(0, idx + 1).map(vd)); refreshMarkers(); drawLines(); renderLegend(null); oscHardReveal(); }
 function stepFwd() {
   if (idx >= bars.length - 1) { pause(); return; }
   idx++; candle.update(cd(bars[idx])); vol.update(vd(bars[idx]));
   for (let i = bars[idx].subStart; i <= bars[idx].subEnd; i++) { processSub(baseBars[i]); }
   baseIdx = bars[idx].subEnd;
-  renderLive(); renderLegend(null);
+  renderLive(); renderLegend(null); oscStepFwd();
 }
 function stepBack() {
   if (locked()) return toast('有部位/掛單時不能後退');
@@ -897,6 +1096,7 @@ function wire() {
   $('indBB').checked = bbOn; $('indBB').onchange = (e) => setBB(e.target.checked);
   $('indEma').checked = emaOn; $('indEma').onchange = (e) => setEMA(e.target.checked);
   $('emaPeriods').value = emaPeriods.join(','); $('emaPeriods').onchange = (e) => setEmaPeriods(e.target.value);
+  wireOsc();
 
   $('entryType').onchange = () => { $('entryPriceRow').style.display = $('entryType').value === 'market' ? 'none' : ''; if ($('entryType').value !== 'market' && !$('entryPrice').value) $('entryPrice').value = f2(curPx()); };
   $('btnBuy').onclick = () => onEntryButton('long');
