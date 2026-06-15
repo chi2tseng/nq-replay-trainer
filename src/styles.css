@@ -410,3 +410,23 @@ td.neg{color:var(--red)}
 /* Optional: hide the raw ligature word if the font is still loading and &display=block
    somehow didn't apply (defensive — transparent text until glyphs paint). */
 .material-symbols-outlined:not(:defined){ color: transparent; }
+/* ===================== Resizable layout gutters ===================== */
+/* ---- resizable layout gutters ---- */
+.gutter{background:transparent;z-index:5;position:relative;touch-action:none;user-select:none}
+.gutter::before{content:"";position:absolute;background:var(--line);transition:background .12s}
+/* vertical gutter (between chart and #side): drag side-panel width */
+.gutter.col{cursor:col-resize}
+.gutter.col::before{top:0;bottom:0;left:50%;width:1px;transform:translateX(-50%)}
+/* horizontal gutter (between #main and #bottom): drag bottom-panel height */
+.gutter.row{cursor:row-resize}
+.gutter.row::before{left:0;right:0;top:50%;height:1px;transform:translateY(-50%)}
+/* hover / active highlight in brand amber */
+.gutter:hover::before,.gutter.dragging::before{background:var(--brand)}
+.gutter.col:hover::before,.gutter.col.dragging::before{width:3px}
+.gutter.row:hover::before,.gutter.row.dragging::before{height:3px}
+/* while dragging: kill selection + keep the resize cursor everywhere */
+body.resizing{user-select:none;cursor:default}
+body.resizing.col-active,body.resizing *{cursor:inherit}
+/* the gutters now own the seams — drop the duplicate hairlines they replace */
+#chartwrap{border-right:none}
+#bottom{border-top:none}

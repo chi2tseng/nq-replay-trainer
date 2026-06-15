@@ -79,6 +79,34 @@ function sizeChart() { const el = $('chart'); const w = el.clientWidth, h = el.c
 new ResizeObserver(sizeChart).observe($('chartwrap'));
 window.addEventListener('resize', sizeChart);
 
+// ---------- resizable layout (drag gutters to resize #side width & #bottom height) ----------
+const LAYOUT_DEFAULTS = { side: 320, bottom: 252 }, LAYOUT_MIN = { side: 220, bottom: 120 }, SIDE_MIN_CHART = 360, BOTTOM_MIN_MAIN = 220, TOOLBAR_H = 46;
+let layout = Object.assign({}, LAYOUT_DEFAULTS, loadJSON('rt_layout', {}));
+function clampLayout(L) {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const maxSide = Math.max(LAYOUT_MIN.side, vw - SIDE_MIN_CHART), maxBottom = Math.max(LAYOUT_MIN.bottom, vh - TOOLBAR_H - BOTTOM_MIN_MAIN);
+  L.side = Math.round(Math.min(maxSide, Math.max(LAYOUT_MIN.side, L.side)));
+  L.bottom = Math.round(Math.min(maxBottom, Math.max(LAYOUT_MIN.bottom, L.bottom)));
+  return L;
+}
+function applyLayout(persist) {
+  clampLayout(layout);
+  const main = $('main'), app = $('app');
+  if (main) main.style.gridTemplateColumns = `1fr 6px ${layout.side}px`;
+  if (app) app.style.gridTemplateRows = `${TOOLBAR_H}px 1fr 6px ${layout.bottom}px`;
+  if (persist) saveJSON('rt_layout', { side: layout.side, bottom: layout.bottom });
+  if (typeof sizeChart === 'function') sizeChart();
+}
+function attachGutter(el, axis) {
+  if (!el) return;
+  let startPos = 0, startVal = 0;
+  function onMove(e) { if (axis === 'x') layout.side = startVal + (startPos - e.clientX); else layout.bottom = startVal + (startPos - e.clientY); applyLayout(false); }
+  function onUp(e) { el.releasePointerCapture && el.releasePointerCapture(e.pointerId); window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); el.classList.remove('dragging'); document.body.classList.remove('resizing'); saveJSON('rt_layout', { side: layout.side, bottom: layout.bottom }); }
+  el.addEventListener('pointerdown', (e) => { if (e.button !== 0) return; startPos = axis === 'x' ? e.clientX : e.clientY; startVal = axis === 'x' ? layout.side : layout.bottom; el.setPointerCapture && el.setPointerCapture(e.pointerId); el.classList.add('dragging'); document.body.classList.add('resizing'); window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp); e.preventDefault(); });
+  el.addEventListener('dblclick', () => { if (axis === 'x') layout.side = LAYOUT_DEFAULTS.side; else layout.bottom = LAYOUT_DEFAULTS.bottom; applyLayout(true); });
+}
+function initLayout() { applyLayout(false); attachGutter($('gutterCol'), 'x'); attachGutter($('gutterRow'), 'y'); window.addEventListener('resize', () => applyLayout(false)); }
+
 // ---------- indicators: Ripster EMA clouds (filled band between each EMA pair) ----------
 const RIPSTER = [   // Ripster EMA Clouds — pairs + per-cloud style; matches the default look (hl2 source)
   { fast: 8,   slow: 9,   a: 0.55, dir: true,  line: 'rgba(255,255,255,0.22)' },               // fast green/red
@@ -232,7 +260,7 @@ const mBucket = (ts) => Math.floor(ts / (tf * 60)) * (tf * 60);
 
 // ---------- init ----------
 init();
-async function init() { buildDataSelect(); await loadDataset(DATASETS[0].url); }
+async function init() { buildDataSelect(); initLayout(); await loadDataset(DATASETS[0].url); }
 
 function detectBaseTf(b) { let mn = Infinity; for (let i = 1; i < Math.min(b.length, 800); i++) { const dl = b[i].time - b[i - 1].time; if (dl > 0 && dl < mn) mn = dl; } return mn === Infinity ? 1 : Math.max(0.5, mn / 60); }
 function buildTfOptions() { TF_OPTIONS = [BASE_TF, ...STD_TF.filter(m => m > BASE_TF)]; }
@@ -304,6 +332,24 @@ function gotoSession(i) {
   if (locked()) return toast('有部位/掛單時不能跳轉');
   pause(); baseIdx = rthOpenIdx(sessions[i]); syncIdxFromBase(); hardReveal(); renderLive();
 }
+// ---- quick next/prev trading-day jump (to 09:30 ET open) ----
+function currentSessionIdx() {
+  for (let i = 0; i < sessions.length; i++) { if (baseIdx >= sessions[i].start && baseIdx <= sessions[i].end) return i; }
+  if (sessions.length === 0) return -1;
+  if (baseIdx < sessions[0].start) return 0;
+  return sessions.length - 1;
+}
+function jumpDay(dir) {
+  if (locked()) return toast('有部位/掛單時不能跳轉');
+  if (sessions.length === 0) return;
+  const cur = currentSessionIdx(), next = Math.max(0, Math.min(sessions.length - 1, cur + dir));
+  if (next === cur) return toast(dir > 0 ? '已是最後一個交易日' : '已是第一個交易日');
+  gotoSession(next);
+  const sel = $('sessionSelect'); if (sel) sel.value = String(next);
+  toast((dir > 0 ? '▶ ' : '◀ ') + sessions[next].key + ' 09:30 ET');
+}
+function nextDay() { jumpDay(1); }
+function prevDay() { jumpDay(-1); }
 function setStart(biVal) {
   if (locked()) return;
   pause(); baseIdx = Math.max(0, Math.min(baseBars.length - 1, biVal)); syncIdxFromBase(); hardReveal(); renderLive();
@@ -544,6 +590,8 @@ function wire() {
   $('btnStepFwd').onclick = () => { pause(); stepFwd(); };
   $('btnStepBack').onclick = () => { pause(); stepBack(); };
   $('btnToStart').onclick = () => gotoSession(+$('sessionSelect').value);
+  $('btnPrevDay').onclick = prevDay;
+  $('btnNextDay').onclick = nextDay;
   $('sessionSelect').onchange = (e) => gotoSession(+e.target.value);
   $('tfSelect').onchange = (e) => setTf(+e.target.value);
   $('dataSelect').onchange = async (e) => { if (locked()) { $('dataSelect').value = dataIdx; return toast('有部位/掛單時不能換資料集'); } const i = +e.target.value; const ok = await loadDataset(DATASETS[i].url); if (ok) dataIdx = i; else $('dataSelect').value = dataIdx; };
@@ -584,9 +632,11 @@ function wire() {
     if (e.code === 'Space') { e.preventDefault(); pause(); stepFwd(); }
     else if (e.key === 'p') play(); else if (e.key === 'b') onEntryButton('long');
     else if (e.key === 's') onEntryButton('short'); else if (e.key === 'f') flatten();
+    else if (e.key === '[' || e.key === 'ArrowLeft') { e.preventDefault(); prevDay(); }
+    else if (e.key === ']' || e.key === 'ArrowRight') { e.preventDefault(); nextDay(); }
   });
 }
 function switchTab(t) { $('tabTrades').classList.toggle('active', t); $('tabDash').classList.toggle('active', !t); $('panelTrades').classList.toggle('hidden', !t); $('panelDash').classList.toggle('hidden', t); if (!t) renderDash(); }
 
 // debug hook (harmless; used for automated verification)
-window.__rt = { state: () => ({ tf, idx, baseIdx, bars: bars.length, base: baseBars.length, pos: position && { ...position }, orders: orders.map(o => ({ ...o })), entryOrder }), bar: (i) => bars[i], sub: (i) => baseBars[i], agg: (m) => aggregate(baseBars, m), dresize: (w, h) => chart.resize(w, h, true), sc: sizeChart, chartOpts: () => chart.options(), priceToY: (p) => candle.priceToCoordinate(p), coordToPrice: (y) => candle.coordinateToPrice(y), chartRect: () => $('chart').getBoundingClientRect(), setTool: (t) => setTool(t), getTool: () => tool, placeAnn: (t, time) => placeAnnotation(t, time), annCount: () => annotations.length, ripster: () => ({ on: ripsterOn, clouds: ripsterData.length }), drawCount: () => drawings.length, addDraw: (t, time, price) => handleDrawClick(t, time, price), rthOpenET: (i) => etMinutes(baseBars[rthOpenIdx(sessions[i])].time) };
+window.__rt = { state: () => ({ tf, idx, baseIdx, bars: bars.length, base: baseBars.length, pos: position && { ...position }, orders: orders.map(o => ({ ...o })), entryOrder }), bar: (i) => bars[i], sub: (i) => baseBars[i], agg: (m) => aggregate(baseBars, m), dresize: (w, h) => chart.resize(w, h, true), sc: sizeChart, chartOpts: () => chart.options(), priceToY: (p) => candle.priceToCoordinate(p), coordToPrice: (y) => candle.coordinateToPrice(y), chartRect: () => $('chart').getBoundingClientRect(), setTool: (t) => setTool(t), getTool: () => tool, placeAnn: (t, time) => placeAnnotation(t, time), annCount: () => annotations.length, ripster: () => ({ on: ripsterOn, clouds: ripsterData.length }), drawCount: () => drawings.length, addDraw: (t, time, price) => handleDrawClick(t, time, price), rthOpenET: (i) => etMinutes(baseBars[rthOpenIdx(sessions[i])].time), nextDay, prevDay, curSession: () => currentSessionIdx() };
