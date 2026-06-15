@@ -464,3 +464,11 @@ body.resizing.col-active,body.resizing *{cursor:inherit}
 #chartLegend .ll-chg{font-weight:600;margin-left:2px}
 #chartLegend .up{color:var(--green)}
 #chartLegend .down{color:var(--red)}
+
+/* ===================== Indicator swatches ===================== */
+/* 指標 toggles — reuse existing .card / .row.chk styling; swatch chips per indicator */
+.ind-swatch{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:middle;flex:none}
+#card-ind .row.chk{margin:7px 0}
+#card-ind .row.chk label{cursor:pointer}
+#emaPeriods{width:120px}
+#card-ind .row.sub{padding-left:22px}

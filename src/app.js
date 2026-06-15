@@ -234,6 +234,163 @@ const ripsterPrimitive = {
 if (candle.attachPrimitive) candle.attachPrimitive(ripsterPrimitive);
 function ripsterRepaint() { if (ripsterPrimitive._req) ripsterPrimitive._req(); }
 
+// ===================================================================
+// PRICE-OVERLAY INDICATORS — session VWAP + Bollinger Bands + EMA ribbon
+// One custom Series Primitive (zOrder 'bottom') drawn under the candles.
+// Reuses the existing emaArr(); aligns to the app's real palette + helpers
+// (tradingDayKey / etMinutes already in scope). Recompute in rebuildTf().
+// ===================================================================
+
+// ---------- indicator state (persisted) ----------
+let vwapOn = loadJSON('rt_vwap', true);
+let bbOn   = loadJSON('rt_bb',   false);
+let emaOn  = loadJSON('rt_ema',  false);
+let emaPeriods = (loadJSON('rt_ema_p', [9, 21, 50, 200]) || [9, 21, 50, 200])
+  .filter(n => Number.isFinite(n) && n >= 1).slice(0, 6); // guard persisted value
+const BB_PERIOD = 20, BB_MULT = 2;
+
+// EMA ribbon colors (cool->warm as period grows; falls back to amber if list is longer)
+const EMA_COLORS = ['#42a5f5', '#26a69a', '#f0b90b', '#ef5350', '#ab47bc', '#8b93a7'];
+const VWAP_COLOR = '#e040fb';                 // session VWAP — distinct magenta
+const BB_LINE = 'rgba(139,147,167,0.85)';     // --dim, opaque-ish
+const BB_MID = 'rgba(240,185,11,0.85)';       // --amber mid (basis)
+const BB_FILL = 'rgba(139,147,167,0.07)';     // very faint band fill
+
+// ---------- computed arrays (indexed parallel to bars[]) ----------
+let vwapData = [];                 // number|null per bar
+let bbData = { mid: [], up: [], lo: [] };
+let emaData = [];                  // [{ period, color, arr:[...] }]
+
+// Session-anchored VWAP: cumulative (typicalPrice * volume) / cumulative volume,
+// re-anchored (a) when the ET trading day changes, and (b) at the 09:30 ET cash
+// open — so the overnight Globex session can't pollute the RTH anchor. DST-safe
+// via the app's existing tradingDayKey()/etMinutes().
+function computeVWAP() {
+  vwapData = new Array(bars.length).fill(null);
+  let cumPV = 0, cumV = 0, prevDay = null, anchored = false;
+  for (let i = 0; i < bars.length; i++) {
+    const b = bars[i];
+    const day = tradingDayKey(b.time);          // futures trading-day key (18:00 ET boundary)
+    const m = etMinutes(b.time);                 // minutes since ET midnight
+    const inRth = m >= 570 && m < 960;           // 09:30–15:59 ET
+    if (day !== prevDay) { cumPV = 0; cumV = 0; prevDay = day; anchored = false; }
+    // re-anchor exactly on the first RTH bar of the day (cash open)
+    if (inRth && !anchored) { cumPV = 0; cumV = 0; anchored = true; }
+    const tp = (b.high + b.low + b.close) / 3;   // typical price
+    cumPV += tp * b.volume; cumV += b.volume;
+    vwapData[i] = cumV > 0 ? cumPV / cumV : null;
+  }
+}
+
+// Bollinger Bands: 20-period SMA of close ± 2*stdev (population). O(n) rolling sums.
+function computeBB() {
+  const n = bars.length, P = BB_PERIOD, K = BB_MULT;
+  const mid = new Array(n).fill(null), up = new Array(n).fill(null), lo = new Array(n).fill(null);
+  let sum = 0, sq = 0;
+  for (let i = 0; i < n; i++) {
+    const c = bars[i].close; sum += c; sq += c * c;
+    if (i >= P) { const o = bars[i - P].close; sum -= o; sq -= o * o; }
+    if (i >= P - 1) {
+      const mean = sum / P; let v = sq / P - mean * mean; if (v < 0) v = 0; // clamp fp noise
+      const sd = Math.sqrt(v);
+      mid[i] = mean; up[i] = mean + K * sd; lo[i] = mean - K * sd;
+    }
+  }
+  bbData = { mid, up, lo };
+}
+
+// EMA ribbon: configurable list of EMA periods over close (reuses emaArr()).
+function computeEMA() {
+  const c = bars.map(b => b.close);
+  emaData = emaPeriods.map((p, i) => ({ period: p, color: EMA_COLORS[i] || '#8b93a7', arr: emaArr(c, p) }));
+}
+
+// Call from rebuildTf() (after bars is set). Cheap; only recomputes what's needed.
+function computeIndicators() {
+  computeVWAP(); computeBB(); computeEMA();
+}
+
+// ---------- the primitive (zOrder 'bottom', under candles) ----------
+const indicatorPrimitive = {
+  attached(p) { this._req = p.requestUpdate; },
+  updateAllViews() {},
+  paneViews: () => [{
+    zOrder: () => 'bottom',
+    renderer: () => ({ draw: (target) => {
+      if (!vwapOn && !bbOn && !emaOn) return;
+      if (!bars.length) return;
+      try {
+        target.useMediaCoordinateSpace((scope) => {
+          const ctx = scope.context, ts = chart.timeScale();
+          const range = ts.getVisibleLogicalRange(); if (!range) return;
+          // clamp to revealed bars too: don't draw indicator past idx during replay
+          const last = Math.min(bars.length - 1, idx);
+          const from = Math.max(0, Math.floor(range.from));
+          const to = Math.min(last, Math.ceil(range.to));
+          if (to < from) return;
+          const xs = []; for (let i = from; i <= to; i++) xs[i] = ts.timeToCoordinate(bars[i].time);
+
+          // polyline helper: breaks the path on any null x/y so gaps (warmup, off-screen) don't bridge
+          const line = (arr, color, width) => {
+            ctx.beginPath(); let started = false;
+            for (let i = from; i <= to; i++) {
+              const x = xs[i]; const val = arr[i];
+              if (x == null || val == null) { started = false; continue; }
+              const y = candle.priceToCoordinate(val);
+              if (y == null) { started = false; continue; }
+              if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+            }
+            ctx.strokeStyle = color; ctx.lineWidth = width; ctx.stroke();
+          };
+
+          // --- Bollinger Bands (fill first so lines sit on top) ---
+          if (bbOn) {
+            // faint band fill: upper across, then lower back, segment-by-segment to respect nulls
+            ctx.beginPath(); let open = false;
+            for (let i = from; i <= to; i++) {
+              const x = xs[i], u = bbData.up[i];
+              if (x == null || u == null) { open = false; continue; }
+              const yu = candle.priceToCoordinate(u); if (yu == null) { open = false; continue; }
+              if (!open) { ctx.moveTo(x, yu); open = true; } else ctx.lineTo(x, yu);
+            }
+            for (let i = to; i >= from; i--) {
+              const x = xs[i], l = bbData.lo[i];
+              if (x == null || l == null) continue;
+              const yl = candle.priceToCoordinate(l); if (yl == null) continue;
+              ctx.lineTo(x, yl);
+            }
+            ctx.closePath(); ctx.fillStyle = BB_FILL; ctx.fill();
+            line(bbData.up, BB_LINE, 1);
+            line(bbData.lo, BB_LINE, 1);
+            line(bbData.mid, BB_MID, 1);
+          }
+
+          // --- EMA ribbon ---
+          if (emaOn) for (const e of emaData) line(e.arr, e.color, 1.3);
+
+          // --- session VWAP (drawn last so it reads on top of the ribbon) ---
+          if (vwapOn) line(vwapData, VWAP_COLOR, 1.6);
+        });
+        window.__ind = { n: ((window.__ind || {}).n || 0) + 1, ok: true };
+      } catch (e) { window.__ind = { err: String(e) }; }
+    } })
+  }],
+};
+if (candle.attachPrimitive) candle.attachPrimitive(indicatorPrimitive);
+function indicatorRepaint() { if (indicatorPrimitive._req) indicatorPrimitive._req(); }
+
+// ---------- toggles ----------
+function setVwap(on) { vwapOn = on; saveJSON('rt_vwap', vwapOn); indicatorRepaint(); }
+function setBB(on)   { bbOn = on;   saveJSON('rt_bb',   bbOn);   indicatorRepaint(); }
+function setEMA(on)  { emaOn = on;  saveJSON('rt_ema',  emaOn);  indicatorRepaint(); }
+// optional: change the ribbon periods at runtime, e.g. setEmaPeriods("9,21,55,200")
+function setEmaPeriods(csv) {
+  const list = String(csv).split(/[\s,]+/).map(s => parseInt(s, 10)).filter(n => Number.isFinite(n) && n >= 1).slice(0, 6);
+  if (!list.length) return toast('EMA 週期格式錯誤');
+  emaPeriods = list; saveJSON('rt_ema_p', emaPeriods);
+  computeEMA(); indicatorRepaint(); toast('EMA: ' + list.join('/'));
+}
+
 // ---------- drawings (horizontal line / trend line / ray / rectangle) ----------
 const drawingsPrimitive = {
   attached(p) { this._req = p.requestUpdate; },
@@ -264,7 +421,7 @@ const drawingsPrimitive = {
   }],
 };
 if (candle.attachPrimitive) candle.attachPrimitive(drawingsPrimitive);
-function repaintOverlays() { if (ripsterPrimitive._req) ripsterPrimitive._req(); if (drawingsPrimitive._req) drawingsPrimitive._req(); }
+function repaintOverlays() { if (ripsterPrimitive._req) ripsterPrimitive._req(); if (drawingsPrimitive._req) drawingsPrimitive._req(); indicatorRepaint(); }
 function handleDrawClick(t, time, price) {
   price = rnd(price);
   if (t === 'hl') { drawings.push({ type: 'hl', p1: { t: time, p: price }, color: '#d1d4dc' }); saveJSON('rt_drawings', drawings); repaintOverlays(); return; }
@@ -421,7 +578,7 @@ function buildTfSelect() { $('tfSelect').innerHTML = TF_OPTIONS.map(m => `<optio
 function buildDataSelect() { $('dataSelect').innerHTML = DATASETS.map((ds, i) => `<option value="${i}" ${i === dataIdx ? 'selected' : ''}>${ds.label}</option>`).join(''); }
 
 // ---------- timeframe / index bookkeeping ----------
-function rebuildTf() { bars = aggregate(baseBars, tf); computeRipster(); }
+function rebuildTf() { bars = aggregate(baseBars, tf); computeRipster(); computeIndicators(); }
 function tfIndexAtBase(bi) { // TF-bar index whose bucket contains baseBars[bi]
   const t = baseBars[bi].time; let lo = 0, hi = bars.length - 1, ans = 0;
   while (lo <= hi) { const mid = (lo + hi) >> 1; if (bars[mid].time <= t) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
@@ -736,6 +893,10 @@ function wire() {
   $('ripsterToggle').checked = ripsterOn;
   $('ripsterToggle').onchange = (e) => { ripsterOn = e.target.checked; saveJSON('rt_ripster', ripsterOn); ripsterRepaint(); };
   initChartLegend();
+  $('indVwap').checked = vwapOn; $('indVwap').onchange = (e) => setVwap(e.target.checked);
+  $('indBB').checked = bbOn; $('indBB').onchange = (e) => setBB(e.target.checked);
+  $('indEma').checked = emaOn; $('indEma').onchange = (e) => setEMA(e.target.checked);
+  $('emaPeriods').value = emaPeriods.join(','); $('emaPeriods').onchange = (e) => setEmaPeriods(e.target.value);
 
   $('entryType').onchange = () => { $('entryPriceRow').style.display = $('entryType').value === 'market' ? 'none' : ''; if ($('entryType').value !== 'market' && !$('entryPrice').value) $('entryPrice').value = f2(curPx()); };
   $('btnBuy').onclick = () => onEntryButton('long');
