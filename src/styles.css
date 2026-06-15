@@ -430,3 +430,37 @@ body.resizing.col-active,body.resizing *{cursor:inherit}
 /* the gutters now own the seams — drop the duplicate hairlines they replace */
 #chartwrap{border-right:none}
 #bottom{border-top:none}
+/* ===================== Right-click trading context menu ===================== */
+#ctxMenu{position:fixed;z-index:1000;min-width:190px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-box);padding:4px;box-shadow:0 10px 30px #000a;display:none;font-size:13px;user-select:none}
+#ctxMenu .ctx-head{padding:6px 10px;color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--line);margin-bottom:4px}
+#ctxMenu .ctx-item{padding:7px 10px;border-radius:4px;cursor:pointer;color:var(--txt);white-space:nowrap}
+#ctxMenu .ctx-item:hover{background:var(--panel2)}
+#ctxMenu .ctx-item.buy:hover{background:rgba(14,203,129,.16);color:var(--green)}
+#ctxMenu .ctx-item.sell:hover{background:rgba(246,70,93,.16);color:var(--red)}
+#ctxMenu .ctx-sep{height:1px;background:var(--line);margin:4px 6px}
+
+/* ===================== Chart legend (OHLCV readout) ===================== */
+/* ---- chart legend overlay (top-left, TradingView-style OHLCV readout) ---- */
+#chartLegend{
+  position:absolute; top:8px; left:10px; z-index:5;
+  display:none; align-items:baseline; flex-wrap:wrap;
+  gap:4px 10px; max-width:calc(100% - 70px);
+  padding:5px 9px; border-radius:6px;
+  background:rgba(14,17,22,.72);            /* var(--bg) @ ~72%, sits over candles */
+  border:1px solid var(--line);
+  font-size:12px; line-height:1.2; color:var(--txt);
+  pointer-events:none;                      /* never block crosshair/clicks/drag */
+  -webkit-user-select:none; user-select:none;
+  backdrop-filter:blur(2px);
+}
+#chartLegend.show{display:inline-flex}
+#chartLegend .ll-sym{font-weight:700;letter-spacing:.3px;color:var(--txt)}
+#chartLegend .ll-tf{
+  font-size:11px;font-weight:600;color:var(--dim);
+  padding:1px 5px;border:1px solid var(--line);border-radius:4px;margin-right:2px;
+}
+#chartLegend .ll-lbl{color:var(--dim);font-size:11px;margin-left:2px}
+#chartLegend .ll-val{font-weight:600}
+#chartLegend .ll-chg{font-weight:600;margin-left:2px}
+#chartLegend .up{color:var(--green)}
+#chartLegend .down{color:var(--red)}

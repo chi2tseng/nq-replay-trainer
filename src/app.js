@@ -107,6 +107,84 @@ function attachGutter(el, axis) {
 }
 function initLayout() { applyLayout(false); attachGutter($('gutterCol'), 'x'); attachGutter($('gutterRow'), 'y'); window.addEventListener('resize', () => applyLayout(false)); }
 
+// ---------- right-click chart trading (context menu at the clicked price) ----------
+function ctxPriceAt(clientY) { return candle.coordinateToPrice(clientY - $('chart').getBoundingClientRect().top); }
+function placeEntryAt(side, kind, price) {
+  if (position) return toast('已有部位 — 先平倉');
+  const mult = Math.max(1, parseInt($('qty').value, 10) || 1);
+  entryOrder = { side, kind, price: rnd(price), atm: activeAtm, mult };
+  toast(`${side === 'long' ? '買' : '賣'} ${kind === 'limit' ? '限價' : '停損'} @ ${f2(rnd(price))} 掛單`);
+  drawLines(); renderLive();
+}
+function moveStopTo(price) { if (!position) return; const s = orders.find(o => o.type === 'stop'); if (s) s.price = rnd(price); else orders.push({ type: 'stop', price: rnd(price), qty: position.qty }); drawLines(); renderLive(); toast('停損 → ' + f2(rnd(price))); }
+function moveTargetTo(price) { if (!position) return; const t = orders.find(o => o.type === 'target'); if (t) t.price = rnd(price); else orders.push({ type: 'target', price: rnd(price), qty: position.qty }); drawLines(); renderLive(); toast('停利 → ' + f2(rnd(price))); }
+let ctxEl = null;
+function hideCtx() { if (ctxEl) ctxEl.style.display = 'none'; }
+function showCtx(clientX, clientY) {
+  const price = ctxPriceAt(clientY); if (price == null) return;
+  if (!ctxEl) { ctxEl = document.createElement('div'); ctxEl.id = 'ctxMenu'; document.body.appendChild(ctxEl); }
+  const p = f2(rnd(price)), it = [];
+  if (position) {
+    it.push({ h: `${position.side === 'long' ? 'LONG' : 'SHORT'} ${position.qty} @ ${f2(position.entry)}` });
+    it.push({ l: `停損移到此 @ ${p}`, f: () => moveStopTo(price) });
+    it.push({ l: `停利移到此 @ ${p}`, f: () => moveTargetTo(price) });
+    it.push({ sep: 1 });
+    it.push({ l: '平倉 Flatten', f: () => flatten('manual') });
+    it.push({ l: '反手 Reverse', f: () => reverse() });
+  } else if (entryOrder) {
+    it.push({ h: `掛單 ${entryOrder.side === 'long' ? '買' : '賣'}${entryOrder.kind === 'limit' ? '限' : '停'} @ ${f2(entryOrder.price)}` });
+    it.push({ l: '取消掛單 Cancel', f: () => cancelEntry() });
+  } else {
+    it.push({ l: '市價買進 Buy Market', cls: 'buy', f: () => onEntryButtonDirect('long') });
+    it.push({ l: '市價賣出 Sell Market', cls: 'sell', f: () => onEntryButtonDirect('short') });
+    it.push({ sep: 1 });
+    it.push({ l: `限價買 @ ${p}`, cls: 'buy', f: () => placeEntryAt('long', 'limit', price) });
+    it.push({ l: `限價賣 @ ${p}`, cls: 'sell', f: () => placeEntryAt('short', 'limit', price) });
+    it.push({ l: `停損買 @ ${p}`, cls: 'buy', f: () => placeEntryAt('long', 'stop', price) });
+    it.push({ l: `停損賣 @ ${p}`, cls: 'sell', f: () => placeEntryAt('short', 'stop', price) });
+  }
+  ctxEl.innerHTML = '';
+  it.forEach(x => {
+    const d = document.createElement('div');
+    if (x.sep) { d.className = 'ctx-sep'; }
+    else if (x.h) { d.className = 'ctx-head'; d.textContent = x.h; }
+    else { d.className = 'ctx-item' + (x.cls ? ' ' + x.cls : ''); d.textContent = x.l; d.onclick = () => { x.f(); hideCtx(); }; }
+    ctxEl.appendChild(d);
+  });
+  ctxEl.style.display = 'block';
+  ctxEl.style.left = Math.min(clientX, window.innerWidth - ctxEl.offsetWidth - 6) + 'px';
+  ctxEl.style.top = Math.min(clientY, window.innerHeight - ctxEl.offsetHeight - 6) + 'px';
+}
+$('chart').addEventListener('contextmenu', (e) => { e.preventDefault(); showCtx(e.clientX, e.clientY); });
+window.addEventListener('mousedown', (e) => { if (ctxEl && ctxEl.style.display === 'block' && !ctxEl.contains(e.target)) hideCtx(); });
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideCtx(); });
+
+// ---------- chart legend overlay (OHLCV readout, follows crosshair) ----------
+function legendTfLabel() { return tf < 1 ? (tf * 60) + 's' : tf + 'm'; }
+function fmtVol(v) { if (v == null || !isFinite(v)) return '–'; const n = Math.abs(v); if (n >= 1e6) return (v / 1e6).toFixed(2) + 'M'; if (n >= 1e3) return (v / 1e3).toFixed(1) + 'K'; return String(Math.round(v)); }
+function legendBarFor(param) {
+  let i = -1;
+  if (param && param.time != null) { for (let k = Math.min(idx, bars.length - 1); k >= 0; k--) { if (bars[k].time === param.time) { i = k; break; } } }
+  if (i < 0) i = Math.min(idx, bars.length - 1);
+  if (i < 0 || !bars[i]) return null;
+  return { bar: bars[i], prevClose: i > 0 ? bars[i - 1].close : bars[i].open };
+}
+function legendCmpClass(val, ref) { return val > ref ? 'up' : (val < ref ? 'down' : ''); }
+function renderLegend(param) {
+  const el = document.getElementById('chartLegend'); if (!el) return;
+  if (!bars.length) { el.classList.remove('show'); return; }
+  const got = legendBarFor(param); if (!got) { el.classList.remove('show'); return; }
+  const b = got.bar, pc = got.prevClose, chg = b.close - pc, pct = pc ? (chg / pc) * 100 : 0;
+  const chgCls = chg > 0 ? 'up' : (chg < 0 ? 'down' : ''), sign = chg > 0 ? '+' : '', volCls = b.close >= b.open ? 'up' : 'down';
+  const cell = (l, v, ref) => `<span class="ll-lbl">${l}</span><span class="ll-val mono ${legendCmpClass(v, ref)}">${f2(v)}</span>`;
+  el.innerHTML = `<span class="ll-sym">${INSTR.symbol}</span><span class="ll-tf">${legendTfLabel()}</span>` +
+    cell('O', b.open, pc) + cell('H', b.high, pc) + cell('L', b.low, pc) + cell('C', b.close, pc) +
+    `<span class="ll-chg mono ${chgCls}">${sign}${f2(chg)} (${sign}${pct.toFixed(2)}%)</span>` +
+    `<span class="ll-lbl">Vol</span><span class="ll-val mono ${volCls}">${fmtVol(b.volume)}</span>`;
+  el.classList.add('show');
+}
+function initChartLegend() { chart.subscribeCrosshairMove((param) => renderLegend(param)); renderLegend(null); }
+
 // ---------- indicators: Ripster EMA clouds (filled band between each EMA pair) ----------
 const RIPSTER = [   // Ripster EMA Clouds — pairs + per-cloud style; matches the default look (hl2 source)
   { fast: 8,   slow: 9,   a: 0.55, dir: true,  line: 'rgba(255,255,255,0.22)' },               // fast green/red
@@ -307,13 +385,13 @@ function tfIndexAtBase(bi) { // TF-bar index whose bucket contains baseBars[bi]
 function syncIdxFromBase() { idx = tfIndexAtBase(baseIdx); }
 
 // ---------- reveal / replay ----------
-function hardReveal() { candle.setData(bars.slice(0, idx + 1).map(cd)); vol.setData(bars.slice(0, idx + 1).map(vd)); refreshMarkers(); drawLines(); }
+function hardReveal() { candle.setData(bars.slice(0, idx + 1).map(cd)); vol.setData(bars.slice(0, idx + 1).map(vd)); refreshMarkers(); drawLines(); renderLegend(null); }
 function stepFwd() {
   if (idx >= bars.length - 1) { pause(); return; }
   idx++; candle.update(cd(bars[idx])); vol.update(vd(bars[idx]));
   for (let i = bars[idx].subStart; i <= bars[idx].subEnd; i++) { processSub(baseBars[i]); }
   baseIdx = bars[idx].subEnd;
-  renderLive();
+  renderLive(); renderLegend(null);
 }
 function stepBack() {
   if (locked()) return toast('有部位/掛單時不能後退');
@@ -610,6 +688,7 @@ function wire() {
   $('drwClear').onclick = clearDrawings;
   $('ripsterToggle').checked = ripsterOn;
   $('ripsterToggle').onchange = (e) => { ripsterOn = e.target.checked; saveJSON('rt_ripster', ripsterOn); ripsterRepaint(); };
+  initChartLegend();
 
   $('entryType').onchange = () => { $('entryPriceRow').style.display = $('entryType').value === 'market' ? 'none' : ''; if ($('entryType').value !== 'market' && !$('entryPrice').value) $('entryPrice').value = f2(curPx()); };
   $('btnBuy').onclick = () => onEntryButton('long');
