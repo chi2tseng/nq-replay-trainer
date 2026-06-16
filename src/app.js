@@ -229,17 +229,18 @@ function renderIndLegend(i) {
   if (!bars.length) { el.innerHTML = ''; return; }
   if (i == null || i < 0 || i >= bars.length) i = Math.min(idx, bars.length - 1);
   const rows = [];
-  const add = (key, on, color, title, params, vals) => rows.push(
-    `<div class="il-row${on ? '' : ' off'}" data-ind="${key}" title="點一下開/關">` +
+  const tint = (c, s) => `<span style="color:${c}">${s}</span>`;
+  const add = (key, on, title, params, vals) => rows.push(
+    `<div class="il-row${on ? '' : ' off'}" data-ind="${key}" title="點一下開/關此指標">` +
     `<span class="il-eye material-symbols-outlined">${on ? 'visibility' : 'visibility_off'}</span>` +
-    `<span class="il-name" style="color:${on ? color : 'var(--dim)'}">${title}</span>` +
+    `<span class="il-name">${title}</span>` +
     (params ? `<span class="il-params">${params}</span>` : '') +
     (on && vals ? `<span class="il-vals">${vals}</span>` : '') + `</div>`);
-  add('rip', ripsterOn, '#0ecb81', 'Ripster EMA 雲', '8·9 5·12 34·50 72·89 180·200', '');
-  add('vwap', vwapOn, VWAP_COLOR, 'VWAP', '', `<b>${fmtIndVal(vwapData[i])}</b>`);
-  add('bb', bbOn, BB_MID, 'BB', '20 2', `${fmtIndVal(bbData.up[i])} <b>${fmtIndVal(bbData.mid[i])}</b> ${fmtIndVal(bbData.lo[i])}`);
-  const emaVals = emaData.map(e => `<span style="color:${e.color}">${fmtIndVal(e.arr[i])}</span>`).join(' ');
-  add('ema', emaOn, '#42a5f5', 'EMA', emaPeriods.join(' '), emaVals);
+  add('rip', ripsterOn, 'Ripster EMA 雲', '8·9 5·12 34·50 72·89 180·200', '');
+  add('vwap', vwapOn, 'VWAP', '', tint(VWAP_COLOR, `<b>${fmtIndVal(vwapData[i])}</b>`));
+  add('bb', bbOn, 'BB', '20 2', `${tint('var(--dim)', fmtIndVal(bbData.up[i]))} ${tint(BB_MID, '<b>' + fmtIndVal(bbData.mid[i]) + '</b>')} ${tint('var(--dim)', fmtIndVal(bbData.lo[i]))}`);
+  const emaVals = emaData.map(e => tint(e.color, fmtIndVal(e.arr[i]))).join(' ');
+  add('ema', emaOn, 'EMA', emaPeriods.join(' '), emaVals);
   el.innerHTML = rows.join('');
 }
 function toggleInd(which) {
