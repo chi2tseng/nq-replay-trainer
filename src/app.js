@@ -681,6 +681,7 @@ const drawingsPrimitive = {
             if (d.type === 'hl') { const y = Y(d.p1.p); if (y == null) continue; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); continue; }
             if (d.type === 'fib') { drawFib(ctx, d, X, Y, W); continue; }
             if (d.type === 'measure') { drawMeasure(ctx, d, X, Y); continue; }
+            if (d.type === 'rr') { drawRR(ctx, d, X, Y, W); continue; }
             const x1 = X(d.p1.t), y1 = Y(d.p1.p), x2 = X(d.p2.t), y2 = Y(d.p2.p);
             if (x1 == null || y1 == null || x2 == null || y2 == null) continue;
             if (d.type === 'box') { const x = Math.min(x1, x2), y = Math.min(y1, y2), w = Math.abs(x2 - x1), h = Math.abs(y2 - y1); ctx.globalAlpha = 0.12; ctx.fillRect(x, y, w, h); ctx.globalAlpha = 1; ctx.strokeRect(x, y, w, h); }
@@ -688,10 +689,18 @@ const drawingsPrimitive = {
           }
           // editable anchor handles (small dots) so placed drawings can be grabbed + dragged
           for (const d of drawings) {
-            if (d.type === 'hl' || d.type === 'measure') continue;   // hl = full-width line; measure draws its own dots
+            if (d.type === 'hl' || d.type === 'measure' || d.type === 'rr') continue;   // these draw their own grab points / lines
             const hs = [d.p1]; if (d.p2) hs.push(d.p2);
             if (d.type === 'box' && d.p2) { hs.push({ t: d.p2.t, p: d.p1.p }, { t: d.p1.t, p: d.p2.p }); }
             for (const pt of hs) { const hx = X(pt.t), hy = Y(pt.p); if (hx == null || hy == null) continue; ctx.beginPath(); ctx.arc(hx, hy, 3.5, 0, 7); ctx.fillStyle = '#0b0e11'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = d.color || '#d1d4dc'; ctx.stroke(); }
+          }
+          // selected drawing: emphasise its anchors in brand amber (signals selected + draggable + deletable)
+          if (selDrawing && drawings.includes(selDrawing)) {
+            const d = selDrawing, hpts = [];
+            if (d.type === 'hl') hpts.push({ t: null, p: d.p1.p });
+            else if (d.type === 'rr') { hpts.push({ t: d.p1.t, p: d.p1.p }, { t: d.p1.t, p: d.stop }, { t: d.p1.t, p: d.target }); }
+            else { if (d.p1) hpts.push(d.p1); if (d.p2) hpts.push(d.p2); }
+            for (const pt of hpts) { const hx = pt.t == null ? W / 2 : X(pt.t), hy = Y(pt.p); if (hx == null || hy == null) continue; ctx.beginPath(); ctx.arc(hx, hy, 5, 0, 7); ctx.fillStyle = '#fcd535'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = '#0b0e11'; ctx.stroke(); }
           }
           if (pendingPt) { const x = X(pendingPt.t), y = Y(pendingPt.p); if (x != null && y != null) { ctx.fillStyle = '#f0b90b'; ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fill(); } }
         });
@@ -704,10 +713,16 @@ if (candle.attachPrimitive) candle.attachPrimitive(drawingsPrimitive);
 function repaintOverlays() { if (ripsterPrimitive._req) ripsterPrimitive._req(); if (drawingsPrimitive._req) drawingsPrimitive._req(); indicatorRepaint(); }
 function handleDrawClick(t, time, price) {
   price = rnd(price);
-  if (t === 'hl') { drawings.push({ type: 'hl', p1: { t: time, p: price }, color: '#d1d4dc' }); saveJSON('rt_drawings', drawings); repaintOverlays(); return; }
+  if (t === 'hl') { drawings.push({ type: 'hl', p1: { t: time, p: price }, color: '#d1d4dc' }); selDrawing = drawings[drawings.length - 1]; saveJSON('rt_drawings', drawings); repaintOverlays(); return; }
+  if (t === 'rr') {   // Long/Short position: click1 = entry, click2 = stop; target auto-placed at 2R
+    if (!pendingPt) { pendingPt = { t: time, p: price }; repaintOverlays(); toast('Click the stop level'); return; }
+    const entry = pendingPt.p, stop = price, target = rnd(entry + (entry - stop) * RR_DEFAULT);
+    drawings.push({ type: 'rr', p1: { t: pendingPt.t, p: entry }, p2: { t: time, p: price }, stop, target, color: '#fcd535' });
+    pendingPt = null; selDrawing = drawings[drawings.length - 1]; saveJSON('rt_drawings', drawings); repaintOverlays(); return;
+  }
   if (!pendingPt) { pendingPt = { t: time, p: price }; repaintOverlays(); toast('Click the second point'); return; }
   drawings.push({ type: t, p1: pendingPt, p2: { t: time, p: price }, color: t === 'box' ? '#2962ff' : t === 'fib' ? '#fcd535' : '#d1d4dc' });
-  pendingPt = null; saveJSON('rt_drawings', drawings); repaintOverlays();
+  pendingPt = null; selDrawing = drawings[drawings.length - 1]; saveJSON('rt_drawings', drawings); repaintOverlays();
 }
 function clearDrawings() { drawings = []; pendingPt = null; saveJSON('rt_drawings', drawings); repaintOverlays(); toast('Drawings cleared'); }
 // ---- Fibonacci retracement (drawing type 'fib', 2-point) ----
@@ -753,9 +768,34 @@ function drawMeasure(ctx, d, X, Y) {
   ctx.fillStyle = '#eaecef'; ctx.textAlign = 'left'; ctx.fillText(label, px + padX, py + pillH / 2 + 0.5);
   ctx.restore();
 }
+// ---- Long/Short position R:R tool (drawing type 'rr') — entry / stop / target zones + R:R ----
+const RR_DEFAULT = 2;   // default reward = 2R when first placed
+function drawRR(ctx, d, X, Y, W) {
+  const xe = X(d.p1.t), x2 = X(d.p2.t), ye = Y(d.p1.p), ys = Y(d.stop), yt = Y(d.target);
+  if (ye == null || ys == null || yt == null) return;
+  let xa = Math.min(xe == null ? 0 : xe, x2 == null ? 0 : x2), xb = Math.max(xe == null ? 0 : xe, x2 == null ? 0 : x2);
+  if (!isFinite(xa)) xa = 0; if (!isFinite(xb) || xb <= xa) xb = xa + 120;
+  const w = Math.max(2, xb - xa), long = d.target >= d.p1.p;
+  ctx.save();
+  ctx.globalAlpha = 0.13;
+  ctx.fillStyle = '#0ecb81'; ctx.fillRect(xa, Math.min(ye, yt), w, Math.abs(yt - ye));   // reward zone
+  ctx.fillStyle = '#f6465d'; ctx.fillRect(xa, Math.min(ye, ys), w, Math.abs(ys - ye));   // risk zone
+  ctx.globalAlpha = 1;
+  const hline = (yy, col, dash) => { ctx.strokeStyle = col; ctx.lineWidth = 1.4; ctx.setLineDash(dash || []); ctx.beginPath(); ctx.moveTo(xa, yy); ctx.lineTo(xb, yy); ctx.stroke(); };
+  hline(yt, '#0ecb81'); hline(ys, '#f6465d'); hline(ye, '#d1d4dc', [5, 3]); ctx.setLineDash([]);
+  const riskT = Math.abs(tcount(d.p1.p, d.stop)), rewT = Math.abs(tcount(d.target, d.p1.p));
+  const rr = riskT > 0 ? rewT / riskT : 0;
+  ctx.font = '600 11px ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+  let lx = xb + 6; const longest = 150; if (lx + longest > W) lx = Math.max(2, xa + 6);   // keep labels on-screen
+  ctx.fillStyle = '#0ecb81'; ctx.fillText(`Target +${rewT}t  ${usd(rewT * INSTR.tickValue)}/c`, lx, yt);
+  ctx.fillStyle = '#f6465d'; ctx.fillText(`Stop −${riskT}t  ${usd(riskT * INSTR.tickValue)}/c`, lx, ys);
+  ctx.fillStyle = '#eaecef'; ctx.fillText(`${long ? 'LONG' : 'SHORT'} @ ${f2(d.p1.p)}  ·  R:R ${rr.toFixed(2)}`, lx, ye);
+  ctx.restore();
+}
 
 // ---------- chart tools: drag stop/target/entry lines + click tools (set-start / annotations) ----------
 let tool = '', drag = null, dragH = null;   // dragH = drawing-anchor being dragged (endpoint edit)
+let dragBody = null, selDrawing = null;     // dragBody = whole-drawing move; selDrawing = currently selected drawing
 let annotations = loadJSON('rt_annotations', []);   // {baseTime, position, color, shape, text}
 let drawings = loadJSON('rt_drawings', []);         // {type:'hl'|'tl'|'ray'|'box', p1:{t,p}, p2?:{t,p}, color}
 let pendingPt = null;                                // first click of a 2-point drawing
@@ -765,7 +805,7 @@ const ANN = {
   long:  { position: 'belowBar', color: '#0ecb81', shape: 'arrowUp',   text: 'LONG' },
   short: { position: 'aboveBar', color: '#f6465d', shape: 'arrowDown', text: 'SHORT' },
 };
-const TOOLBTN = { start: 'btnPickStart', au: 'annUp', ad: 'annDown', long: 'annLong', short: 'annShort', hl: 'drwHL', tl: 'drwTL', ray: 'drwRay', box: 'drwBox', fib: 'drwFib', measure: 'drwMeasure' };
+const TOOLBTN = { start: 'btnPickStart', au: 'annUp', ad: 'annDown', long: 'annLong', short: 'annShort', hl: 'drwHL', tl: 'drwTL', ray: 'drwRay', box: 'drwBox', fib: 'drwFib', measure: 'drwMeasure', rr: 'drwRR' };
 function placeAnnotation(t, baseTime) { const a = ANN[t]; if (!a) return; annotations.push({ baseTime, ...a }); saveJSON('rt_annotations', annotations); refreshMarkers(); }
 function clearAnnotations() { annotations = []; saveJSON('rt_annotations', annotations); refreshMarkers(); toast('Markers cleared'); }
 function updateToolUI() { Object.values(TOOLBTN).forEach(id => { const b = $(id); if (b) b.classList.remove('active'); }); const b = $(TOOLBTN[tool]); if (b) b.classList.add('active'); const cur = $('toolCursor'); if (cur) cur.classList.toggle('active', !tool); $('chart').style.cursor = tool ? 'crosshair' : ''; }
@@ -784,16 +824,82 @@ function drawingHandles() {
   const out = [], ts = chart.timeScale();
   const X = (t) => ts.timeToCoordinate(t), Y = (p) => candle.priceToCoordinate(p);
   for (const d of drawings) {
-    if (d.type === 'hl') { const y = Y(d.p1.p); if (y != null) out.push({ horiz: true, hy: y, apply: (t, p) => { d.p1.p = p; } }); continue; }
+    if (d.type === 'hl') { const y = Y(d.p1.p); if (y != null) out.push({ d, horiz: true, hy: y, apply: (t, p) => { d.p1.p = p; } }); continue; }
+    if (d.type === 'rr') {   // entry handle shifts all 3 levels together; stop / target move on their own
+      const xe = X(d.p1.t), eY = Y(d.p1.p), sY = Y(d.stop), tY = Y(d.target);
+      if (xe != null) {
+        if (eY != null) out.push({ d, hx: xe, hy: eY, apply: (t, p) => { const dp = p - d.p1.p; d.p1.p = p; d.stop += dp; d.target += dp; if (t != null) d.p1.t = t; } });
+        if (sY != null) out.push({ d, hx: xe, hy: sY, apply: (t, p) => { d.stop = p; } });
+        if (tY != null) out.push({ d, hx: xe, hy: tY, apply: (t, p) => { d.target = p; } });
+      }
+      continue;
+    }
     const x1 = X(d.p1.t), y1 = Y(d.p1.p), x2 = d.p2 ? X(d.p2.t) : null, y2 = d.p2 ? Y(d.p2.p) : null;
-    if (x1 != null && y1 != null) out.push({ hx: x1, hy: y1, apply: (t, p) => { if (t != null) d.p1.t = t; d.p1.p = p; } });
-    if (d.p2 && x2 != null && y2 != null) out.push({ hx: x2, hy: y2, apply: (t, p) => { if (t != null) d.p2.t = t; d.p2.p = p; } });
+    if (x1 != null && y1 != null) out.push({ d, hx: x1, hy: y1, apply: (t, p) => { if (t != null) d.p1.t = t; d.p1.p = p; } });
+    if (d.p2 && x2 != null && y2 != null) out.push({ d, hx: x2, hy: y2, apply: (t, p) => { if (t != null) d.p2.t = t; d.p2.p = p; } });
     if (d.type === 'box' && d.p2) {   // box: also let the two cross-corners drag (each writes one t + one p)
-      if (x2 != null && y1 != null) out.push({ hx: x2, hy: y1, apply: (t, p) => { if (t != null) d.p2.t = t; d.p1.p = p; } });
-      if (x1 != null && y2 != null) out.push({ hx: x1, hy: y2, apply: (t, p) => { if (t != null) d.p1.t = t; d.p2.p = p; } });
+      if (x2 != null && y1 != null) out.push({ d, hx: x2, hy: y1, apply: (t, p) => { if (t != null) d.p2.t = t; d.p1.p = p; } });
+      if (x1 != null && y2 != null) out.push({ d, hx: x1, hy: y2, apply: (t, p) => { if (t != null) d.p1.t = t; d.p2.p = p; } });
     }
   }
   return out;
+}
+// hit-test a drawing's BODY (line/shape, not just its anchors) for select + whole-move
+function pointSegDist(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+  let t = L2 ? ((px - ax) * dx + (py - ay) * dy) / L2 : 0; t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+function drawingAt(x, y) {
+  const ts = chart.timeScale(), W = $('chart').clientWidth, TH = 6;
+  const X = (t) => ts.timeToCoordinate(t), Y = (p) => candle.priceToCoordinate(p);
+  for (let k = drawings.length - 1; k >= 0; k--) {   // topmost first
+    const d = drawings[k];
+    if (d.type === 'hl') { const yy = Y(d.p1.p); if (yy != null && Math.abs(yy - y) < TH) return d; continue; }
+    const x1 = X(d.p1.t), y1 = Y(d.p1.p);
+    if (d.type === 'rr') { const x2 = X(d.p2.t); if (x1 == null || x2 == null) continue; if (x < Math.min(x1, x2) - 4 || x > Math.max(x1, x2) + 4) continue; for (const p of [d.p1.p, d.stop, d.target]) { const yy = Y(p); if (yy != null && Math.abs(yy - y) < TH) return d; } continue; }
+    if (x1 == null || y1 == null) continue;
+    if (d.type === 'fib') { const x2 = X(d.p2.t), xL = Math.min(x1, x2 == null ? x1 : x2); if (x < xL - 4) continue; const span = d.p2.p - d.p1.p; for (const f of FIB_LEVELS) { const yy = Y(d.p1.p + span * f.lv); if (yy != null && Math.abs(yy - y) < TH) return d; } continue; }
+    const x2 = d.p2 ? X(d.p2.t) : null, y2 = d.p2 ? Y(d.p2.p) : null;
+    if (x2 == null || y2 == null) continue;
+    if (d.type === 'box') { const xa = Math.min(x1, x2), xb = Math.max(x1, x2), ya = Math.min(y1, y2), yb = Math.max(y1, y2);
+      const nearV = (Math.abs(x - xa) < TH || Math.abs(x - xb) < TH) && y >= ya - TH && y <= yb + TH;
+      const nearH = (Math.abs(y - ya) < TH || Math.abs(y - yb) < TH) && x >= xa - TH && x <= xb + TH;
+      if (nearV || nearH) return d; continue; }
+    let ex = x2, ey = y2;   // tl / ray / measure: segment (ray extends to the chart edge)
+    if (d.type === 'ray') { const dx = x2 - x1, dy = y2 - y1; if (dx !== 0) { const tx = dx >= 0 ? W : 0, s = (tx - x1) / dx; ex = tx; ey = y1 + dy * s; } }
+    if (pointSegDist(x, y, x1, y1, ex, ey) < TH) return d;
+  }
+  return null;
+}
+// enumerate a drawing's movable price/time fields (for whole-drawing move)
+function drawingFields(d) {
+  const A = [];
+  if (d.type === 'hl') { A.push({ obj: d.p1, key: 'p', kind: 'p' }); return A; }
+  if (d.type === 'rr') { A.push({ obj: d.p1, key: 'p', kind: 'p' }, { obj: d, key: 'stop', kind: 'p' }, { obj: d, key: 'target', kind: 'p' }, { obj: d.p1, key: 't', kind: 't' }, { obj: d.p2, key: 't', kind: 't' }); return A; }
+  A.push({ obj: d.p1, key: 'p', kind: 'p' }, { obj: d.p1, key: 't', kind: 't' });
+  if (d.p2) A.push({ obj: d.p2, key: 'p', kind: 'p' }, { obj: d.p2, key: 't', kind: 't' });
+  return A;
+}
+function startBodyDrag(d, x, y) {
+  const ts = chart.timeScale();
+  dragBody = { d, sp: candle.coordinateToPrice(y), sLog: ts.coordinateToLogical(x),
+    fields: drawingFields(d).map(f => f.kind === 'p' ? { ...f, orig: f.obj[f.key] } : { ...f, origIdx: bars.findIndex(b => b.time === f.obj[f.key]) }) };
+}
+function moveBody(x, y) {
+  const ts = chart.timeScale(), p = candle.coordinateToPrice(y), lg = ts.coordinateToLogical(x);
+  if (p == null || lg == null || !dragBody) return;
+  const dPrice = p - dragBody.sp, dIdx = Math.round(lg - dragBody.sLog), hi = Math.min(idx, bars.length - 1);
+  for (const f of dragBody.fields) {
+    if (f.kind === 'p') f.obj[f.key] = rnd(f.orig + dPrice);
+    else if (f.origIdx >= 0) { const ni = Math.max(0, Math.min(hi, f.origIdx + dIdx)); if (bars[ni]) f.obj[f.key] = bars[ni].time; }
+  }
+  repaintOverlays();
+}
+function deleteSelectedDrawing() {
+  if (!selDrawing) return;
+  const i = drawings.indexOf(selDrawing); if (i >= 0) drawings.splice(i, 1);
+  selDrawing = null; saveJSON('rt_drawings', drawings); repaintOverlays(); toast('Drawing deleted');
 }
 function nearestHandle(x, y) {
   let best = null, bd = 9;
@@ -818,32 +924,35 @@ chart.subscribeClick(param => {
 $('chart').addEventListener('mousedown', e => {
   if (e.button !== 0 || tool) return;             // left-button only; while a tool is armed, clicks place points
   const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
-  const h = nearestHandle(x, y);                  // a drawing anchor takes priority (2-D hit = more specific)
-  if (h) { dragH = h; chart.applyOptions({ handleScroll: false, handleScale: false }); e.preventDefault(); return; }
-  if (!locked()) return;                          // stop/target/entry lines are draggable only while in a trade
-  const L = nearestLine(y);
-  if (L) { drag = L; chart.applyOptions({ handleScroll: false, handleScale: false }); e.preventDefault(); }
+  const h = nearestHandle(x, y);                  // 1) drawing anchor (endpoint) — most specific; also selects it
+  if (h) { dragH = h; selDrawing = h.d; chart.applyOptions({ handleScroll: false, handleScale: false }); repaintOverlays(); e.preventDefault(); return; }
+  const hd = drawingAt(x, y);                     // 2) drawing body — select + move the whole drawing
+  if (hd) { selDrawing = hd; startBodyDrag(hd, x, y); chart.applyOptions({ handleScroll: false, handleScale: false }); repaintOverlays(); e.preventDefault(); return; }
+  if (locked()) { const L = nearestLine(y); if (L) { drag = L; chart.applyOptions({ handleScroll: false, handleScale: false }); e.preventDefault(); return; } }  // 3) stop/target/entry lines
+  if (selDrawing) { selDrawing = null; repaintOverlays(); }   // 4) empty space -> deselect (lets the chart pan)
 });
 window.addEventListener('mousemove', e => {
+  const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
   if (dragH) {                                    // editing a drawing endpoint: snap price to tick, time to bar grid
-    const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
     const p = candle.coordinateToPrice(y);
     if (p != null) { dragH.apply(dragH.horiz ? null : xToTime(x), rnd(p)); repaintOverlays(); }
     return;
   }
+  if (dragBody) { moveBody(x, y); return; }       // moving a whole drawing
   if (!drag) return;
-  const p = candle.coordinateToPrice(e.clientY - $('chart').getBoundingClientRect().top);
+  const p = candle.coordinateToPrice(y);
   if (p != null) { drag.set(rnd(p)); drawLines(); renderLive(); }
 });
 window.addEventListener('mouseup', () => {
   if (dragH) { dragH = null; saveJSON('rt_drawings', drawings); chart.applyOptions({ handleScroll: true, handleScale: true }); return; }
+  if (dragBody) { dragBody = null; saveJSON('rt_drawings', drawings); chart.applyOptions({ handleScroll: true, handleScale: true }); return; }
   if (drag) { drag = null; chart.applyOptions({ handleScroll: true, handleScale: true }); }
 });
 $('chart').addEventListener('mousemove', e => {
-  if (drag || dragH) return;
+  if (drag || dragH || dragBody) return;
   if (tool) { $('chart').style.cursor = 'crosshair'; return; }
   const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
-  if (nearestHandle(x, y)) { $('chart').style.cursor = 'move'; return; }   // hovering a drawing anchor
+  if (nearestHandle(x, y) || drawingAt(x, y)) { $('chart').style.cursor = 'move'; return; }   // hovering a drawing/anchor
   $('chart').style.cursor = (locked() && nearestLine(y)) ? 'ns-resize' : '';
 });
 
@@ -1104,6 +1213,13 @@ function onEntryButton(side) {
   }
 }
 function cancelEntry() { if (entryOrder) { entryOrder = null; drawLines(); renderLive(); toast('Order cancelled'); } }
+function cancelOrder(spec) {   // × on a working order: 'entry' cancels the pending entry, an index cancels that stop/target
+  if (spec === 'entry') return cancelEntry();
+  const i = +spec, o = orders[i]; if (!o) return;
+  orders.splice(i, 1);
+  toast((o.type === 'stop' ? 'Stop' : 'Target') + ' order cancelled');
+  drawLines(); renderLive();
+}
 
 function openPosition(side, px, t, atmName, mult) {
   const a = atm[atmName]; entryOrder = null;
@@ -1226,8 +1342,9 @@ function renderLive() {
       <div>Unreal. <b class="${uPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${usd(uPnl)}</b> · ${uTicks >= 0 ? '+' : ''}${uTicks}t · ${position.atm}</div>`;
   }
   const ord = [];
-  if (entryOrder) ord.push(`<div class="ord entry"><span>${entryOrder.kind === 'limit' ? 'LIMIT' : 'STOP'} ${entryOrder.side === 'long' ? 'BUY' : 'SELL'}</span><span class="mono">${f2(entryOrder.price)}</span></div>`);
-  orders.forEach(o => ord.push(`<div class="ord ${o.type}"><span>${o.type === 'stop' ? 'STOP' : 'TARGET'} ×${o.qty}</span><span class="mono">${f2(o.price)}</span></div>`));
+  const oRow = (cls, label, price, spec, title) => `<div class="ord ${cls}"><span>${label}</span><span class="ord-r"><span class="mono">${price}</span><button class="ord-x" data-ord="${spec}" title="${title}"><span class="material-symbols-outlined">close</span></button></span></div>`;
+  if (entryOrder) ord.push(oRow('entry', `${entryOrder.kind === 'limit' ? 'LIMIT' : 'STOP'} ${entryOrder.side === 'long' ? 'BUY' : 'SELL'}`, f2(entryOrder.price), 'entry', 'Cancel order'));
+  orders.forEach((o, i) => ord.push(oRow(o.type, `${o.type === 'stop' ? 'STOP' : 'TARGET'} ×${o.qty}`, f2(o.price), i, 'Cancel ' + o.type)));
   $('ordersBox').innerHTML = ord.join('');
 
   const lock = locked();
@@ -1337,6 +1454,7 @@ function wire() {
   $('drwFib').onclick = () => setTool('fib');
   $('drwMeasure').onclick = () => setTool('measure');
   $('drwClear').onclick = clearDrawings;
+  $('drwRR').onclick = () => setTool('rr');       // Long/Short position (R:R) tool
   $('toolCursor').onclick = () => setTool('');   // deselect any active drawing/annotation tool
   $('ripsterToggle').checked = ripsterOn;
   $('ripsterToggle').onchange = (e) => { ripsterOn = e.target.checked; saveJSON('rt_ripster', ripsterOn); ripsterRepaint(); renderIndLegend(); };
@@ -1359,6 +1477,14 @@ function wire() {
   $('btnFlatten').onclick = flatten;
   $('btnReverse').onclick = reverse;
   $('btnCancelEntry').onclick = cancelEntry;
+  $('ordersBox').addEventListener('click', (e) => { const b = e.target.closest('.ord-x'); if (b) cancelOrder(b.dataset.ord); });
+  // order-type segmented control — keeps the hidden #entryType select in sync for the rest of the app
+  document.querySelectorAll('#entrySeg .seg-btn').forEach(btn => btn.onclick = () => {
+    $('entryType').value = btn.dataset.type; $('entryType').dispatchEvent(new Event('change'));
+    document.querySelectorAll('#entrySeg .seg-btn').forEach(b => b.classList.toggle('active', b === btn));
+  });
+  $('qtyMinus').onclick = () => { $('qty').value = Math.max(1, (parseInt($('qty').value, 10) || 1) - 1); };
+  $('qtyPlus').onclick = () => { $('qty').value = (parseInt($('qty').value, 10) || 1) + 1; };
 
   $('atmSelect').onchange = (e) => { activeAtm = e.target.value; loadAtmIntoEditor(activeAtm); };
   $('btnAtmSave').onclick = saveAtm;
@@ -1377,6 +1503,8 @@ function wire() {
     else if (e.key === '[' || e.key === 'ArrowLeft') { e.preventDefault(); prevDay(); }
     else if (e.key === ']' || e.key === 'ArrowRight') { e.preventDefault(); nextDay(); }
     else if (e.key === '0') { e.preventDefault(); fitChart(); }
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && selDrawing) { e.preventDefault(); deleteSelectedDrawing(); }
+    else if (e.key === 'Escape') { if (tool) setTool(''); else if (selDrawing) { selDrawing = null; repaintOverlays(); } }
   });
 }
 function switchTab(t) { $('tabTrades').classList.toggle('active', t); $('tabDash').classList.toggle('active', !t); $('panelTrades').classList.toggle('hidden', !t); $('panelDash').classList.toggle('hidden', t); if (!t) renderDash(); }
@@ -1386,4 +1514,10 @@ window.__rt = { state: () => ({ tf, idx, baseIdx, bars: bars.length, base: baseB
   instr: () => ({ ...INSTR, TICK }),
   handles: () => drawingHandles().map(h => ({ horiz: !!h.horiz, hx: h.hx, hy: h.hy })),
   drawingsList: () => drawings.map(d => ({ type: d.type, p1: d.p1 && { ...d.p1 }, p2: d.p2 && { ...d.p2 } })),
-  editAt: (x, y, nx, ny) => { const h = nearestHandle(x, y); if (!h) return null; const p = candle.coordinateToPrice(ny); if (p == null) return { noprice: true }; h.apply(h.horiz ? null : xToTime(nx), rnd(p)); saveJSON('rt_drawings', drawings); repaintOverlays(); return { moved: true }; } };
+  editAt: (x, y, nx, ny) => { const h = nearestHandle(x, y); if (!h) return null; const p = candle.coordinateToPrice(ny); if (p == null) return { noprice: true }; h.apply(h.horiz ? null : xToTime(nx), rnd(p)); saveJSON('rt_drawings', drawings); repaintOverlays(); return { moved: true }; },
+  selType: () => selDrawing && selDrawing.type,
+  setSel: (i) => { selDrawing = drawings[i] || null; repaintOverlays(); return selDrawing && selDrawing.type; },
+  drawingAtXY: (x, y) => { const d = drawingAt(x, y); return d ? d.type : null; },
+  moveSel: (x, y, nx, ny) => { const d = drawings[drawings.length - 1]; if (!d) return null; selDrawing = d; startBodyDrag(d, x, y); moveBody(nx, ny); dragBody = null; saveJSON('rt_drawings', drawings); return { moved: true }; },
+  deleteSel: () => { const n0 = drawings.length; deleteSelectedDrawing(); return { before: n0, after: drawings.length }; },
+  lastDrawing: () => { const d = drawings[drawings.length - 1]; return d ? { type: d.type, entry: d.p1 && d.p1.p, stop: d.stop, target: d.target } : null; } };
