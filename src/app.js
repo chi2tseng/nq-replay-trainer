@@ -141,11 +141,15 @@ function initLayout() { applyLayout(false); attachGutter($('gutterCol'), 'x'); a
 
 // ---------- right-click chart trading (context menu at the clicked price) ----------
 function ctxPriceAt(clientY) { return candle.coordinateToPrice(clientY - $('chart').getBoundingClientRect().top); }
+function bracketFromAtm(name) {   // snapshot an ATM template's stop + targets (ticks) onto a working order
+  const a = atm[name] || {};
+  return { slTicks: a.sl || 0, tgts: (a.targets || []).filter(t => t.ticks > 0 && t.qty > 0).map(t => ({ ticks: t.ticks, qty: t.qty })) };
+}
 function placeEntryAt(side, kind, price) {
   if (position) return toast('Already in a position — flatten first');
   const mult = Math.max(1, parseInt($('qty').value, 10) || 1);
-  entryOrder = { side, kind, price: rnd(price), atm: activeAtm, mult };
-  toast(`${side === 'long' ? 'Buy' : 'Sell'} ${kind === 'limit' ? 'Limit' : 'Stop'} @ ${f2(rnd(price))} placed`);
+  entryOrder = { side, kind, price: rnd(price), atm: activeAtm, mult, ...bracketFromAtm(activeAtm) };
+  toast(`${side === 'long' ? 'Buy' : 'Sell'} ${kind === 'limit' ? 'Limit' : 'Stop'} @ ${f2(rnd(price))} + bracket`);
   drawLines(); renderLive();
 }
 function moveStopTo(price) { if (!position) return; const s = orders.find(o => o.type === 'stop'); if (s) s.price = rnd(price); else orders.push({ type: 'stop', price: rnd(price), qty: position.qty }); drawLines(); renderLive(); toast('Stop → ' + f2(rnd(price))); }
@@ -812,7 +816,12 @@ function updateToolUI() { Object.values(TOOLBTN).forEach(id => { const b = $(id)
 function setTool(t) { tool = (tool === t) ? '' : t; pendingPt = null; repaintOverlays(); updateToolUI(); }
 function draggableLines() {
   const a = [];
-  if (entryOrder) a.push({ get: () => entryOrder.price, set: p => entryOrder.price = p });
+  if (entryOrder) {
+    const long = entryOrder.side === 'long';
+    a.push({ get: () => entryOrder.price, set: p => entryOrder.price = p });   // dragging entry moves the whole bracket (ticks fixed)
+    if (entryOrder.slTicks > 0) a.push({ get: () => rnd(long ? entryOrder.price - entryOrder.slTicks * TICK : entryOrder.price + entryOrder.slTicks * TICK), set: p => { entryOrder.slTicks = Math.max(1, Math.round(Math.abs(entryOrder.price - p) / TICK)); } });
+    (entryOrder.tgts || []).forEach(tg => { if (tg.ticks > 0) a.push({ get: () => rnd(long ? entryOrder.price + tg.ticks * TICK : entryOrder.price - tg.ticks * TICK), set: p => { tg.ticks = Math.max(1, Math.round(Math.abs(p - entryOrder.price) / TICK)); } }); });
+  }
   if (position) orders.forEach(o => { if (o.type === 'stop' || o.type === 'target') a.push({ get: () => o.price, set: p => o.price = p }); });
   return a;
 }
@@ -1207,8 +1216,8 @@ function onEntryButton(side) {
   else {
     const price = rnd(parseFloat($('entryPrice').value));
     if (!price) return toast('Enter an entry price');
-    entryOrder = { side, kind, price, atm: activeAtm, mult };
-    toast(`${side === 'long' ? 'Buy' : 'Sell'} ${kind === 'limit' ? 'Limit' : 'Stop'} @ ${f2(price)} placed`);
+    entryOrder = { side, kind, price, atm: activeAtm, mult, ...bracketFromAtm(activeAtm) };
+    toast(`${side === 'long' ? 'Buy' : 'Sell'} ${kind === 'limit' ? 'Limit' : 'Stop'} @ ${f2(price)} + bracket`);
     drawLines(); renderLive();
   }
 }
@@ -1221,14 +1230,16 @@ function cancelOrder(spec) {   // × on a working order: 'entry' cancels the pen
   drawLines(); renderLive();
 }
 
-function openPosition(side, px, t, atmName, mult) {
-  const a = atm[atmName]; entryOrder = null;
-  const tgts = (a.targets || []).filter(x => x.ticks > 0 && x.qty > 0).map(x => ({ ticks: x.ticks, qty: x.qty * mult }));
-  if (!tgts.length) tgts.push({ ticks: a.sl > 0 ? a.sl * 2 : 20, qty: mult }); // fallback single target
+function openPosition(side, px, t, atmName, mult, bracket) {
+  const a = atm[atmName] || {}; entryOrder = null;
+  const sl = bracket ? bracket.slTicks : a.sl;                 // honor a working order's (possibly dragged) bracket
+  const srcT = bracket ? bracket.tgts : a.targets;
+  const tgts = (srcT || []).filter(x => x.ticks > 0 && x.qty > 0).map(x => ({ ticks: x.ticks, qty: x.qty * mult }));
+  if (!tgts.length) tgts.push({ ticks: sl > 0 ? sl * 2 : 20, qty: mult }); // fallback single target
   const totalQty = tgts.reduce((s, x) => s + x.qty, 0);
-  position = { side, qty: totalQty, entry: px, entryTime: t, atm: atmName, slTicks: a.sl, maxFav: px, beDone: false };
+  position = { side, qty: totalQty, entry: px, entryTime: t, atm: atmName, slTicks: sl, maxFav: px, beDone: false };
   orders = [];
-  if (a.sl > 0) orders.push({ type: 'stop', price: rnd(side === 'long' ? px - a.sl * TICK : px + a.sl * TICK), qty: totalQty });
+  if (sl > 0) orders.push({ type: 'stop', price: rnd(side === 'long' ? px - sl * TICK : px + sl * TICK), qty: totalQty });
   tgts.sort((x, y) => x.ticks - y.ticks).forEach(tg => orders.push({ type: 'target', ticks: tg.ticks, qty: tg.qty, price: rnd(side === 'long' ? px + tg.ticks * TICK : px - tg.ticks * TICK) }));
   addMarker(t, side === 'long' ? 'belowBar' : 'aboveBar', side === 'long' ? '#0ecb81' : '#f6465d', side === 'long' ? 'arrowUp' : 'arrowDown', `${side === 'long' ? 'L' : 'S'}${totalQty} ${f2(px)}`);
   drawLines(); renderLive();
@@ -1274,7 +1285,7 @@ function tryEntryFill(b) {
     if (long) { if (b.open >= e.price) { hit = true; px = b.open; } else if (b.high >= e.price) { hit = true; px = e.price; } }
     else { if (b.open <= e.price) { hit = true; px = b.open; } else if (b.low <= e.price) { hit = true; px = e.price; } }
   }
-  if (hit) { openPosition(e.side, rnd(px), b.time, e.atm, e.mult); return true; }
+  if (hit) { openPosition(e.side, rnd(px), b.time, e.atm, e.mult, { slTicks: e.slTicks, tgts: e.tgts }); return true; }
   return false;
 }
 
@@ -1312,7 +1323,13 @@ function clearLines() { lines.forEach(l => candle.removePriceLine(l)); lines = [
 function pl(price, color, style, title) { return candle.createPriceLine({ price, color, lineWidth: 1, lineStyle: style, axisLabelVisible: true, title }); }
 function drawLines() {
   clearLines();
-  if (entryOrder) lines.push(pl(entryOrder.price, '#f0b90b', LightweightCharts.LineStyle.Dotted, entryOrder.kind === 'limit' ? 'LMT' : 'STP'));
+  if (entryOrder) {
+    lines.push(pl(entryOrder.price, '#f0b90b', LightweightCharts.LineStyle.Dotted, entryOrder.kind === 'limit' ? 'LMT' : 'STP'));
+    // preview the ATM bracket that auto-attaches on fill (draggable to adjust before fill)
+    const long = entryOrder.side === 'long';
+    if (entryOrder.slTicks > 0) lines.push(pl(rnd(long ? entryOrder.price - entryOrder.slTicks * TICK : entryOrder.price + entryOrder.slTicks * TICK), '#f6465d', LightweightCharts.LineStyle.Dashed, '↳STP'));
+    (entryOrder.tgts || []).forEach((tg, i) => { if (tg.ticks > 0) lines.push(pl(rnd(long ? entryOrder.price + tg.ticks * TICK : entryOrder.price - tg.ticks * TICK), '#0ecb81', LightweightCharts.LineStyle.Dashed, '↳T' + (i + 1))); });
+  }
   if (position) {
     lines.push(pl(position.entry, '#8b93a7', LightweightCharts.LineStyle.Dotted, 'ENTRY'));
     const stop = orders.find(o => o.type === 'stop'); if (stop) lines.push(pl(stop.price, '#f6465d', LightweightCharts.LineStyle.Dashed, 'STOP'));
@@ -1520,4 +1537,6 @@ window.__rt = { state: () => ({ tf, idx, baseIdx, bars: bars.length, base: baseB
   drawingAtXY: (x, y) => { const d = drawingAt(x, y); return d ? d.type : null; },
   moveSel: (x, y, nx, ny) => { const d = drawings[drawings.length - 1]; if (!d) return null; selDrawing = d; startBodyDrag(d, x, y); moveBody(nx, ny); dragBody = null; saveJSON('rt_drawings', drawings); return { moved: true }; },
   deleteSel: () => { const n0 = drawings.length; deleteSelectedDrawing(); return { before: n0, after: drawings.length }; },
-  lastDrawing: () => { const d = drawings[drawings.length - 1]; return d ? { type: d.type, entry: d.p1 && d.p1.p, stop: d.stop, target: d.target } : null; } };
+  lastDrawing: () => { const d = drawings[drawings.length - 1]; return d ? { type: d.type, entry: d.p1 && d.p1.p, stop: d.stop, target: d.target } : null; },
+  entryOrderInfo: () => entryOrder && { side: entryOrder.side, kind: entryOrder.kind, price: entryOrder.price, slTicks: entryOrder.slTicks, tgts: entryOrder.tgts },
+  dragLineSet: (gp, np) => { const L = draggableLines().find(L => Math.abs(L.get() - gp) < 0.001); if (L) { L.set(np); drawLines(); renderLive(); } return entryOrder ? entryOrder.slTicks : null; } };
