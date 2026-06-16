@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>NQ Replay Trainer</title>
-<link rel="stylesheet" href="src/styles.css?v=12" />
+<link rel="stylesheet" href="src/styles.css?v=13" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,400..600,0..1,0&display=block">
@@ -17,29 +17,45 @@
   <header id="toolbar">
     <div class="grp">
       <span id="symbol">NQ</span>
-      <select id="dataSelect" title="資料集"></select>
-      <select id="tfSelect" title="時間週期"></select>
-      <select id="chartTypeSelect" title="圖表類型 Chart type"><option value="candles">蠟燭 Candles</option><option value="hollow">空心 Hollow</option><option value="ha">平均足 Heikin-Ashi</option><option value="bars">美國線 Bars</option><option value="line">折線 Line</option><option value="area">面積 Area</option></select>
-      <select id="sessionSelect" title="跳到某個交易日"></select>
+      <select id="dataSelect" title="Dataset"></select>
+      <select id="tfSelect" title="Timeframe"></select>
+      <select id="chartTypeSelect" title="Chart type"><option value="candles">Candles</option><option value="hollow">Hollow</option><option value="ha">Heikin-Ashi</option><option value="bars">Bars</option><option value="line">Line</option><option value="area">Area</option></select>
+      <select id="sessionSelect" title="Jump to trading day"></select>
+      <div class="tb-ind">
+        <button id="btnIndicators" class="tb-btn" title="Indicators"><span class="material-symbols-outlined">show_chart</span>Indicators</button>
+        <div id="indPopover" class="popover">
+          <div class="pop-h">Indicators</div>
+          <label class="pop-row"><input id="ripsterToggle" type="checkbox" /><span class="ind-swatch" style="background:linear-gradient(90deg,#0ecb81,#f6465d)"></span>Ripster EMA Clouds</label>
+          <div class="pop-note">8/9 · 5/12 · 34/50 · 72/89 · 180/200</div>
+          <label class="pop-row"><input type="checkbox" id="indVwap" /><span class="ind-swatch" style="background:#e040fb"></span>VWAP (session-anchored)</label>
+          <label class="pop-row"><input type="checkbox" id="indBB" /><span class="ind-swatch" style="background:#f0b90b"></span>Bollinger Bands 20 / 2&sigma;</label>
+          <label class="pop-row"><input type="checkbox" id="indEma" /><span class="ind-swatch" style="background:#42a5f5"></span>EMA Ribbon</label>
+          <div class="pop-row sub"><span>EMA periods</span><input type="text" id="emaPeriods" placeholder="9,21,50,200" /></div>
+          <div class="pop-h" style="margin-top:10px">Oscillator (sub-pane)</div>
+          <div class="pop-row sub"><span>Mode</span>
+            <select id="oscSelect"><option value="rsi">RSI 14</option><option value="macd">MACD 12·26·9</option><option value="off">Off</option></select>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="grp center">
-      <button id="btnPrevDay" title="上一個交易日 09:30 ET（[ 或 ←）"><span class="material-symbols-outlined">keyboard_double_arrow_left</span></button>
-      <button id="btnToStart" title="回到此 session 開頭"><span class="material-symbols-outlined">skip_previous</span></button>
-      <button id="btnNextDay" title="下一個交易日 09:30 ET（] 或 →）"><span class="material-symbols-outlined">keyboard_double_arrow_right</span></button>
-      <button id="btnStepBack" title="退一根 (僅空手時)"><span class="material-symbols-outlined">chevron_left</span></button>
-      <button id="btnPlay" class="play material-symbols-outlined" title="播放 / 暫停 (P)">play_arrow</button>
-      <button id="btnStepFwd" title="前進一根 (空白鍵)"><span class="material-symbols-outlined">skip_next</span></button>
-      <select id="speedSelect" title="播放速度">
+      <button id="btnPrevDay" title="Previous trading day 09:30 ET ([ or Left)"><span class="material-symbols-outlined">keyboard_double_arrow_left</span></button>
+      <button id="btnToStart" title="Back to session start"><span class="material-symbols-outlined">skip_previous</span></button>
+      <button id="btnNextDay" title="Next trading day 09:30 ET (] or Right)"><span class="material-symbols-outlined">keyboard_double_arrow_right</span></button>
+      <button id="btnStepBack" title="Step back one bar (flat only)"><span class="material-symbols-outlined">chevron_left</span></button>
+      <button id="btnPlay" class="play material-symbols-outlined" title="Play / Pause (P)">play_arrow</button>
+      <button id="btnStepFwd" title="Step forward one bar (Space)"><span class="material-symbols-outlined">skip_next</span></button>
+      <select id="speedSelect" title="Playback speed">
         <option value="1">1 bar/s</option>
         <option value="2" selected>2 bar/s</option>
         <option value="4">4 bar/s</option>
         <option value="8">8 bar/s</option>
         <option value="20">20 bar/s</option>
       </select>
-      <input id="startSlider" type="range" min="0" max="100" value="0" title="拖曳設定起點 (僅空手時)" />
-      <button id="btnPickStart" title="點圖設 replay 起點 (空手時)"><span class="material-symbols-outlined">my_location</span></button>
-      <button id="btnFit" title="Fit — 自動縮放顯示全部已揭露K棒 (鍵盤 0)"><span class="material-symbols-outlined">fit_screen</span></button>
+      <input id="startSlider" type="range" min="0" max="100" value="0" title="Drag to set replay start (flat only)" />
+      <button id="btnPickStart" title="Click chart to set replay start (flat only)"><span class="material-symbols-outlined">my_location</span></button>
+      <button id="btnFit" title="Fit — auto-zoom revealed bars (key 0)"><span class="material-symbols-outlined">fit_screen</span></button>
     </div>
 
     <div class="grp right">
@@ -48,29 +64,49 @@
     </div>
   </header>
 
-  <!-- ===== Main: chart + side panel ===== -->
+  <!-- ===== Main: left drawing toolbar + chart + side panel ===== -->
   <main id="main">
-    <section id="chartwrap"><div id="chart"></div><div id="chartLegend"></div><div id="indLegend"></div><div id="oscPane"><div id="oscBar"><span class="osc-tag">OSC</span><select id="oscSelect" title="震盪指標子視窗"><option value="rsi">RSI 14</option><option value="macd">MACD 12·26·9</option><option value="off">關閉 Off</option></select></div></div></section>
-    <div id="gutterCol" class="gutter col" title="拖曳調整側欄寬度 (雙擊重設)"></div>
+    <!-- left drawing/annotation toolbar (TradingView-style) -->
+    <nav id="leftbar">
+      <button id="toolCursor" class="lt-btn active" title="Cursor — no tool (Esc)"><span class="material-symbols-outlined">arrow_selector_tool</span></button>
+      <div class="lt-sep"></div>
+      <button id="drwTL" class="lt-btn" title="Trend line — click two points"><span class="material-symbols-outlined">show_chart</span></button>
+      <button id="drwRay" class="lt-btn" title="Ray — two points, extends right"><span class="material-symbols-outlined">north_east</span></button>
+      <button id="drwHL" class="lt-btn" title="Horizontal line — one click"><span class="material-symbols-outlined">horizontal_rule</span></button>
+      <button id="drwBox" class="lt-btn" title="Rectangle — two corners"><span class="material-symbols-outlined">crop_square</span></button>
+      <button id="drwFib" class="lt-btn" title="Fib retracement — two points (high&rarr;low or low&rarr;high)"><span class="material-symbols-outlined">format_line_spacing</span></button>
+      <button id="drwMeasure" class="lt-btn" title="Measure — &Delta;price / &Delta;ticks / &Delta;% / bars"><span class="material-symbols-outlined">straighten</span></button>
+      <div class="lt-sep"></div>
+      <button id="annUp" class="lt-btn" title="Arrow-up marker"><span class="material-symbols-outlined">arrow_upward</span></button>
+      <button id="annDown" class="lt-btn" title="Arrow-down marker"><span class="material-symbols-outlined">arrow_downward</span></button>
+      <button id="annLong" class="lt-btn lt-green" title="Mark LONG"><span class="material-symbols-outlined">trending_up</span></button>
+      <button id="annShort" class="lt-btn lt-red" title="Mark SHORT"><span class="material-symbols-outlined">trending_down</span></button>
+      <div class="lt-sep"></div>
+      <button id="drwClear" class="lt-btn" title="Clear all drawings"><span class="material-symbols-outlined">ink_eraser</span></button>
+      <button id="annClear" class="lt-btn" title="Clear all markers"><span class="material-symbols-outlined">delete</span></button>
+    </nav>
+
+    <section id="chartwrap"><div id="chart"></div><div id="chartLegend"></div><div id="indLegend"></div><div id="oscPane"><div id="oscBar"><span class="osc-tag" id="oscTag">RSI</span><button id="oscClose" class="osc-x" title="Remove oscillator pane"><span class="material-symbols-outlined">close</span></button></div></div></section>
+    <div id="gutterCol" class="gutter col" title="Drag to resize side panel (double-click to reset)"></div>
 
     <aside id="side">
       <!-- order entry -->
       <div class="card">
-        <div class="card-h">下單 Order</div>
+        <div class="card-h">Order</div>
         <div class="row">
-          <label>進場別</label>
+          <label>Type</label>
           <select id="entryType">
-            <option value="market">市價 Market</option>
-            <option value="limit">限價 Limit</option>
-            <option value="stop">停損 Stop</option>
+            <option value="market">Market</option>
+            <option value="limit">Limit</option>
+            <option value="stop">Stop</option>
           </select>
         </div>
         <div class="row" id="entryPriceRow" style="display:none">
-          <label>進場價</label>
+          <label>Price</label>
           <input id="entryPrice" type="number" step="0.25" />
         </div>
-        <div class="row"><label>ATM 範本</label><select id="atmSelect"></select></div>
-        <div class="row"><label title="套用幾組 ATM,每組 = 範本各目標口數總和">口數 ×</label><input id="qty" type="number" min="1" step="1" value="1" /></div>
+        <div class="row"><label>ATM template</label><select id="atmSelect"></select></div>
+        <div class="row"><label title="How many ATM sets (each = sum of the template's target quantities)">Qty &times;</label><input id="qty" type="number" min="1" step="1" value="1" /></div>
         <div class="btn-row">
           <button id="btnBuy" class="ico-btn buy"><span class="material-symbols-outlined">add_circle</span>BUY · Long</button>
           <button id="btnSell" class="ico-btn sell"><span class="material-symbols-outlined">remove_circle</span>SELL · Short</button>
@@ -79,82 +115,47 @@
           <button id="btnFlatten" class="ico-btn flat"><span class="material-symbols-outlined">close</span>FLATTEN</button>
           <button id="btnReverse" class="ico-btn rev"><span class="material-symbols-outlined">swap_horiz</span>REVERSE</button>
         </div>
-        <div class="btn-row"><button id="btnCancelEntry" class="ico-btn flat"><span class="material-symbols-outlined">cancel</span>取消掛單</button></div>
+        <div class="btn-row"><button id="btnCancelEntry" class="ico-btn flat"><span class="material-symbols-outlined">cancel</span>Cancel order</button></div>
       </div>
 
       <!-- position -->
       <div class="card">
-        <div class="card-h">部位 Position</div>
-        <div id="posBox" class="posflat">空手 Flat</div>
+        <div class="card-h">Position</div>
+        <div id="posBox" class="posflat">Flat</div>
         <div id="ordersBox"></div>
-      </div>
-
-      <!-- indicators & annotation tools -->
-      <div class="card">
-        <div class="card-h">指標 / 標註</div>
-        <div class="row chk"><label><input id="ripsterToggle" type="checkbox" /> Ripster EMA 雲</label></div>
-        <div class="row sub" style="font-size:11px;padding-left:22px">8/9 · 5/12 · 34/50 · 72/89 · 180/200</div>
-        <div class="row chk"><label><input type="checkbox" id="indVwap"><span class="ind-swatch" style="background:#e040fb"></span>VWAP（每日盤中錨定）</label></div>
-        <div class="row chk"><label><input type="checkbox" id="indBB"><span class="ind-swatch" style="background:#f0b90b"></span>布林通道 20/2σ</label></div>
-        <div class="row chk"><label><input type="checkbox" id="indEma"><span class="ind-swatch" style="background:#42a5f5"></span>EMA 緞帶</label></div>
-        <div class="row sub"><label>EMA 週期</label><span><input type="text" id="emaPeriods" placeholder="9,21,50,200" style="width:110px" /></span></div>
-        <div class="card-h" style="margin-top:10px">標註工具(選一個再點圖)</div>
-        <div class="btn-row">
-          <button id="annUp" class="ico-btn" title="放上向上箭頭"><span class="material-symbols-outlined">arrow_upward</span>箭頭</button>
-          <button id="annDown" class="ico-btn" title="放上向下箭頭"><span class="material-symbols-outlined">arrow_downward</span>箭頭</button>
-        </div>
-        <div class="btn-row">
-          <button id="annLong" class="ico-btn buy" title="標記做多"><span class="material-symbols-outlined">trending_up</span>做多</button>
-          <button id="annShort" class="ico-btn sell" title="標記做空"><span class="material-symbols-outlined">trending_down</span>做空</button>
-        </div>
-        <div class="btn-row"><button id="annClear" class="ico-btn flat" title="清除所有標註"><span class="material-symbols-outlined">delete</span>清除標註</button></div>
-        <div class="card-h" style="margin-top:10px">繪圖工具(選一個再點圖)</div>
-        <div class="btn-row">
-          <button id="drwHL" class="ico-btn" title="水平線:點一下放在該價位"><span class="material-symbols-outlined">horizontal_rule</span>水平線</button>
-          <button id="drwTL" class="ico-btn" title="趨勢線:點兩個端點"><span class="material-symbols-outlined">show_chart</span>趨勢線</button>
-        </div>
-        <div class="btn-row">
-          <button id="drwRay" class="ico-btn" title="射線:點兩點,往右延伸"><span class="material-symbols-outlined">north_east</span>射線</button>
-          <button id="drwBox" class="ico-btn" title="矩形框:點兩個對角"><span class="material-symbols-outlined">crop_square</span>矩形</button>
-        </div>
-        <div class="btn-row">
-          <button id="drwFib" class="ico-btn" title="斐波那契回撤:點兩個端點(高→低 或 低→高)"><span class="material-symbols-outlined">format_line_spacing</span>Fib</button>
-          <button id="drwMeasure" class="ico-btn" title="測量:點兩點看 Δ價/Δticks/Δ%/根數"><span class="material-symbols-outlined">straighten</span>測量</button>
-        </div>
-        <div class="btn-row"><button id="drwClear" class="ico-btn flat" title="清除所有繪圖"><span class="material-symbols-outlined">ink_eraser</span>清除繪圖</button></div>
       </div>
 
       <!-- ATM editor -->
       <details class="card" id="atmEditor">
-        <summary class="card-h">ATM 範本編輯 (多目標分批)</summary>
-        <div class="row"><label>名稱</label><input id="atmName" type="text" placeholder="My ATM" /></div>
-        <div class="row"><label>停損 SL (ticks)</label><input id="atmSL" type="number" min="0" value="10" /></div>
-        <div class="row sub2 head"><span>目標</span><span>ticks</span><span>口數</span></div>
+        <summary class="card-h">ATM template editor (multi-target scale-out)</summary>
+        <div class="row"><label>Name</label><input id="atmName" type="text" placeholder="My ATM" /></div>
+        <div class="row"><label>Stop SL (ticks)</label><input id="atmSL" type="number" min="0" value="10" /></div>
+        <div class="row sub2 head"><span>Target</span><span>ticks</span><span>qty</span></div>
         <div class="row sub2"><span>T1</span><input id="atmT1t" type="number" min="0" value="20" /><input id="atmT1q" type="number" min="0" value="1" /></div>
         <div class="row sub2"><span>T2</span><input id="atmT2t" type="number" min="0" value="0" /><input id="atmT2q" type="number" min="0" value="0" /></div>
         <div class="row sub2"><span>T3</span><input id="atmT3t" type="number" min="0" value="0" /><input id="atmT3q" type="number" min="0" value="0" /></div>
-        <div class="row chk"><label><input id="atmBEon" type="checkbox" /> 自動保本 Breakeven</label></div>
-        <div class="row sub"><label>觸發 / 偏移 (ticks)</label><span><input id="atmBEtrig" type="number" value="12" /> / <input id="atmBEoff" type="number" value="1" /></span></div>
-        <div class="row chk"><label><input id="atmTrailon" type="checkbox" /> 移動停損 Trailing</label></div>
-        <div class="row sub"><label>啟動 / 距離 (ticks)</label><span><input id="atmTrailTrig" type="number" value="16" /> / <input id="atmTrailDist" type="number" value="8" /></span></div>
+        <div class="row chk"><label><input id="atmBEon" type="checkbox" /> Auto breakeven</label></div>
+        <div class="row sub"><label>Trigger / offset (ticks)</label><span><input id="atmBEtrig" type="number" value="12" /> / <input id="atmBEoff" type="number" value="1" /></span></div>
+        <div class="row chk"><label><input id="atmTrailon" type="checkbox" /> Trailing stop</label></div>
+        <div class="row sub"><label>Start / distance (ticks)</label><span><input id="atmTrailTrig" type="number" value="16" /> / <input id="atmTrailDist" type="number" value="8" /></span></div>
         <div class="btn-row">
-          <button id="btnAtmSave" class="ico-btn save"><span class="material-symbols-outlined">save</span>儲存範本</button>
-          <button id="btnAtmDel" class="ico-btn del"><span class="material-symbols-outlined">delete</span>刪除</button>
+          <button id="btnAtmSave" class="ico-btn save"><span class="material-symbols-outlined">save</span>Save template</button>
+          <button id="btnAtmDel" class="ico-btn del"><span class="material-symbols-outlined">delete</span>Delete</button>
         </div>
       </details>
     </aside>
   </main>
 
-  <div id="gutterRow" class="gutter row" title="拖曳調整下方面板高度 (雙擊重設)"></div>
+  <div id="gutterRow" class="gutter row" title="Drag to resize bottom panel (double-click to reset)"></div>
 
   <!-- ===== Bottom: trades + dashboard ===== -->
   <footer id="bottom">
     <div id="tabs">
-      <button id="tabTrades" class="tab active ico-btn"><span class="material-symbols-outlined">receipt_long</span>交易紀錄</button>
+      <button id="tabTrades" class="tab active ico-btn"><span class="material-symbols-outlined">receipt_long</span>Trades</button>
       <button id="tabDash" class="tab ico-btn"><span class="material-symbols-outlined">dashboard</span>Dashboard</button>
       <span class="spacer"></span>
-      <button id="btnExportCsv" class="mini ico-btn"><span class="material-symbols-outlined">download</span>匯出 CSV</button>
-      <button id="btnReset" class="mini danger ico-btn"><span class="material-symbols-outlined">delete_sweep</span>清空</button>
+      <button id="btnExportCsv" class="mini ico-btn"><span class="material-symbols-outlined">download</span>Export CSV</button>
+      <button id="btnReset" class="mini danger ico-btn"><span class="material-symbols-outlined">delete_sweep</span>Clear</button>
     </div>
 
     <div id="panelTrades" class="panel">
@@ -162,8 +163,8 @@
       <div class="tablewrap">
         <table id="tradesTable">
           <thead><tr>
-            <th>#</th><th>方向</th><th>口</th><th>進場</th><th>出場</th>
-            <th>進價</th><th>出價</th><th>Ticks</th><th>盈虧 $</th><th>R</th><th>ATM</th><th>出場</th>
+            <th>#</th><th>Side</th><th>Qty</th><th>Entry time</th><th>Exit time</th>
+            <th>Entry</th><th>Exit</th><th>Ticks</th><th>P&amp;L $</th><th>R</th><th>ATM</th><th>Exit</th>
           </tr></thead>
           <tbody></tbody>
         </table>
@@ -173,13 +174,13 @@
     <div id="panelDash" class="panel hidden">
       <div id="statCards" class="statcards"></div>
       <div class="dashgrid">
-        <div class="dashbox"><div class="dashbox-h">權益曲線 Equity</div><canvas id="equity" width="600" height="180"></canvas></div>
-        <div class="dashbox"><div class="dashbox-h">依 ATM 分組</div><div id="atmStats"></div></div>
+        <div class="dashbox"><div class="dashbox-h">Equity curve</div><canvas id="equity" width="600" height="180"></canvas></div>
+        <div class="dashbox"><div class="dashbox-h">By ATM</div><div id="atmStats"></div></div>
       </div>
     </div>
   </footer>
 
 </div>
-<script src="src/app.js?v=12"></script>
+<script src="src/app.js?v=13"></script>
 </body>
 </html>

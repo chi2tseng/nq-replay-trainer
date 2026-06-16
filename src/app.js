@@ -6,10 +6,10 @@
 
 let INSTR = { symbol: 'NQ', tickSize: 0.25, tickValue: 5 }; // active contract spec (per-dataset; NQ: $20/pt -> $5/tick)
 const DATASETS = [
-  { id: 'deep', label: 'NQ · Nasdaq100 1m 深歷史 3.5月 (Dukascopy)', url: 'data/NQ_deep_1m.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },     // $20/pt
-  { id: 'es',   label: 'ES · S&P 500 1m 深歷史 3.5月 (Dukascopy)',   url: 'data/ES_deep_1m.json', instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
-  { id: 'ym',   label: 'YM · 道瓊 1m 深歷史 3.5月 (Dukascopy)',       url: 'data/YM_deep_1m.json', instr: { symbol: 'YM', tickSize: 1, tickValue: 5 } },        // $5/pt
-  { id: 'tick', label: 'NQ · 30s 6/7–6/12 (真實 tick)', url: 'data/NQ_30s.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
+  { id: 'deep', label: 'NQ · Nasdaq-100 1m · 3.5mo deep (Dukascopy)', url: 'data/NQ_deep_1m.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },     // $20/pt
+  { id: 'es',   label: 'ES · S&P 500 1m · 3.5mo deep (Dukascopy)',    url: 'data/ES_deep_1m.json', instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
+  { id: 'ym',   label: 'YM · Dow 1m · 3.5mo deep (Dukascopy)',        url: 'data/YM_deep_1m.json', instr: { symbol: 'YM', tickSize: 1, tickValue: 5 } },        // $5/pt
+  { id: 'tick', label: 'NQ · 30s · Jun 7–12 (real tick)', url: 'data/NQ_30s.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
 ];
 const STD_TF = [1, 2, 3, 5, 10, 15, 30, 60];   // standard minute timeframes
 let BASE_TF = 1;        // base bar resolution (minutes) — auto-detected per dataset
@@ -142,14 +142,14 @@ function initLayout() { applyLayout(false); attachGutter($('gutterCol'), 'x'); a
 // ---------- right-click chart trading (context menu at the clicked price) ----------
 function ctxPriceAt(clientY) { return candle.coordinateToPrice(clientY - $('chart').getBoundingClientRect().top); }
 function placeEntryAt(side, kind, price) {
-  if (position) return toast('已有部位 — 先平倉');
+  if (position) return toast('Already in a position — flatten first');
   const mult = Math.max(1, parseInt($('qty').value, 10) || 1);
   entryOrder = { side, kind, price: rnd(price), atm: activeAtm, mult };
-  toast(`${side === 'long' ? '買' : '賣'} ${kind === 'limit' ? '限價' : '停損'} @ ${f2(rnd(price))} 掛單`);
+  toast(`${side === 'long' ? 'Buy' : 'Sell'} ${kind === 'limit' ? 'Limit' : 'Stop'} @ ${f2(rnd(price))} placed`);
   drawLines(); renderLive();
 }
-function moveStopTo(price) { if (!position) return; const s = orders.find(o => o.type === 'stop'); if (s) s.price = rnd(price); else orders.push({ type: 'stop', price: rnd(price), qty: position.qty }); drawLines(); renderLive(); toast('停損 → ' + f2(rnd(price))); }
-function moveTargetTo(price) { if (!position) return; const t = orders.find(o => o.type === 'target'); if (t) t.price = rnd(price); else orders.push({ type: 'target', price: rnd(price), qty: position.qty }); drawLines(); renderLive(); toast('停利 → ' + f2(rnd(price))); }
+function moveStopTo(price) { if (!position) return; const s = orders.find(o => o.type === 'stop'); if (s) s.price = rnd(price); else orders.push({ type: 'stop', price: rnd(price), qty: position.qty }); drawLines(); renderLive(); toast('Stop → ' + f2(rnd(price))); }
+function moveTargetTo(price) { if (!position) return; const t = orders.find(o => o.type === 'target'); if (t) t.price = rnd(price); else orders.push({ type: 'target', price: rnd(price), qty: position.qty }); drawLines(); renderLive(); toast('Target → ' + f2(rnd(price))); }
 let ctxEl = null;
 function hideCtx() { if (ctxEl) ctxEl.style.display = 'none'; }
 function showCtx(clientX, clientY) {
@@ -158,22 +158,22 @@ function showCtx(clientX, clientY) {
   const p = f2(rnd(price)), it = [];
   if (position) {
     it.push({ h: `${position.side === 'long' ? 'LONG' : 'SHORT'} ${position.qty} @ ${f2(position.entry)}` });
-    it.push({ l: `停損移到此 @ ${p}`, f: () => moveStopTo(price) });
-    it.push({ l: `停利移到此 @ ${p}`, f: () => moveTargetTo(price) });
+    it.push({ l: `Move stop here @ ${p}`, f: () => moveStopTo(price) });
+    it.push({ l: `Move target here @ ${p}`, f: () => moveTargetTo(price) });
     it.push({ sep: 1 });
-    it.push({ l: '平倉 Flatten', f: () => flatten('manual') });
-    it.push({ l: '反手 Reverse', f: () => reverse() });
+    it.push({ l: 'Flatten', f: () => flatten('manual') });
+    it.push({ l: 'Reverse', f: () => reverse() });
   } else if (entryOrder) {
-    it.push({ h: `掛單 ${entryOrder.side === 'long' ? '買' : '賣'}${entryOrder.kind === 'limit' ? '限' : '停'} @ ${f2(entryOrder.price)}` });
-    it.push({ l: '取消掛單 Cancel', f: () => cancelEntry() });
+    it.push({ h: `Working ${entryOrder.side === 'long' ? 'Buy' : 'Sell'} ${entryOrder.kind === 'limit' ? 'Limit' : 'Stop'} @ ${f2(entryOrder.price)}` });
+    it.push({ l: 'Cancel order', f: () => cancelEntry() });
   } else {
-    it.push({ l: '市價買進 Buy Market', cls: 'buy', f: () => onEntryButtonDirect('long') });
-    it.push({ l: '市價賣出 Sell Market', cls: 'sell', f: () => onEntryButtonDirect('short') });
+    it.push({ l: 'Buy Market', cls: 'buy', f: () => onEntryButtonDirect('long') });
+    it.push({ l: 'Sell Market', cls: 'sell', f: () => onEntryButtonDirect('short') });
     it.push({ sep: 1 });
-    it.push({ l: `限價買 @ ${p}`, cls: 'buy', f: () => placeEntryAt('long', 'limit', price) });
-    it.push({ l: `限價賣 @ ${p}`, cls: 'sell', f: () => placeEntryAt('short', 'limit', price) });
-    it.push({ l: `停損買 @ ${p}`, cls: 'buy', f: () => placeEntryAt('long', 'stop', price) });
-    it.push({ l: `停損賣 @ ${p}`, cls: 'sell', f: () => placeEntryAt('short', 'stop', price) });
+    it.push({ l: `Buy Limit @ ${p}`, cls: 'buy', f: () => placeEntryAt('long', 'limit', price) });
+    it.push({ l: `Sell Limit @ ${p}`, cls: 'sell', f: () => placeEntryAt('short', 'limit', price) });
+    it.push({ l: `Buy Stop @ ${p}`, cls: 'buy', f: () => placeEntryAt('long', 'stop', price) });
+    it.push({ l: `Sell Stop @ ${p}`, cls: 'sell', f: () => placeEntryAt('short', 'stop', price) });
   }
   ctxEl.innerHTML = '';
   it.forEach(x => {
@@ -231,12 +231,12 @@ function renderIndLegend(i) {
   const rows = [];
   const tint = (c, s) => `<span style="color:${c}">${s}</span>`;
   const add = (key, on, title, params, vals) => rows.push(
-    `<div class="il-row${on ? '' : ' off'}" data-ind="${key}" title="點一下開/關此指標">` +
+    `<div class="il-row${on ? '' : ' off'}" data-ind="${key}" title="Click to toggle">` +
     `<span class="il-eye material-symbols-outlined">${on ? 'visibility' : 'visibility_off'}</span>` +
     `<span class="il-name">${title}</span>` +
     (params ? `<span class="il-params">${params}</span>` : '') +
     (on && vals ? `<span class="il-vals">${vals}</span>` : '') + `</div>`);
-  add('rip', ripsterOn, 'Ripster EMA 雲', '8·9 5·12 34·50 72·89 180·200', '');
+  add('rip', ripsterOn, 'Ripster EMA Clouds', '8·9 5·12 34·50 72·89 180·200', '');
   add('vwap', vwapOn, 'VWAP', '', tint(VWAP_COLOR, `<b>${fmtIndVal(vwapData[i])}</b>`));
   add('bb', bbOn, 'BB', '20 2', `${tint('var(--dim)', fmtIndVal(bbData.up[i]))} ${tint(BB_MID, '<b>' + fmtIndVal(bbData.mid[i]) + '</b>')} ${tint('var(--dim)', fmtIndVal(bbData.lo[i]))}`);
   const emaVals = emaData.map(e => tint(e.color, fmtIndVal(e.arr[i]))).join(' ');
@@ -484,6 +484,7 @@ function oscStepFwd() {
 // ---- mode switch (selector handler) --------------------------------------
 function setOscMode(m) {
   oscMode = m; saveJSON('rt_oscMode', m);
+  const tag = $('oscTag'); if (tag) tag.textContent = m === 'off' ? 'OSC' : m.toUpperCase();
   if (m === 'off') {
     if (oscChart) { [rsiSeries, macdHist, macdLine, sigLine].forEach(s => { if (s) try { oscChart.removeSeries(s); } catch (e) {} }); rsiSeries = macdHist = macdLine = sigLine = null; }
     if ($('oscPane')) $('oscPane').style.display = 'none';
@@ -658,7 +659,7 @@ function setEMA(on)  { emaOn = on;  saveJSON('rt_ema',  emaOn);  indicatorRepain
 // optional: change the ribbon periods at runtime, e.g. setEmaPeriods("9,21,55,200")
 function setEmaPeriods(csv) {
   const list = String(csv).split(/[\s,]+/).map(s => parseInt(s, 10)).filter(n => Number.isFinite(n) && n >= 1).slice(0, 6);
-  if (!list.length) return toast('EMA 週期格式錯誤');
+  if (!list.length) return toast('Invalid EMA periods');
   emaPeriods = list; saveJSON('rt_ema_p', emaPeriods);
   computeEMA(); indicatorRepaint(); toast('EMA: ' + list.join('/'));
 }
@@ -704,11 +705,11 @@ function repaintOverlays() { if (ripsterPrimitive._req) ripsterPrimitive._req();
 function handleDrawClick(t, time, price) {
   price = rnd(price);
   if (t === 'hl') { drawings.push({ type: 'hl', p1: { t: time, p: price }, color: '#d1d4dc' }); saveJSON('rt_drawings', drawings); repaintOverlays(); return; }
-  if (!pendingPt) { pendingPt = { t: time, p: price }; repaintOverlays(); toast('再點第二個點'); return; }
+  if (!pendingPt) { pendingPt = { t: time, p: price }; repaintOverlays(); toast('Click the second point'); return; }
   drawings.push({ type: t, p1: pendingPt, p2: { t: time, p: price }, color: t === 'box' ? '#2962ff' : t === 'fib' ? '#fcd535' : '#d1d4dc' });
   pendingPt = null; saveJSON('rt_drawings', drawings); repaintOverlays();
 }
-function clearDrawings() { drawings = []; pendingPt = null; saveJSON('rt_drawings', drawings); repaintOverlays(); toast('已清除繪圖'); }
+function clearDrawings() { drawings = []; pendingPt = null; saveJSON('rt_drawings', drawings); repaintOverlays(); toast('Drawings cleared'); }
 // ---- Fibonacci retracement (drawing type 'fib', 2-point) ----
 const FIB_LEVELS = [
   { lv: 0, c: '#787b86' }, { lv: 0.236, c: '#f6465d' }, { lv: 0.382, c: '#ff9f0a' }, { lv: 0.5, c: '#fcd535' },
@@ -766,8 +767,8 @@ const ANN = {
 };
 const TOOLBTN = { start: 'btnPickStart', au: 'annUp', ad: 'annDown', long: 'annLong', short: 'annShort', hl: 'drwHL', tl: 'drwTL', ray: 'drwRay', box: 'drwBox', fib: 'drwFib', measure: 'drwMeasure' };
 function placeAnnotation(t, baseTime) { const a = ANN[t]; if (!a) return; annotations.push({ baseTime, ...a }); saveJSON('rt_annotations', annotations); refreshMarkers(); }
-function clearAnnotations() { annotations = []; saveJSON('rt_annotations', annotations); refreshMarkers(); toast('已清除標註'); }
-function updateToolUI() { Object.values(TOOLBTN).forEach(id => { const b = $(id); if (b) b.classList.remove('active'); }); const b = $(TOOLBTN[tool]); if (b) b.classList.add('active'); $('chart').style.cursor = tool ? 'crosshair' : ''; }
+function clearAnnotations() { annotations = []; saveJSON('rt_annotations', annotations); refreshMarkers(); toast('Markers cleared'); }
+function updateToolUI() { Object.values(TOOLBTN).forEach(id => { const b = $(id); if (b) b.classList.remove('active'); }); const b = $(TOOLBTN[tool]); if (b) b.classList.add('active'); const cur = $('toolCursor'); if (cur) cur.classList.toggle('active', !tool); $('chart').style.cursor = tool ? 'crosshair' : ''; }
 function setTool(t) { tool = (tool === t) ? '' : t; pendingPt = null; repaintOverlays(); updateToolUI(); }
 function draggableLines() {
   const a = [];
@@ -989,7 +990,7 @@ async function loadDataset(ds) {
   const url = typeof ds === 'string' ? ds : ds.url;   // tolerate a bare url too
   let data;
   try { const r = await fetch(url + (url.includes('?') ? '&' : '?') + 'v=' + Date.now()); if (!r.ok) throw 0; data = await r.json(); } // cache-bust so regenerated data files always load fresh
-  catch (e) { toast('此資料集還沒準備好'); return false; }
+  catch (e) { toast('This dataset is not ready yet'); return false; }
   pause(); position = null; entryOrder = null; orders = []; markers = []; tool = ''; pendingPt = null;
   if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; }   // switch active contract spec (tick grid + $/tick + symbol)
   if ($('symbol')) $('symbol').textContent = INSTR.symbol;
@@ -1041,7 +1042,7 @@ function stepFwd() {
   renderLive(); renderLegend(null); oscStepFwd();
 }
 function stepBack() {
-  if (locked()) return toast('有部位/掛單時不能後退');
+  if (locked()) return toast("Can't step back while in a position / working order");
   if (idx <= 0) return;
   idx--; baseIdx = bars[idx].subEnd; hardReveal(); renderLive();
 }
@@ -1054,7 +1055,7 @@ function play() {
 function pause() { playing = false; $('btnPlay').textContent = 'play_arrow'; clearInterval(timer); timer = null; }
 function rthOpenIdx(s) { for (let i = s.start; i <= s.end; i++) { const m = etMinutes(baseBars[i].time); if (m >= 570 && m < 960) return i; } return s.start; }  // first bar in 09:30–15:59 ET = US cash open (skips the 18:00 ET Globex open)
 function gotoSession(i) {
-  if (locked()) return toast('有部位/掛單時不能跳轉');
+  if (locked()) return toast("Can't jump while in a position / working order");
   pause(); baseIdx = rthOpenIdx(sessions[i]); syncIdxFromBase(); hardReveal(); renderLive();
 }
 // ---- quick next/prev trading-day jump (to 09:30 ET open) ----
@@ -1065,10 +1066,10 @@ function currentSessionIdx() {
   return sessions.length - 1;
 }
 function jumpDay(dir) {
-  if (locked()) return toast('有部位/掛單時不能跳轉');
+  if (locked()) return toast("Can't jump while in a position / working order");
   if (sessions.length === 0) return;
   const cur = currentSessionIdx(), next = Math.max(0, Math.min(sessions.length - 1, cur + dir));
-  if (next === cur) return toast(dir > 0 ? '已是最後一個交易日' : '已是第一個交易日');
+  if (next === cur) return toast(dir > 0 ? 'Already the last trading day' : 'Already the first trading day');
   gotoSession(next);
   const sel = $('sessionSelect'); if (sel) sel.value = String(next);
   toast((dir > 0 ? '▶ ' : '◀ ') + sessions[next].key + ' 09:30 ET');
@@ -1080,7 +1081,7 @@ function setStart(biVal) {
   pause(); baseIdx = Math.max(0, Math.min(baseBars.length - 1, biVal)); syncIdxFromBase(); hardReveal(); renderLive();
 }
 function setTf(m) {
-  if (locked()) { buildTfSelect(); return toast('有部位/掛單時不能換週期'); }
+  if (locked()) { buildTfSelect(); return toast("Can't change timeframe while in a position / working order"); }
   pause(); tf = m; rebuildTf(); syncIdxFromBase(); hardReveal(); chart.timeScale().fitContent(); renderLive();
 }
 
@@ -1090,19 +1091,19 @@ function curBaseT() { return baseBars[baseIdx].time; }
 function locked() { return !!position || !!entryOrder; }
 
 function onEntryButton(side) {
-  if (position) { if (position.side !== side) return flatten('reverse'); return toast('已有部位 — 先 FLATTEN'); }
+  if (position) { if (position.side !== side) return flatten('reverse'); return toast('Already in a position — FLATTEN first'); }
   const kind = $('entryType').value;
   const mult = Math.max(1, parseInt($('qty').value, 10) || 1);
   if (kind === 'market') { openPosition(side, curPx(), curBaseT(), activeAtm, mult); }
   else {
     const price = rnd(parseFloat($('entryPrice').value));
-    if (!price) return toast('請輸入進場價');
+    if (!price) return toast('Enter an entry price');
     entryOrder = { side, kind, price, atm: activeAtm, mult };
-    toast(`${side === 'long' ? '買' : '賣'} ${kind === 'limit' ? '限價' : '停損'} @ ${f2(price)} 掛單`);
+    toast(`${side === 'long' ? 'Buy' : 'Sell'} ${kind === 'limit' ? 'Limit' : 'Stop'} @ ${f2(price)} placed`);
     drawLines(); renderLive();
   }
 }
-function cancelEntry() { if (entryOrder) { entryOrder = null; drawLines(); renderLive(); toast('已取消掛單'); } }
+function cancelEntry() { if (entryOrder) { entryOrder = null; drawLines(); renderLive(); toast('Order cancelled'); } }
 
 function openPosition(side, px, t, atmName, mult) {
   const a = atm[atmName]; entryOrder = null;
@@ -1215,14 +1216,14 @@ function renderLive() {
   const box = $('posBox');
   if (!position) {
     box.className = 'posflat';
-    box.textContent = entryOrder ? `掛單中:${entryOrder.side === 'long' ? '買' : '賣'} ${entryOrder.kind === 'limit' ? '限價' : '停損'} @ ${f2(entryOrder.price)}` : '空手 Flat';
+    box.textContent = entryOrder ? `Working: ${entryOrder.side === 'long' ? 'Buy' : 'Sell'} ${entryOrder.kind === 'limit' ? 'Limit' : 'Stop'} @ ${f2(entryOrder.price)}` : 'Flat';
   } else {
     const long = position.side === 'long';
     const uTicks = long ? tcount(curPx(), position.entry) : tcount(position.entry, curPx());
     const uPnl = uTicks * INSTR.tickValue * position.qty;
     box.className = long ? 'long' : 'short';
     box.innerHTML = `<div class="big">${long ? 'LONG' : 'SHORT'} ${position.qty} @ ${f2(position.entry)}</div>
-      <div>未實現 <b class="${uPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${usd(uPnl)}</b> · ${uTicks >= 0 ? '+' : ''}${uTicks}t · ${position.atm}</div>`;
+      <div>Unreal. <b class="${uPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${usd(uPnl)}</b> · ${uTicks >= 0 ? '+' : ''}${uTicks}t · ${position.atm}</div>`;
   }
   const ord = [];
   if (entryOrder) ord.push(`<div class="ord entry"><span>${entryOrder.kind === 'limit' ? 'LIMIT' : 'STOP'} ${entryOrder.side === 'long' ? 'BUY' : 'SELL'}</span><span class="mono">${f2(entryOrder.price)}</span></div>`);
@@ -1242,7 +1243,7 @@ function renderTrades() {
     <td>${t.ticks >= 0 ? '+' : ''}${t.ticks}</td><td class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</td>
     <td>${t.R == null ? '–' : t.R.toFixed(2)}</td><td>${t.atm}</td><td>${t.exitType}</td></tr>`).reverse().join('');
   const net = trades.reduce((s, t) => s + t.pnl, 0);
-  $('tradesSummary').textContent = `${trades.length} 筆 · 淨損益 ${usd(net)}`;
+  $('tradesSummary').textContent = `${trades.length} trades · Net ${usd(net)}`;
 }
 
 function renderDash() {
@@ -1257,11 +1258,11 @@ function renderDash() {
   const avgR = rs.length ? rs.reduce((a, b) => a + b, 0) / rs.length : null;
   let eq = 0, peak = 0, dd = 0; trades.forEach(t => { eq += t.pnl; peak = Math.max(peak, eq); dd = Math.min(dd, eq - peak); });
   const card = (k, v, cls = '') => `<div class="stat"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`;
-  $('statCards').innerHTML = card('交易數', n) + card('勝率', winRate.toFixed(1) + '%', winRate >= 50 ? 'pnl-pos' : '') +
-    card('淨損益', usd(net), net >= 0 ? 'pnl-pos' : 'pnl-neg') + card('獲利因子', pf === Infinity ? '∞' : pf.toFixed(2)) +
-    card('期望值/筆', usd(exp), exp >= 0 ? 'pnl-pos' : 'pnl-neg') + card('平均 R', avgR == null ? '–' : avgR.toFixed(2));
+  $('statCards').innerHTML = card('Trades', n) + card('Win rate', winRate.toFixed(1) + '%', winRate >= 50 ? 'pnl-pos' : '') +
+    card('Net P&L', usd(net), net >= 0 ? 'pnl-pos' : 'pnl-neg') + card('Profit factor', pf === Infinity ? '∞' : pf.toFixed(2)) +
+    card('Expectancy', usd(exp), exp >= 0 ? 'pnl-pos' : 'pnl-neg') + card('Avg R', avgR == null ? '–' : avgR.toFixed(2));
   const byAtm = {}; trades.forEach(t => { (byAtm[t.atm] ??= []).push(t); });
-  $('atmStats').innerHTML = `<table><thead><tr><th>ATM</th><th>筆</th><th>勝率</th><th>淨 $</th></tr></thead><tbody>` +
+  $('atmStats').innerHTML = `<table><thead><tr><th>ATM</th><th>Trades</th><th>Win%</th><th>Net $</th></tr></thead><tbody>` +
     Object.entries(byAtm).map(([k, ts]) => { const w = ts.filter(t => t.pnl > 0).length, l = ts.filter(t => t.pnl < 0).length, nt = ts.reduce((s, t) => s + t.pnl, 0);
       return `<tr><td>${k}</td><td>${ts.length}</td><td>${(w + l) ? (w / (w + l) * 100).toFixed(0) : 0}%</td><td class="${nt >= 0 ? 'pos' : 'neg'}">${usd(nt)}</td></tr>`; }).join('') + `</tbody></table>`;
   drawEquity();
@@ -1270,7 +1271,7 @@ function renderDash() {
 function drawEquity() {
   const c = $('equity'), ctx = c.getContext('2d'); const W = c.width = c.clientWidth || 600, H = c.height;
   ctx.clearRect(0, 0, W, H);
-  if (!trades.length) { ctx.fillStyle = '#8b93a7'; ctx.fillText('尚無交易', 10, 20); return; }
+  if (!trades.length) { ctx.fillStyle = '#8b93a7'; ctx.fillText('No trades yet', 10, 20); return; }
   const eq = []; let s = 0; trades.forEach(t => { s += t.pnl; eq.push(s); });
   const lo = Math.min(0, ...eq), hi = Math.max(0, ...eq), rng = (hi - lo) || 1;
   const x = i => 4 + i * (W - 8) / Math.max(1, eq.length - 1), y = v => H - 6 - (v - lo) / rng * (H - 12);
@@ -1290,14 +1291,14 @@ function loadAtmIntoEditor(name) {
   $('atmTrailon').checked = a.trail.on; $('atmTrailTrig').value = a.trail.trig; $('atmTrailDist').value = a.trail.dist;
 }
 function saveAtm() {
-  const name = $('atmName').value.trim(); if (!name) return toast('範本要有名稱');
+  const name = $('atmName').value.trim(); if (!name) return toast('Template needs a name');
   const targets = [];
   [['atmT1t', 'atmT1q'], ['atmT2t', 'atmT2q'], ['atmT3t', 'atmT3q']].forEach(([t, q]) => { const tk = +$(t).value, qy = +$(q).value; if (tk > 0 && qy > 0) targets.push({ ticks: tk, qty: qy }); });
-  if (!targets.length) return toast('至少一個目標 (ticks 與口數 > 0)');
+  if (!targets.length) return toast('At least one target (ticks & qty > 0)');
   atm[name] = { sl: +$('atmSL').value, targets, be: { on: $('atmBEon').checked, trig: +$('atmBEtrig').value, off: +$('atmBEoff').value }, trail: { on: $('atmTrailon').checked, trig: +$('atmTrailTrig').value, dist: +$('atmTrailDist').value } };
-  saveJSON('rt_atm', atm); activeAtm = name; buildAtmSelect(); toast('已儲存 ' + name);
+  saveJSON('rt_atm', atm); activeAtm = name; buildAtmSelect(); toast('Saved ' + name);
 }
-function delAtm() { const name = $('atmName').value.trim(); if (atm[name] && Object.keys(atm).length > 1) { delete atm[name]; saveJSON('rt_atm', atm); activeAtm = Object.keys(atm)[0]; buildAtmSelect(); toast('已刪除 ' + name); } }
+function delAtm() { const name = $('atmName').value.trim(); if (atm[name] && Object.keys(atm).length > 1) { delete atm[name]; saveJSON('rt_atm', atm); activeAtm = Object.keys(atm)[0]; buildAtmSelect(); toast('Deleted ' + name); } }
 
 // ---------- misc ----------
 let toastT = null;
@@ -1307,7 +1308,7 @@ function exportCsv() {
   const rows = trades.map((t, i) => [i + 1, t.side, t.qty, tFmt(t.entryTime), tFmt(t.exitTime), t.entry, t.exit, t.ticks, t.pnl, t.R == null ? '' : t.R.toFixed(3), t.atm, t.exitType].join(','));
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([head + '\n' + rows.join('\n')], { type: 'text/csv' })); a.download = 'replay_trades.csv'; a.click();
 }
-function resetAll() { if (!confirm('清空所有交易紀錄?')) return; trades = []; saveJSON('rt_trades', trades); position = null; entryOrder = null; orders = []; markers = []; refreshMarkers(); drawLines(); renderAll(); }
+function resetAll() { if (!confirm('Clear all trade records?')) return; trades = []; saveJSON('rt_trades', trades); position = null; entryOrder = null; orders = []; markers = []; refreshMarkers(); drawLines(); renderAll(); }
 
 // ---------- wiring ----------
 function wire() {
@@ -1319,10 +1320,10 @@ function wire() {
   $('btnNextDay').onclick = nextDay;
   $('sessionSelect').onchange = (e) => gotoSession(+e.target.value);
   $('tfSelect').onchange = (e) => setTf(+e.target.value);
-  $('dataSelect').onchange = async (e) => { if (locked()) { $('dataSelect').value = dataIdx; return toast('有部位/掛單時不能換資料集'); } const i = +e.target.value; const ok = await loadDataset(DATASETS[i]); if (ok) dataIdx = i; else $('dataSelect').value = dataIdx; };
+  $('dataSelect').onchange = async (e) => { if (locked()) { $('dataSelect').value = dataIdx; return toast("Can't switch dataset while in a position / working order"); } const i = +e.target.value; const ok = await loadDataset(DATASETS[i]); if (ok) dataIdx = i; else $('dataSelect').value = dataIdx; };
   $('speedSelect').onchange = () => { if (playing) { pause(); play(); } };
   $('startSlider').oninput = (e) => setStart(+e.target.value);
-  $('btnPickStart').onclick = () => { if (locked()) { return toast('有部位/掛單時不能設起點'); } setTool('start'); };
+  $('btnPickStart').onclick = () => { if (locked()) { return toast("Can't set start while in a position / working order"); } setTool('start'); };
   $('btnFit').onclick = fitChart;
   $('annUp').onclick = () => setTool('au');
   $('annDown').onclick = () => setTool('ad');
@@ -1336,6 +1337,7 @@ function wire() {
   $('drwFib').onclick = () => setTool('fib');
   $('drwMeasure').onclick = () => setTool('measure');
   $('drwClear').onclick = clearDrawings;
+  $('toolCursor').onclick = () => setTool('');   // deselect any active drawing/annotation tool
   $('ripsterToggle').checked = ripsterOn;
   $('ripsterToggle').onchange = (e) => { ripsterOn = e.target.checked; saveJSON('rt_ripster', ripsterOn); ripsterRepaint(); renderIndLegend(); };
   initChartLegend();
@@ -1346,6 +1348,10 @@ function wire() {
   $('emaPeriods').value = emaPeriods.join(','); $('emaPeriods').onchange = (e) => setEmaPeriods(e.target.value);
   wireOsc();
   $('chartTypeSelect').value = chartType; $('chartTypeSelect').onchange = (e) => setChartType(e.target.value);
+  // Indicators dropdown (top toolbar) + oscillator pane close button
+  $('btnIndicators').onclick = (e) => { e.stopPropagation(); $('indPopover').classList.toggle('open'); $('btnIndicators').classList.toggle('active'); };
+  document.addEventListener('mousedown', (e) => { const p = $('indPopover'), b = $('btnIndicators'); if (p && p.classList.contains('open') && !p.contains(e.target) && !b.contains(e.target)) { p.classList.remove('open'); b.classList.remove('active'); } });
+  $('oscClose').onclick = () => { setOscMode('off'); const s = $('oscSelect'); if (s) s.value = 'off'; };
 
   $('entryType').onchange = () => { $('entryPriceRow').style.display = $('entryType').value === 'market' ? 'none' : ''; if ($('entryType').value !== 'market' && !$('entryPrice').value) $('entryPrice').value = f2(curPx()); };
   $('btnBuy').onclick = () => onEntryButton('long');

@@ -135,7 +135,8 @@ input[type=checkbox]{
    ========================================================================= */
 /* cols: chart | gutterCol | side.  minmax(0,1fr) + min-width:0 let the chart
    column actually SHRINK (a default grid track won't go below its content). */
-#main{display:grid;grid-template-columns:minmax(0,1fr) 6px var(--side-w,320px);min-height:0}
+/* cols: left drawing toolbar | chart | gutterCol | side */
+#main{display:grid;grid-template-columns:46px minmax(0,1fr) 6px var(--side-w,320px);min-height:0}
 #main>#chartwrap{min-width:0;min-height:0}
 #main>#side{min-width:0}
 #chartwrap{position:relative;border-right:1px solid var(--line);background:var(--bg)}
@@ -406,7 +407,7 @@ td.neg{color:var(--red)}
 
 /* Footer tabs are smaller text — nudge their icon down a touch. */
 .tab.ico-btn .material-symbols-outlined{ font-size: 18px; }
-/* mini footer actions (匯出 CSV / 清空) use 12px text — shrink the icon to match. */
+/* mini footer actions (Export CSV / Clear) use 12px text — shrink the icon to match. */
 .mini.ico-btn .material-symbols-outlined{ font-size: 16px; }
 
 /* Color is inherited, so these already work without extra rules:
@@ -502,7 +503,7 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 #indLegend .il-vals b{ font-weight:700; }
 
 /* ===================== Indicator swatches ===================== */
-/* 指標 toggles — reuse existing .card / .row.chk styling; swatch chips per indicator */
+/* indicator toggles — reuse existing .card / .row.chk styling; swatch chips per indicator */
 .ind-swatch{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:middle;flex:none}
 #card-ind .row.chk{margin:7px 0}
 #card-ind .row.chk label{cursor:pointer}
@@ -524,3 +525,50 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
         text-transform:uppercase;background:#0e1116cc;padding:2px 6px;border-radius:5px}
 #oscSelect{padding:2px 6px;font-size:11px;background:#161a20cc;border:1px solid var(--line);
         border-radius:5px;color:var(--txt)}
+
+/* ===================== Left drawing toolbar (TradingView-style vertical strip) ===================== */
+#leftbar{
+  display:flex; flex-direction:column; align-items:center; gap:2px;
+  padding:6px 0; background:var(--panel); border-right:1px solid var(--line); overflow:hidden;
+}
+.lt-btn{
+  width:34px; height:34px; padding:0; display:inline-flex; align-items:center; justify-content:center;
+  background:transparent; border:1px solid transparent; border-radius:6px; color:var(--dim);
+}
+.lt-btn:hover:not(:disabled){ background:var(--panel2); border-color:var(--line); color:var(--txt); }
+.lt-btn .material-symbols-outlined{ font-size:20px; }
+.lt-btn.active{ background:rgba(252,213,53,.14); border-color:var(--brand); color:var(--brand); }
+.lt-btn.lt-green{ color:var(--green); }
+.lt-btn.lt-red{ color:var(--red); }
+.lt-sep{ width:22px; height:1px; background:var(--line); margin:3px 0; flex:none; }
+
+/* ===================== Indicators dropdown (top toolbar) ===================== */
+.tb-ind{ position:relative; }
+#btnIndicators.tb-btn{ display:inline-flex; align-items:center; gap:6px; padding:5px 10px; line-height:1; }
+#btnIndicators .material-symbols-outlined{ font-size:18px; }
+#btnIndicators.active{ background:var(--brand); border-color:var(--brand); color:var(--on-brand); }
+#btnIndicators.active .material-symbols-outlined{ color:var(--on-brand); }
+.popover{
+  position:absolute; top:calc(100% + 6px); left:0; z-index:1000;
+  min-width:250px; display:none; flex-direction:column; gap:1px;
+  background:var(--panel); border:1px solid var(--line); border-radius:var(--r-box);
+  padding:8px; box-shadow:0 12px 34px #000a;
+}
+.popover.open{ display:flex; }
+.popover .pop-h{ font-size:11px; font-weight:600; color:var(--dim); text-transform:uppercase; letter-spacing:.5px; margin:2px 2px 4px; }
+.popover .pop-row{ display:flex; align-items:center; gap:7px; padding:5px 6px; border-radius:6px; cursor:pointer; color:var(--txt); }
+.popover .pop-row:hover{ background:var(--panel2); }
+.popover .pop-row.sub{ justify-content:space-between; color:var(--dim); cursor:default; }
+.popover .pop-row.sub:hover{ background:transparent; }
+.popover .pop-row.sub input,.popover .pop-row.sub select{ padding:3px 6px; font-size:12px; }
+.popover .pop-row.sub input{ width:112px; }
+.popover .pop-note{ font-size:11px; color:var(--dim); padding:0 6px 4px 32px; }
+
+/* ===================== Oscillator pane close button ===================== */
+#oscClose.osc-x{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:22px; height:22px; padding:0; line-height:1;
+  background:#161a20cc; border:1px solid var(--line); border-radius:5px; color:var(--dim);
+}
+#oscClose.osc-x:hover{ background:#2a1418; border-color:#7a3640; color:var(--red); }
+#oscClose .material-symbols-outlined{ font-size:16px; }
