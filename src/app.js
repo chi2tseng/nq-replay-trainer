@@ -717,16 +717,18 @@ if (candle.attachPrimitive) candle.attachPrimitive(drawingsPrimitive);
 function repaintOverlays() { if (ripsterPrimitive._req) ripsterPrimitive._req(); if (drawingsPrimitive._req) drawingsPrimitive._req(); indicatorRepaint(); }
 function handleDrawClick(t, time, price) {
   price = rnd(price);
-  if (t === 'hl') { drawings.push({ type: 'hl', p1: { t: time, p: price }, color: '#d1d4dc' }); selDrawing = drawings[drawings.length - 1]; saveJSON('rt_drawings', drawings); repaintOverlays(); return; }
-  if (t === 'rr') {   // Long/Short position: click1 = entry, click2 = stop; target auto-placed at 2R
-    if (!pendingPt) { pendingPt = { t: time, p: price }; repaintOverlays(); toast('Click the stop level'); return; }
-    const entry = pendingPt.p, stop = price, target = rnd(entry + (entry - stop) * RR_DEFAULT);
-    drawings.push({ type: 'rr', p1: { t: pendingPt.t, p: entry }, p2: { t: time, p: price }, stop, target, color: '#fcd535' });
-    pendingPt = null; selDrawing = drawings[drawings.length - 1]; saveJSON('rt_drawings', drawings); repaintOverlays(); return;
+  if (t === 'hl') { drawings.push({ type: 'hl', p1: { t: time, p: price }, color: '#d1d4dc' }); selDrawing = drawings[drawings.length - 1]; saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return; }
+  if (t === 'rr') {   // Long/Short position — ONE click: entry here, default risk below, target at 2R (then drag to adjust)
+    const entry = price, riskT = rrDefaultRiskTicks();
+    const stop = rnd(entry - riskT * TICK), target = rnd(entry + riskT * RR_DEFAULT * TICK);
+    const ci = bars.findIndex(b => b.time === time), hi = Math.min(idx, bars.length - 1);
+    const rb = bars[Math.max(0, Math.min(hi, (ci < 0 ? hi : ci) + 20))];
+    drawings.push({ type: 'rr', p1: { t: time, p: entry }, p2: { t: rb ? rb.time : time, p: entry }, stop, target, color: '#fcd535' });
+    selDrawing = drawings[drawings.length - 1]; saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return;
   }
   if (!pendingPt) { pendingPt = { t: time, p: price }; repaintOverlays(); toast('Click the second point'); return; }
   drawings.push({ type: t, p1: pendingPt, p2: { t: time, p: price }, color: t === 'box' ? '#2962ff' : t === 'fib' ? '#fcd535' : '#d1d4dc' });
-  pendingPt = null; selDrawing = drawings[drawings.length - 1]; saveJSON('rt_drawings', drawings); repaintOverlays();
+  pendingPt = null; selDrawing = drawings[drawings.length - 1]; saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw();
 }
 function clearDrawings() { drawings = []; pendingPt = null; saveJSON('rt_drawings', drawings); repaintOverlays(); toast('Drawings cleared'); }
 // ---- Fibonacci retracement (drawing type 'fib', 2-point) ----
@@ -773,29 +775,58 @@ function drawMeasure(ctx, d, X, Y) {
   ctx.restore();
 }
 // ---- Long/Short position R:R tool (drawing type 'rr') — entry / stop / target zones + R:R ----
-const RR_DEFAULT = 2;   // default reward = 2R when first placed
+const RR_DEFAULT = 2, RR_BOXW = 240;   // default reward = 2R; default box width (px) when no explicit right edge
+function rrRange(d, X) {                // box left/right x (px); falls back to a fixed width near the live edge
+  const xe = X(d.p1.t), xa = (xe == null || !isFinite(xe)) ? 0 : xe;
+  let xb = d.p2 ? X(d.p2.t) : null;
+  if (xb == null || !isFinite(xb) || xb <= xa + 8) xb = xa + RR_BOXW;
+  return { xa, xb };
+}
+function rrDefaultRiskTicks() {          // a visible default = ~25% of the last 30 revealed bars' range
+  const lo0 = Math.max(0, idx - 30); let hi = -Infinity, lo = Infinity;
+  for (let i = lo0; i <= idx && i < bars.length; i++) { hi = Math.max(hi, bars[i].high); lo = Math.min(lo, bars[i].low); }
+  const range = (isFinite(hi) && isFinite(lo)) ? hi - lo : 0;
+  return Math.max(8, Math.round((range * 0.25) / TICK) || 8);
+}
 function drawRR(ctx, d, X, Y, W) {
-  const xe = X(d.p1.t), x2 = X(d.p2.t), ye = Y(d.p1.p), ys = Y(d.stop), yt = Y(d.target);
+  const ye = Y(d.p1.p), ys = Y(d.stop), yt = Y(d.target);
   if (ye == null || ys == null || yt == null) return;
-  let xa = Math.min(xe == null ? 0 : xe, x2 == null ? 0 : x2), xb = Math.max(xe == null ? 0 : xe, x2 == null ? 0 : x2);
-  if (!isFinite(xa)) xa = 0; if (!isFinite(xb) || xb <= xa) xb = xa + 120;
-  const w = Math.max(2, xb - xa), long = d.target >= d.p1.p;
+  const { xa, xb } = rrRange(d, X), w = Math.max(2, xb - xa), cx = (xa + xb) / 2;
   ctx.save();
   ctx.globalAlpha = 0.13;
   ctx.fillStyle = '#0ecb81'; ctx.fillRect(xa, Math.min(ye, yt), w, Math.abs(yt - ye));   // reward zone
   ctx.fillStyle = '#f6465d'; ctx.fillRect(xa, Math.min(ye, ys), w, Math.abs(ys - ye));   // risk zone
   ctx.globalAlpha = 1;
-  const hline = (yy, col, dash) => { ctx.strokeStyle = col; ctx.lineWidth = 1.4; ctx.setLineDash(dash || []); ctx.beginPath(); ctx.moveTo(xa, yy); ctx.lineTo(xb, yy); ctx.stroke(); };
-  hline(yt, '#0ecb81'); hline(ys, '#f6465d'); hline(ye, '#d1d4dc', [5, 3]); ctx.setLineDash([]);
+  ctx.strokeStyle = 'rgba(120,130,150,0.45)'; ctx.lineWidth = 1; ctx.strokeRect(xa, Math.min(yt, ys), w, Math.abs(yt - ys));
+  const hline = (yy, col) => { ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(xa, yy); ctx.lineTo(xb, yy); ctx.stroke(); };
+  hline(yt, '#0ecb81'); hline(ys, '#f6465d');
+  ctx.setLineDash([5, 3]); hline(ye, '#d1d4dc'); ctx.setLineDash([]);
+  // blue handles — squares at the 4 box corners, circles at the entry edges
+  const sq = (x, y) => { ctx.fillStyle = '#3b82f6'; ctx.strokeStyle = '#0b0e11'; ctx.lineWidth = 1.5; ctx.fillRect(x - 3.5, y - 3.5, 7, 7); ctx.strokeRect(x - 3.5, y - 3.5, 7, 7); };
+  const ci = (x, y) => { ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fillStyle = '#3b82f6'; ctx.fill(); ctx.strokeStyle = '#0b0e11'; ctx.lineWidth = 1.5; ctx.stroke(); };
+  sq(xa, yt); sq(xb, yt); sq(xa, ys); sq(xb, ys); ci(xa, ye); ci(xb, ye);
+  // metrics + centered label pills (price · % · $ amount), sized by the order-panel qty
+  const qty = Math.max(1, parseInt(($('qty') || {}).value, 10) || 1);
   const riskT = Math.abs(tcount(d.p1.p, d.stop)), rewT = Math.abs(tcount(d.target, d.p1.p));
   const rr = riskT > 0 ? rewT / riskT : 0;
-  ctx.font = '600 11px ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
-  let lx = xb + 6; const longest = 150; if (lx + longest > W) lx = Math.max(2, xa + 6);   // keep labels on-screen
-  ctx.fillStyle = '#0ecb81'; ctx.fillText(`Target +${rewT}t  ${usd(rewT * INSTR.tickValue)}/c`, lx, yt);
-  ctx.fillStyle = '#f6465d'; ctx.fillText(`Stop −${riskT}t  ${usd(riskT * INSTR.tickValue)}/c`, lx, ys);
-  ctx.fillStyle = '#eaecef'; ctx.fillText(`${long ? 'LONG' : 'SHORT'} @ ${f2(d.p1.p)}  ·  R:R ${rr.toFixed(2)}`, lx, ye);
+  const tPct = d.p1.p ? (d.target - d.p1.p) / d.p1.p * 100 : 0, sPct = d.p1.p ? (d.stop - d.p1.p) / d.p1.p * 100 : 0;
+  const sgn = v => (v >= 0 ? '+' : '');
+  const pill = (text, y, bg, fg) => {
+    ctx.font = '600 11px ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif'; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+    const lines = String(text).split('\n'); let tw = 0; for (const ln of lines) tw = Math.max(tw, ctx.measureText(ln).width);
+    const padX = 9, lh = 14, pw = tw + padX * 2, ph = lines.length * lh + 8;
+    const px = Math.max(2, Math.min(cx - pw / 2, W - pw - 2)), py = y - ph / 2;
+    ctx.globalAlpha = 0.94; ctx.fillStyle = bg;
+    if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(px, py, pw, ph, 5); ctx.fill(); } else ctx.fillRect(px, py, pw, ph);
+    ctx.globalAlpha = 1; ctx.fillStyle = fg;
+    lines.forEach((ln, i) => ctx.fillText(ln, px + pw / 2, py + 4 + lh / 2 + i * lh));
+  };
+  pill(`Target ${f2(d.target)}  (${sgn(tPct)}${tPct.toFixed(2)}%)\nAmount ${usd(rewT * INSTR.tickValue * qty)}`, yt, '#0b3b2a', '#16d18c');
+  pill(`R:R ${rr.toFixed(2)}    Qty ${qty}`, ye, '#1b2027', '#eaecef');
+  pill(`Stop ${f2(d.stop)}  (${sgn(sPct)}${sPct.toFixed(2)}%)\nAmount ${usd(riskT * INSTR.tickValue * qty)}`, ys, '#3b1418', '#ff5b6e');
   ctx.restore();
 }
+function resetToolAfterDraw() { tool = ''; pendingPt = null; updateToolUI(); }   // revert to cursor after a completed drawing (TradingView default)
 
 // ---------- chart tools: drag stop/target/entry lines + click tools (set-start / annotations) ----------
 let tool = '', drag = null, dragH = null;   // dragH = drawing-anchor being dragged (endpoint edit)
@@ -834,13 +865,13 @@ function drawingHandles() {
   const X = (t) => ts.timeToCoordinate(t), Y = (p) => candle.priceToCoordinate(p);
   for (const d of drawings) {
     if (d.type === 'hl') { const y = Y(d.p1.p); if (y != null) out.push({ d, horiz: true, hy: y, apply: (t, p) => { d.p1.p = p; } }); continue; }
-    if (d.type === 'rr') {   // entry handle shifts all 3 levels together; stop / target move on their own
-      const xe = X(d.p1.t), eY = Y(d.p1.p), sY = Y(d.stop), tY = Y(d.target);
-      if (xe != null) {
-        if (eY != null) out.push({ d, hx: xe, hy: eY, apply: (t, p) => { const dp = p - d.p1.p; d.p1.p = p; d.stop += dp; d.target += dp; if (t != null) d.p1.t = t; } });
-        if (sY != null) out.push({ d, hx: xe, hy: sY, apply: (t, p) => { d.stop = p; } });
-        if (tY != null) out.push({ d, hx: xe, hy: tY, apply: (t, p) => { d.target = p; } });
-      }
+    if (d.type === 'rr') {   // entry handle shifts all 3 levels; stop/target move individually; grabbable at both box edges
+      const { xa, xb } = rrRange(d, X), eY = Y(d.p1.p), sY = Y(d.stop), tY = Y(d.target);
+      [xa, xb].forEach(hx => {
+        if (eY != null) out.push({ d, hx, hy: eY, apply: (t, p) => { const dp = p - d.p1.p; d.p1.p = p; d.stop += dp; d.target += dp; } });
+        if (sY != null) out.push({ d, hx, hy: sY, apply: (t, p) => { d.stop = p; } });
+        if (tY != null) out.push({ d, hx, hy: tY, apply: (t, p) => { d.target = p; } });
+      });
       continue;
     }
     const x1 = X(d.p1.t), y1 = Y(d.p1.p), x2 = d.p2 ? X(d.p2.t) : null, y2 = d.p2 ? Y(d.p2.p) : null;
@@ -866,7 +897,7 @@ function drawingAt(x, y) {
     const d = drawings[k];
     if (d.type === 'hl') { const yy = Y(d.p1.p); if (yy != null && Math.abs(yy - y) < TH) return d; continue; }
     const x1 = X(d.p1.t), y1 = Y(d.p1.p);
-    if (d.type === 'rr') { const x2 = X(d.p2.t); if (x1 == null || x2 == null) continue; if (x < Math.min(x1, x2) - 4 || x > Math.max(x1, x2) + 4) continue; for (const p of [d.p1.p, d.stop, d.target]) { const yy = Y(p); if (yy != null && Math.abs(yy - y) < TH) return d; } continue; }
+    if (d.type === 'rr') { const { xa, xb } = rrRange(d, X); if (x < xa - 4 || x > xb + 4) continue; const yt = Y(d.target), ys = Y(d.stop); if (yt != null && ys != null && y >= Math.min(yt, ys) - TH && y <= Math.max(yt, ys) + TH) return d; continue; }
     if (x1 == null || y1 == null) continue;
     if (d.type === 'fib') { const x2 = X(d.p2.t), xL = Math.min(x1, x2 == null ? x1 : x2); if (x < xL - 4) continue; const span = d.p2.p - d.p1.p; for (const f of FIB_LEVELS) { const yy = Y(d.p1.p + span * f.lv); if (yy != null && Math.abs(yy - y) < TH) return d; } continue; }
     const x2 = d.p2 ? X(d.p2.t) : null, y2 = d.p2 ? Y(d.p2.p) : null;
@@ -885,7 +916,7 @@ function drawingAt(x, y) {
 function drawingFields(d) {
   const A = [];
   if (d.type === 'hl') { A.push({ obj: d.p1, key: 'p', kind: 'p' }); return A; }
-  if (d.type === 'rr') { A.push({ obj: d.p1, key: 'p', kind: 'p' }, { obj: d, key: 'stop', kind: 'p' }, { obj: d, key: 'target', kind: 'p' }, { obj: d.p1, key: 't', kind: 't' }, { obj: d.p2, key: 't', kind: 't' }); return A; }
+  if (d.type === 'rr') { A.push({ obj: d.p1, key: 'p', kind: 'p' }, { obj: d, key: 'stop', kind: 'p' }, { obj: d, key: 'target', kind: 'p' }, { obj: d.p1, key: 't', kind: 't' }); if (d.p2) A.push({ obj: d.p2, key: 't', kind: 't' }); return A; }
   A.push({ obj: d.p1, key: 'p', kind: 'p' }, { obj: d.p1, key: 't', kind: 't' });
   if (d.p2) A.push({ obj: d.p2, key: 'p', kind: 'p' }, { obj: d.p2, key: 't', kind: 't' });
   return A;
@@ -926,7 +957,7 @@ chart.subscribeClick(param => {
   const i = bars.findIndex(b => b.time === param.time);
   if (i < 0) return;
   if (tool === 'start') { if (!locked()) setStart(bars[i].subEnd); tool = ''; updateToolUI(); return; }
-  if (tool === 'au' || tool === 'ad' || tool === 'long' || tool === 'short') { placeAnnotation(tool, bars[i].time); return; }
+  if (tool === 'au' || tool === 'ad' || tool === 'long' || tool === 'short') { placeAnnotation(tool, bars[i].time); resetToolAfterDraw(); return; }
   const price = param.point ? candle.coordinateToPrice(param.point.y) : bars[i].close;   // hl / tl / ray / box
   if (price != null) handleDrawClick(tool, param.time, price);
 });
