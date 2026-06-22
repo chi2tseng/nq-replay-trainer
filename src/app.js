@@ -775,7 +775,7 @@ function drawMeasure(ctx, d, X, Y) {
   ctx.restore();
 }
 // ---- Long/Short position R:R tool (drawing type 'rr') — entry / stop / target zones + R:R ----
-const RR_DEFAULT = 2, RR_BOXW = 240;   // default reward = 2R; default box width (px) when no explicit right edge
+const RR_DEFAULT = 2, RR_BOXW = 300;   // default reward = 2R; default box width (px) when no explicit right edge
 function rrRange(d, X) {                // box left/right x (px); falls back to a fixed width near the live edge
   const xe = X(d.p1.t), xa = (xe == null || !isFinite(xe)) ? 0 : xe;
   let xb = d.p2 ? X(d.p2.t) : null;
@@ -793,7 +793,7 @@ function drawRR(ctx, d, X, Y, W) {
   if (ye == null || ys == null || yt == null) return;
   const { xa, xb } = rrRange(d, X), w = Math.max(2, xb - xa), cx = (xa + xb) / 2;
   ctx.save();
-  ctx.globalAlpha = 0.13;
+  ctx.globalAlpha = 0.16;
   ctx.fillStyle = '#0ecb81'; ctx.fillRect(xa, Math.min(ye, yt), w, Math.abs(yt - ye));   // reward zone
   ctx.fillStyle = '#f6465d'; ctx.fillRect(xa, Math.min(ye, ys), w, Math.abs(ys - ye));   // risk zone
   ctx.globalAlpha = 1;
@@ -805,11 +805,15 @@ function drawRR(ctx, d, X, Y, W) {
   const sq = (x, y) => { ctx.fillStyle = '#3b82f6'; ctx.strokeStyle = '#0b0e11'; ctx.lineWidth = 1.5; ctx.fillRect(x - 3.5, y - 3.5, 7, 7); ctx.strokeRect(x - 3.5, y - 3.5, 7, 7); };
   const ci = (x, y) => { ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fillStyle = '#3b82f6'; ctx.fill(); ctx.strokeStyle = '#0b0e11'; ctx.lineWidth = 1.5; ctx.stroke(); };
   sq(xa, yt); sq(xb, yt); sq(xa, ys); sq(xb, ys); ci(xa, ye); ci(xb, ye);
-  // metrics + centered label pills (price · % · $ amount), sized by the order-panel qty
+  // metrics + centered label pills — matches TradingView's Long/Short position tool
   const qty = Math.max(1, parseInt(($('qty') || {}).value, 10) || 1);
+  const long = d.target >= d.p1.p, pv = INSTR.tickValue / INSTR.tickSize;          // $ per point
   const riskT = Math.abs(tcount(d.p1.p, d.stop)), rewT = Math.abs(tcount(d.target, d.p1.p));
   const rr = riskT > 0 ? rewT / riskT : 0;
   const tPct = d.p1.p ? (d.target - d.p1.p) / d.p1.p * 100 : 0, sPct = d.p1.p ? (d.stop - d.p1.p) / d.p1.p * 100 : 0;
+  const tPts = Math.abs(d.target - d.p1.p), sPts = Math.abs(d.p1.p - d.stop);
+  const cur = (typeof curPx === 'function' && baseBars.length) ? curPx() : d.p1.p;
+  const openPnl = (long ? cur - d.p1.p : d.p1.p - cur) * pv * qty;                  // P&L if entered at the entry line, marked at the live bar
   const sgn = v => (v >= 0 ? '+' : '');
   const pill = (text, y, bg, fg) => {
     ctx.font = '600 11px ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif'; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
@@ -821,9 +825,9 @@ function drawRR(ctx, d, X, Y, W) {
     ctx.globalAlpha = 1; ctx.fillStyle = fg;
     lines.forEach((ln, i) => ctx.fillText(ln, px + pw / 2, py + 4 + lh / 2 + i * lh));
   };
-  pill(`Target ${f2(d.target)}  (${sgn(tPct)}${tPct.toFixed(2)}%)\nAmount ${usd(rewT * INSTR.tickValue * qty)}`, yt, '#0b3b2a', '#16d18c');
-  pill(`R:R ${rr.toFixed(2)}    Qty ${qty}`, ye, '#1b2027', '#eaecef');
-  pill(`Stop ${f2(d.stop)}  (${sgn(sPct)}${sPct.toFixed(2)}%)\nAmount ${usd(riskT * INSTR.tickValue * qty)}`, ys, '#3b1418', '#ff5b6e');
+  pill(`Target: ${f2(d.target)} (${sgn(tPct)}${tPct.toFixed(2)}%) ${tPts.toFixed(2)}, Amount: ${usd(rewT * INSTR.tickValue * qty)}`, yt, '#0b3b2a', '#16d18c');
+  pill(`Open PnL: ${usd(openPnl)}, Qty: ${qty}\nRisk/reward ratio: ${rr.toFixed(2)}`, ye, '#1b2027', '#eaecef');
+  pill(`Stop: ${f2(d.stop)} (${sgn(sPct)}${sPct.toFixed(2)}%) ${sPts.toFixed(2)}, Amount: ${usd(riskT * INSTR.tickValue * qty)}`, ys, '#3b1418', '#ff5b6e');
   ctx.restore();
 }
 function resetToolAfterDraw() { tool = ''; pendingPt = null; updateToolUI(); }   // revert to cursor after a completed drawing (TradingView default)
