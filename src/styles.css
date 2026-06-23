@@ -4,23 +4,24 @@
    ========================================================================= */
 
 :root{
-  /* surfaces */
-  --bg:#0b0e11;          /* near-black canvas            */
-  --panel:#1e2329;       /* card / bar surface           */
-  --panel2:#2b3139;      /* elevated control / inset     */
-  --line:#2b3139;        /* hairline border              */
+  /* surfaces — TradingView dark theme */
+  --bg:#131722;          /* chart canvas (TV dark navy)  */
+  --panel:#1e222d;       /* toolbar / card / bar surface */
+  --panel2:#2a2e39;      /* elevated control / inset     */
+  --line:#2a2e39;        /* hairline border              */
+  --hover:#2a2e39;       /* hover surface                */
   /* text */
-  --txt:#eaecef;         /* body text                    */
-  --dim:#707a8a;         /* muted / labels               */
-  /* brand + semantic */
-  --brand:#fcd535;       /* Binance yellow (primary)     */
-  --brand-hi:#f0b90b;    /* yellow pressed/active        */
-  --on-brand:#181a20;    /* black text on yellow         */
-  --green:#0ecb81;       /* up / buy                     */
-  --red:#f6465d;         /* down / sell                  */
-  --info:#3b82f6;        /* info blue                    */
-  /* radii */
-  --r-btn:6px; --r-box:8px; --r-elev:12px;
+  --txt:#d1d4dc;         /* body text                    */
+  --dim:#787b86;         /* muted / labels               */
+  /* brand + semantic — TV blue accent */
+  --brand:#2962ff;       /* TradingView blue (primary)   */
+  --brand-hi:#1e53e5;    /* blue pressed/active          */
+  --on-brand:#ffffff;    /* white text on blue           */
+  --green:#26a69a;       /* up / buy (TV teal-green)     */
+  --red:#ef5350;         /* down / sell (TV red)         */
+  --info:#2962ff;        /* info blue                    */
+  /* radii — TV uses tight corners */
+  --r-btn:4px; --r-box:6px; --r-elev:8px;
   /* mono stack */
   --mono:ui-monospace,"SF Mono",Consolas,"Liberation Mono",Menlo,monospace;
 }
@@ -45,7 +46,7 @@ button{
   padding:6px 10px;font-weight:500;
   transition:background .12s ease,border-color .12s ease,color .12s ease,filter .12s ease;
 }
-button:hover:not(:disabled){background:#363d47;border-color:#3a424d}
+button:hover:not(:disabled){background:#2f3340;border-color:#363a45}
 button:active:not(:disabled){filter:brightness(.94)}
 button:disabled{opacity:.38;cursor:not-allowed}
 
@@ -57,8 +58,8 @@ select,input{
   padding:6px 8px;
   transition:border-color .12s ease,background .12s ease;
 }
-select:hover,input:hover{border-color:#3a424d}
-select:focus,input:focus{outline:none;border-color:var(--brand);background:#222831}
+select:hover,input:hover{border-color:#363a45}
+select:focus,input:focus{outline:none;border-color:var(--brand);background:#2a2e39}
 input[type=number]{width:72px}
 input[type=checkbox]{
   accent-color:var(--brand);
@@ -189,17 +190,17 @@ details.card[open]>summary.card-h{margin-bottom:10px}
 .btn-row button{flex:1}
 
 button.buy{
-  background:var(--green);border-color:var(--green);color:#05130d;font-weight:700;
+  background:var(--green);border-color:var(--green);color:#ffffff;font-weight:700;
 }
 button.buy:hover:not(:disabled){background:#0fd98a;border-color:#0fd98a}
 button.sell{
-  background:var(--red);border-color:var(--red);color:#1c0508;font-weight:700;
+  background:var(--red);border-color:var(--red);color:#ffffff;font-weight:700;
 }
 button.sell:hover:not(:disabled){background:#ff5468;border-color:#ff5468}
 button.flat{
   background:var(--panel2);border-color:var(--line);color:var(--txt);font-weight:500;
 }
-button.flat:hover:not(:disabled){background:#363d47}
+button.flat:hover:not(:disabled){background:#2f3340}
 button.rev{
   background:var(--brand);border-color:var(--brand);color:var(--on-brand);font-weight:700;
 }
@@ -270,7 +271,7 @@ button.active:hover:not(:disabled){background:var(--brand-hi);border-color:var(-
   font-weight:500;
   transition:background .12s ease,color .12s ease;
 }
-.tab:hover{color:var(--txt);background:#22272e}
+.tab:hover{color:var(--txt);background:#2a2e39}
 .tab.active{
   background:var(--panel2);color:var(--txt);border-color:var(--line);
   box-shadow:inset 0 -2px 0 var(--brand);
@@ -295,7 +296,7 @@ th,td{
   border-bottom:1px solid var(--line);white-space:nowrap;
 }
 tbody tr:last-child td{border-bottom:none}
-tbody tr:hover td{background:#22272e}
+tbody tr:hover td{background:#2a2e39}
 th:nth-child(1),td:nth-child(1),
 th:nth-child(2),td:nth-child(2){text-align:left}
 th{
@@ -340,7 +341,7 @@ td.neg{color:var(--red)}
    ========================================================================= */
 .toast{
   position:fixed;bottom:18px;left:50%;transform:translateX(-50%) translateY(6px);
-  background:#181a20;color:var(--txt);
+  background:#1e222d;color:var(--txt);
   border:1px solid var(--line);
   padding:9px 16px;border-radius:var(--r-box);
   font-size:13px;
@@ -353,9 +354,9 @@ td.neg{color:var(--red)}
 /* =========================================================================
    Custom scrollbars (WebKit + Firefox)
    ========================================================================= */
-*{scrollbar-width:thin;scrollbar-color:#3a424d transparent}
+*{scrollbar-width:thin;scrollbar-color:#363a45 transparent}
 ::-webkit-scrollbar{width:10px;height:10px}
-::-webkit-scrollbar-thumb{background:#3a424d;border-radius:6px;border:2px solid var(--bg)}
+::-webkit-scrollbar-thumb{background:#363a45;border-radius:6px;border:2px solid var(--bg)}
 ::-webkit-scrollbar-thumb:hover{background:#4a525e}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-corner{background:transparent}
@@ -448,8 +449,8 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 #ctxMenu .ctx-head{padding:6px 10px;color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--line);margin-bottom:4px}
 #ctxMenu .ctx-item{padding:7px 10px;border-radius:4px;cursor:pointer;color:var(--txt);white-space:nowrap}
 #ctxMenu .ctx-item:hover{background:var(--panel2)}
-#ctxMenu .ctx-item.buy:hover{background:rgba(14,203,129,.16);color:var(--green)}
-#ctxMenu .ctx-item.sell:hover{background:rgba(246,70,93,.16);color:var(--red)}
+#ctxMenu .ctx-item.buy:hover{background:rgba(38,166,154,.18);color:var(--green)}
+#ctxMenu .ctx-item.sell:hover{background:rgba(239,83,80,.18);color:var(--red)}
 #ctxMenu .ctx-sep{height:1px;background:var(--line);margin:4px 6px}
 
 /* ===================== Chart legend (OHLCV readout) ===================== */
@@ -522,8 +523,8 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
         pointer-events:none}
 #oscBar > *{pointer-events:auto}
 #oscBar .osc-tag{font-size:10px;font-weight:700;letter-spacing:.4px;color:var(--dim);
-        text-transform:uppercase;background:#0e1116cc;padding:2px 6px;border-radius:5px}
-#oscSelect{padding:2px 6px;font-size:11px;background:#161a20cc;border:1px solid var(--line);
+        text-transform:uppercase;background:#1e222dcc;padding:2px 6px;border-radius:5px}
+#oscSelect{padding:2px 6px;font-size:11px;background:#1e222dcc;border:1px solid var(--line);
         border-radius:5px;color:var(--txt)}
 
 /* ===================== Left drawing toolbar (TradingView-style vertical strip) ===================== */
@@ -568,7 +569,7 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 #oscClose.osc-x{
   display:inline-flex; align-items:center; justify-content:center;
   width:22px; height:22px; padding:0; line-height:1;
-  background:#161a20cc; border:1px solid var(--line); border-radius:5px; color:var(--dim);
+  background:#1e222dcc; border:1px solid var(--line); border-radius:5px; color:var(--dim);
 }
 #oscClose.osc-x:hover{ background:#2a1418; border-color:#7a3640; color:var(--red); }
 #oscClose .material-symbols-outlined{ font-size:16px; }
@@ -578,7 +579,7 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 .ord-card .row.inset{ background:var(--panel2); border:1px solid var(--line); border-radius:7px; padding:6px 8px; margin:8px 0; }
 .seg{ display:flex; margin:8px 0; border:1px solid var(--line); border-radius:7px; overflow:hidden; background:var(--panel2); }
 .seg-btn{ flex:1; border:none; border-radius:0; background:transparent; color:var(--dim); padding:7px 0; font-weight:600; font-size:12px; }
-.seg-btn:hover:not(.active){ background:#363d47; color:var(--txt); }
+.seg-btn:hover:not(.active){ background:#2f3340; color:var(--txt); }
 .seg-btn.active{ background:var(--brand); color:var(--on-brand); }
 .seg-btn + .seg-btn{ border-left:1px solid var(--line); }
 .ord-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:8px 0; }
@@ -587,15 +588,15 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 .ord-field select{ width:100%; }
 .stepper{ display:flex; align-items:stretch; border:1px solid var(--line); border-radius:7px; overflow:hidden; background:var(--panel2); }
 .stepper button{ width:28px; border:none; border-radius:0; background:transparent; color:var(--txt); font-size:16px; padding:0; flex:none; }
-.stepper button:hover{ background:#363d47; }
+.stepper button:hover{ background:#2f3340; }
 .stepper input{ flex:1; width:auto; min-width:0; text-align:center; border:none; border-left:1px solid var(--line); border-right:1px solid var(--line); border-radius:0; background:transparent; }
 .bs-row{ display:flex; gap:8px; margin-top:8px; }
 .bs{ flex:1; display:flex; flex-direction:column; align-items:center; gap:1px; padding:9px 0; border:none; border-radius:8px; font-weight:700; cursor:pointer; transition:filter .12s, background .12s; }
 .bs .bs-t{ font-size:15px; letter-spacing:.5px; }
 .bs .bs-s{ font-size:10px; font-weight:600; opacity:.8; }
-.bs.buy{ background:var(--green); color:#05130d; }
+.bs.buy{ background:var(--green); color:#ffffff; }
 .bs.buy:hover{ background:#0fd98a; }
-.bs.sell{ background:var(--red); color:#1c0508; }
+.bs.sell{ background:var(--red); color:#ffffff; }
 .bs.sell:hover{ background:#ff5468; }
 .ico-btn.wide{ width:100%; margin-top:8px; }
 /* working-order rows get a cancel × */
