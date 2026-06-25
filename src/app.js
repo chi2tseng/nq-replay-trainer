@@ -733,7 +733,7 @@ const drawingsPrimitive = {
 if (candle.attachPrimitive) candle.attachPrimitive(drawingsPrimitive);
 function repaintOverlays() { if (ripsterPrimitive._req) ripsterPrimitive._req(); if (drawingsPrimitive._req) drawingsPrimitive._req(); indicatorRepaint(); }
 function handleDrawClick(t, time, price) {
-  price = rnd(price);
+  price = magnetPrice(time, price);   // magnet on -> snap to nearest OHLC; off -> rnd(price)
   if (t === 'hl') { drawings.push({ type: 'hl', p1: { t: time, p: price }, color: '#d1d4dc' }); selDrawing = drawings[drawings.length - 1]; saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return; }
   if (t === 'rr') {   // Long/Short position — ONE click: entry here, default risk below, target at 2R (then drag to adjust)
     const entry = price, riskT = rrDefaultRiskTicks();
@@ -851,6 +851,15 @@ function resetToolAfterDraw() { tool = ''; pendingPt = null; updateToolUI(); }  
 
 // ---------- chart tools: drag stop/target/entry lines + click tools (set-start / annotations) ----------
 let tool = '', drag = null, dragH = null;   // dragH = drawing-anchor being dragged (endpoint edit)
+let magnet = loadJSON('rt_magnet', false);  // snap drawing points to the nearest OHLC of the hovered bar (TradingView magnet)
+function barByTime(t) { let lo = 0, hi = bars.length - 1; while (lo <= hi) { const m = (lo + hi) >> 1; if (bars[m].time === t) return bars[m]; if (bars[m].time < t) lo = m + 1; else hi = m - 1; } return null; }
+function magnetPrice(time, raw) {
+  if (!magnet) return rnd(raw);
+  const b = barByTime(time); if (!b) return rnd(raw);
+  let best = b.close, bd = Infinity;
+  for (const v of [b.open, b.high, b.low, b.close]) { const d = Math.abs(v - raw); if (d < bd) { bd = d; best = v; } }
+  return rnd(best);
+}
 let dragBody = null, selDrawing = null;     // dragBody = whole-drawing move; selDrawing = currently selected drawing
 let annotations = loadJSON('rt_annotations', []);   // {baseTime, position, color, shape, text}
 let drawings = loadJSON('rt_drawings', []);         // {type:'hl'|'tl'|'ray'|'box', p1:{t,p}, p2?:{t,p}, color}
@@ -996,7 +1005,7 @@ window.addEventListener('mousemove', e => {
   const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
   if (dragH) {                                    // editing a drawing endpoint: snap price to tick, time to bar grid
     const p = candle.coordinateToPrice(y);
-    if (p != null) { dragH.apply(dragH.horiz ? null : xToTime(x), rnd(p)); repaintOverlays(); }
+    if (p != null) { const st = xToTime(x); dragH.apply(dragH.horiz ? null : st, magnetPrice(st, p)); repaintOverlays(); }
     return;
   }
   if (dragBody) { moveBody(x, y); return; }       // moving a whole drawing
@@ -1562,6 +1571,8 @@ function wire() {
   $('drwClear').onclick = clearDrawings;
   $('drwRR').onclick = () => setTool('rr');       // Long/Short position (R:R) tool
   $('toolCursor').onclick = () => setTool('');   // deselect any active drawing/annotation tool
+  $('btnMagnet').classList.toggle('active', magnet);
+  $('btnMagnet').onclick = () => { magnet = !magnet; saveJSON('rt_magnet', magnet); $('btnMagnet').classList.toggle('active', magnet); toast(magnet ? 'Magnet on — snaps to OHLC' : 'Magnet off'); };
   $('ripsterToggle').checked = ripsterOn;
   $('ripsterToggle').onchange = (e) => { ripsterOn = e.target.checked; saveJSON('rt_ripster', ripsterOn); ripsterRepaint(); renderIndLegend(); };
   initChartLegend();

@@ -538,6 +538,7 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 }
 .lt-btn:hover:not(:disabled){ background:var(--panel2); border-color:var(--line); color:var(--txt); }
 .lt-btn .material-symbols-outlined{ font-size:20px; }
+.lt-btn svg{ display:block; }
 .lt-btn.active{ background:rgba(252,213,53,.14); border-color:var(--brand); color:var(--brand); }
 .lt-btn.lt-green{ color:var(--green); }
 .lt-btn.lt-red{ color:var(--red); }

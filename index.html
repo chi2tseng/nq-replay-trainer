@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>NQ Replay Trainer</title>
-<link rel="stylesheet" href="src/styles.css?v=21" />
+<link rel="stylesheet" href="src/styles.css?v=22" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,400..600,0..1,0&display=block">
@@ -73,6 +73,7 @@
     <!-- left drawing/annotation toolbar (TradingView-style) -->
     <nav id="leftbar">
       <button id="toolCursor" class="lt-btn active" title="Cursor — no tool (Esc)"><span class="material-symbols-outlined">arrow_selector_tool</span></button>
+      <button id="btnMagnet" class="lt-btn" title="Magnet — snap drawings to nearest OHLC"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4v7a6 6 0 0 0 12 0V4"/><path d="M4.5 4h3M16.5 4h3"/></svg></button>
       <div class="lt-sep"></div>
       <button id="drwTL" class="lt-btn" title="Trend line — click two points"><span class="material-symbols-outlined">show_chart</span></button>
       <button id="drwRay" class="lt-btn" title="Ray — two points, extends right"><span class="material-symbols-outlined">north_east</span></button>
@@ -183,6 +184,6 @@
   </footer>
 
 </div>
-<script src="src/app.js?v=21"></script>
+<script src="src/app.js?v=22"></script>
 </body>
 </html>
