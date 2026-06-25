@@ -6,15 +6,14 @@
 
 let INSTR = { symbol: 'NQ', tickSize: 0.25, tickValue: 5 }; // active contract spec (per-dataset; NQ: $20/pt -> $5/tick)
 const DATASETS = [
-  { id: 'nq1',  label: 'NQ · 1m · last 8d (real futures)',  url: 'data/NQ_real_1m.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },   // $20/pt
-  { id: 'nq5',  label: 'NQ · 5m · last 60d (real futures)', url: 'data/NQ_real_5m.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
-  { id: 'es1',  label: 'ES · 1m · last 8d (real futures)',  url: 'data/ES_real_1m.json', instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
-  { id: 'es5',  label: 'ES · 5m · last 60d (real futures)', url: 'data/ES_real_5m.json', instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } },
-  { id: 'ym1',  label: 'YM · 1m · last 8d (real futures)',  url: 'data/YM_real_1m.json', instr: { symbol: 'YM', tickSize: 1, tickValue: 5 } },        // $5/pt
-  { id: 'ym5',  label: 'YM · 5m · last 60d (real futures)', url: 'data/YM_real_5m.json', instr: { symbol: 'YM', tickSize: 1, tickValue: 5 } },
-  { id: 'tick', label: 'NQ · 30s · Jun 7–12 (real tick)',   url: 'data/NQ_30s.json',     instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
+  { id: 'nq1y', label: 'NQ · 1m · 1 year (real CME · Databento)',    url: 'data/NQ_db_1m.json',  instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },   // $20/pt
+  { id: 'nq15', label: 'NQ · 15s · 2 months (real CME · Databento)', url: 'data/NQ_db_15s.json', base: 0.25, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
+  { id: 'nq5',  label: 'NQ · 5m · 60d (real · Yahoo)',  url: 'data/NQ_real_5m.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
+  { id: 'es5',  label: 'ES · 5m · 60d (real · Yahoo)',  url: 'data/ES_real_5m.json', instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
+  { id: 'ym5',  label: 'YM · 5m · 60d (real · Yahoo)',  url: 'data/YM_real_5m.json', instr: { symbol: 'YM', tickSize: 1, tickValue: 5 } },        // $5/pt
+  { id: 'tick', label: 'NQ · 30s · Jun 7–12 (real tick)', url: 'data/NQ_30s.json',  instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
 ];
-const STD_TF = [1, 2, 3, 5, 10, 15, 30, 60];   // standard minute timeframes
+const STD_TF = [0.5, 1, 2, 3, 5, 10, 15, 30, 60];   // standard timeframes in minutes (0.5 = 30s)
 let BASE_TF = 1;        // base bar resolution (minutes) — auto-detected per dataset
 let TF_OPTIONS = [];    // built per dataset (base + standard multiples)
 let wired = false, dataIdx = 0;
@@ -1139,7 +1138,7 @@ const mBucket = (ts) => Math.floor(ts / (tf * 60)) * (tf * 60);
 init();
 async function init() { buildDataSelect(); initLayout(); await loadDataset(DATASETS[0]); }
 
-function detectBaseTf(b) { let mn = Infinity; for (let i = 1; i < Math.min(b.length, 800); i++) { const dl = b[i].time - b[i - 1].time; if (dl > 0 && dl < mn) mn = dl; } return mn === Infinity ? 1 : Math.max(0.5, mn / 60); }
+function detectBaseTf(b) { let mn = Infinity; for (let i = 1; i < Math.min(b.length, 800); i++) { const dl = b[i].time - b[i - 1].time; if (dl > 0 && dl < mn) mn = dl; } return mn === Infinity ? 1 : Math.max(1 / 60, mn / 60); }  // floor 1s so 15s/30s bases detect correctly
 function buildTfOptions() { TF_OPTIONS = [BASE_TF, ...STD_TF.filter(m => m > BASE_TF)]; }
 
 async function loadDataset(ds) {
@@ -1152,7 +1151,7 @@ async function loadDataset(ds) {
   if ($('symbol')) $('symbol').textContent = INSTR.symbol;
   if ($('entryPrice')) $('entryPrice').step = String(TICK);
   baseBars = data;
-  BASE_TF = detectBaseTf(baseBars); buildTfOptions();
+  BASE_TF = (ds && ds.base) || detectBaseTf(baseBars); buildTfOptions();   // ds.base = explicit base resolution (min) for clean sub-minute sets
   tf = BASE_TF < 1 ? 1 : BASE_TF;                 // default view: 1m when base is sub-minute, else base
   buildSessions(); buildTfSelect(); buildAtmSelect();
   $('startSlider').max = baseBars.length - 1;
