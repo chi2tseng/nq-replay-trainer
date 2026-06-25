@@ -6,10 +6,13 @@
 
 let INSTR = { symbol: 'NQ', tickSize: 0.25, tickValue: 5 }; // active contract spec (per-dataset; NQ: $20/pt -> $5/tick)
 const DATASETS = [
-  { id: 'deep', label: 'NQ · Nasdaq-100 1m · 3.5mo deep (Dukascopy)', url: 'data/NQ_deep_1m.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },     // $20/pt
-  { id: 'es',   label: 'ES · S&P 500 1m · 3.5mo deep (Dukascopy)',    url: 'data/ES_deep_1m.json', instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
-  { id: 'ym',   label: 'YM · Dow 1m · 3.5mo deep (Dukascopy)',        url: 'data/YM_deep_1m.json', instr: { symbol: 'YM', tickSize: 1, tickValue: 5 } },        // $5/pt
-  { id: 'tick', label: 'NQ · 30s · Jun 7–12 (real tick)', url: 'data/NQ_30s.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
+  { id: 'nq1',  label: 'NQ · 1m · last 8d (real futures)',  url: 'data/NQ_real_1m.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },   // $20/pt
+  { id: 'nq5',  label: 'NQ · 5m · last 60d (real futures)', url: 'data/NQ_real_5m.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
+  { id: 'es1',  label: 'ES · 1m · last 8d (real futures)',  url: 'data/ES_real_1m.json', instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
+  { id: 'es5',  label: 'ES · 5m · last 60d (real futures)', url: 'data/ES_real_5m.json', instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } },
+  { id: 'ym1',  label: 'YM · 1m · last 8d (real futures)',  url: 'data/YM_real_1m.json', instr: { symbol: 'YM', tickSize: 1, tickValue: 5 } },        // $5/pt
+  { id: 'ym5',  label: 'YM · 5m · last 60d (real futures)', url: 'data/YM_real_5m.json', instr: { symbol: 'YM', tickSize: 1, tickValue: 5 } },
+  { id: 'tick', label: 'NQ · 30s · Jun 7–12 (real tick)',   url: 'data/NQ_30s.json',     instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
 ];
 const STD_TF = [1, 2, 3, 5, 10, 15, 30, 60];   // standard minute timeframes
 let BASE_TF = 1;        // base bar resolution (minutes) — auto-detected per dataset
