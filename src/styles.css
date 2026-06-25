@@ -605,3 +605,23 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 .ord-x{ display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; padding:0; background:transparent; border:1px solid transparent; border-radius:4px; color:var(--dim); flex:none; }
 .ord-x:hover{ background:#2a1418; border-color:#7a3640; color:var(--red); }
 .ord-x .material-symbols-outlined{ font-size:15px; }
+
+/* ===================== Calendar date picker ===================== */
+.tb-date{ position:relative; }
+#dateBtn{ display:inline-flex; align-items:center; gap:6px; padding:5px 10px; line-height:1; }
+#dateBtn .material-symbols-outlined{ font-size:18px; }
+#dateBtn #dateLabel{ font-variant-numeric:tabular-nums; }
+.popover.cal{ min-width:236px; padding:8px; }
+.cal-h{ display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+.cal-title{ font-weight:600; font-size:13px; color:var(--txt); }
+.cal-nav{ width:26px; height:26px; padding:0; display:inline-flex; align-items:center; justify-content:center; background:transparent; border:1px solid transparent; border-radius:6px; color:var(--dim); }
+.cal-nav:hover{ background:var(--panel2); color:var(--txt); }
+.cal-nav .material-symbols-outlined{ font-size:18px; }
+.cal-wdrow,.cal-grid{ display:grid; grid-template-columns:repeat(7,1fr); gap:2px; }
+.cal-wd{ text-align:center; font-size:10px; color:var(--dim); padding:2px 0; }
+.cal-day{ height:28px; padding:0; display:inline-flex; align-items:center; justify-content:center; font-size:12px; border:1px solid transparent; border-radius:6px; background:transparent; color:#3a3f4a; cursor:default; font-family:inherit; }
+.cal-day.empty{ visibility:hidden; }
+.cal-day.has{ color:var(--txt); cursor:pointer; }
+.cal-day.has:hover{ background:var(--panel2); border-color:var(--line); }
+.cal-day.sel{ background:var(--brand); color:var(--on-brand); font-weight:700; border-color:var(--brand); }
+.cal-day:disabled{ color:#3a3f4a; cursor:default; background:transparent; border-color:transparent; }

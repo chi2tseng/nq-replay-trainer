@@ -7,7 +7,7 @@
 let INSTR = { symbol: 'NQ', tickSize: 0.25, tickValue: 5 }; // active contract spec (per-dataset; NQ: $20/pt -> $5/tick)
 const DATASETS = [
   { id: 'nq1y', label: 'NQ · 1m · 1 year (real CME · Databento)',    url: 'data/NQ_db_1m.json',  instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },   // $20/pt
-  { id: 'nq15', label: 'NQ · 15s · 2 months (real CME · Databento)', url: 'data/NQ_db_15s.json', base: 0.25, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
+  { id: 'nq15', label: 'NQ · 15s · 3 months (real CME · Databento)', url: 'data/NQ_db_15s.json', base: 0.25, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
   { id: 'nq5',  label: 'NQ · 5m · 60d (real · Yahoo)',  url: 'data/NQ_real_5m.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
   { id: 'es5',  label: 'ES · 5m · 60d (real · Yahoo)',  url: 'data/ES_real_5m.json', instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
   { id: 'ym5',  label: 'YM · 5m · 60d (real · Yahoo)',  url: 'data/YM_real_5m.json', instr: { symbol: 'YM', tickSize: 1, tickValue: 5 } },        // $5/pt
@@ -90,7 +90,22 @@ chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } })
 function sizeChart() { const el = $('chart'); const w = el.clientWidth, h = el.clientHeight; if (!w || !h) return; chart.resize(w - 1, h, true); chart.resize(w, h, true); } // double-resize: LWC no-ops a resize to the same size, so nudge then set
 new ResizeObserver(sizeChart).observe($('chartwrap'));
 window.addEventListener('resize', sizeChart);
-function fitChart() { chart.timeScale().fitContent(); }   // auto-zoom to show all revealed bars (revealed = the only data fed to the series)
+// ---- price-axis vertical zoom (wheel over the right axis) + auto-fit ----
+const PX_MARGIN_DEF = 0.1; let pxMargin = PX_MARGIN_DEF;   // symmetric vertical margin on the price scale; wheel grows/shrinks it
+function applyPriceZoom() { chart.priceScale('right').applyOptions({ autoScale: true, scaleMargins: { top: pxMargin, bottom: pxMargin } }); }
+applyPriceZoom();
+function fitChart() { pxMargin = PX_MARGIN_DEF; applyPriceZoom(); chart.timeScale().fitContent(); }   // auto-fit: reset price zoom + fit all revealed bars
+function priceAxisW() { try { const w = chart.priceScale('right').width(); if (w > 0) return w; } catch (e) {} return 62; }
+function overPriceAxis(clientX) { const r = $('chart').getBoundingClientRect(); return clientX - r.left >= r.width - Math.max(priceAxisW(), 44); }
+// wheel over the price axis = zoom price vertically; over the chart = LWC's native time zoom
+$('chart').addEventListener('wheel', (e) => {
+  if (!overPriceAxis(e.clientX)) return;
+  e.preventDefault(); e.stopPropagation();
+  pxMargin = Math.max(0, Math.min(0.45, pxMargin + (e.deltaY > 0 ? 0.03 : -0.03)));   // down=zoom out, up=zoom in
+  applyPriceZoom();
+}, { capture: true, passive: false });
+// double-click the price axis = auto-fit (TradingView behaviour)
+$('chart').addEventListener('dblclick', (e) => { if (overPriceAxis(e.clientX)) fitChart(); });
 
 // ---------- resizable layout (drag gutters to size #side width & #bottom height) ----------
 // Single source of truth = two CSS vars (--side-w, --bottom-h) the grid reads; JS just sets them.
@@ -1170,10 +1185,42 @@ async function loadDataset(ds) {
 
 // ---------- sessions (computed on base) ----------
 let sessions = [];
+let dayIdx = {}, calY = 0, calM = 0;   // calendar: date-key -> session index, and the month being shown
 function buildSessions() {
   sessions = []; let cur = null;
   baseBars.forEach((b, i) => { const k = tradingDayKey(b.time); if (!cur || cur.key !== k) { cur = { key: k, start: i, end: i }; sessions.push(cur); } else cur.end = i; });
   $('sessionSelect').innerHTML = sessions.map((s, i) => `<option value="${i}">${s.key}</option>`).join('');
+  dayIdx = {}; sessions.forEach((s, i) => { dayIdx[s.key] = i; });   // for the calendar picker
+}
+// ---------- calendar date picker (replaces the long session dropdown) ----------
+const CAL_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+function renderCalendar() {
+  const el = $('datePopover'); if (!el) return;
+  const startWd = new Date(Date.UTC(calY, calM, 1)).getUTCDay();
+  const days = new Date(Date.UTC(calY, calM + 1, 0)).getUTCDate();
+  const curKey = (sessions[currentSessionIdx()] || {}).key;
+  let cells = '';
+  for (let i = 0; i < startWd; i++) cells += '<span class="cal-day empty"></span>';
+  for (let d = 1; d <= days; d++) {
+    const key = `${calY}-${pad(calM + 1)}-${pad(d)}`, has = key in dayIdx, sel = key === curKey;
+    cells += `<button class="cal-day${has ? ' has' : ''}${sel ? ' sel' : ''}" ${has ? `data-key="${key}"` : 'disabled'}>${d}</button>`;
+  }
+  el.innerHTML =
+    `<div class="cal-h"><button class="cal-nav" data-mo="-1"><span class="material-symbols-outlined">chevron_left</span></button>` +
+    `<span class="cal-title">${CAL_MONTHS[calM]} ${calY}</span>` +
+    `<button class="cal-nav" data-mo="1"><span class="material-symbols-outlined">chevron_right</span></button></div>` +
+    `<div class="cal-wdrow">${['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(w => `<span class="cal-wd">${w}</span>`).join('')}</div>` +
+    `<div class="cal-grid">${cells}</div>`;
+}
+function openCal() { const s = sessions[currentSessionIdx()]; if (s) { const p = s.key.split('-'); calY = +p[0]; calM = +p[1] - 1; } renderCalendar(); $('datePopover').classList.add('open'); $('dateBtn').classList.add('active'); }
+function closeCal() { const p = $('datePopover'); if (p) { p.classList.remove('open'); $('dateBtn').classList.remove('active'); } }
+function wireCalendar() {
+  $('dateBtn').onclick = (e) => { e.stopPropagation(); if (locked()) return toast("Can't jump while in a position / working order"); $('datePopover').classList.contains('open') ? closeCal() : openCal(); };
+  $('datePopover').addEventListener('click', (e) => {
+    const nav = e.target.closest('.cal-nav'); if (nav) { calM += +nav.dataset.mo; if (calM < 0) { calM = 11; calY--; } if (calM > 11) { calM = 0; calY++; } renderCalendar(); return; }
+    const day = e.target.closest('.cal-day.has'); if (day && day.dataset.key != null && dayIdx[day.dataset.key] != null) gotoSession(dayIdx[day.dataset.key]);
+  });
+  document.addEventListener('mousedown', (e) => { const p = $('datePopover'); if (p && p.classList.contains('open') && !p.contains(e.target) && !$('dateBtn').contains(e.target)) closeCal(); });
 }
 function buildTfSelect() { $('tfSelect').innerHTML = TF_OPTIONS.map(m => `<option value="${m}" ${m === tf ? 'selected' : ''}>${m < 1 ? m * 60 + 's' : m + 'm'}</option>`).join(''); }
 function buildDataSelect() { $('dataSelect').innerHTML = DATASETS.map((ds, i) => `<option value="${i}" ${i === dataIdx ? 'selected' : ''}>${ds.label}</option>`).join(''); }
@@ -1212,6 +1259,8 @@ function rthOpenIdx(s) { for (let i = s.start; i <= s.end; i++) { const m = etMi
 function gotoSession(i) {
   if (locked()) return toast("Can't jump while in a position / working order");
   pause(); baseIdx = rthOpenIdx(sessions[i]); syncIdxFromBase(); hardReveal(); renderLive();
+  const sel = $('sessionSelect'); if (sel) sel.value = String(i);
+  closeCal();
 }
 // ---- quick next/prev trading-day jump (to 09:30 ET open) ----
 function currentSessionIdx() {
@@ -1403,6 +1452,8 @@ function renderLive() {
 
   const lock = locked();
   $('startSlider').disabled = lock; $('btnStepBack').disabled = lock; $('sessionSelect').disabled = lock; $('tfSelect').disabled = lock; $('dataSelect').disabled = lock;
+  const _db = $('dateBtn'); if (_db) _db.disabled = lock;
+  const _dl = $('dateLabel'); if (_dl) { const _s = sessions[currentSessionIdx()]; _dl.textContent = _s ? _s.key : '—'; }
   $('entryPriceRow').style.display = $('entryType').value === 'market' ? 'none' : '';
 }
 
@@ -1490,6 +1541,7 @@ function wire() {
   $('btnPrevDay').onclick = prevDay;
   $('btnNextDay').onclick = nextDay;
   $('sessionSelect').onchange = (e) => gotoSession(+e.target.value);
+  wireCalendar();
   $('tfSelect').onchange = (e) => setTf(+e.target.value);
   $('dataSelect').onchange = async (e) => { if (locked()) { $('dataSelect').value = dataIdx; return toast("Can't switch dataset while in a position / working order"); } const i = +e.target.value; const ok = await loadDataset(DATASETS[i]); if (ok) dataIdx = i; else $('dataSelect').value = dataIdx; };
   $('speedSelect').onchange = () => { if (playing) { pause(); play(); } };
@@ -1576,4 +1628,6 @@ window.__rt = { state: () => ({ tf, idx, baseIdx, bars: bars.length, base: baseB
   deleteSel: () => { const n0 = drawings.length; deleteSelectedDrawing(); return { before: n0, after: drawings.length }; },
   lastDrawing: () => { const d = drawings[drawings.length - 1]; return d ? { type: d.type, entry: d.p1 && d.p1.p, stop: d.stop, target: d.target } : null; },
   entryOrderInfo: () => entryOrder && { side: entryOrder.side, kind: entryOrder.kind, price: entryOrder.price, slTicks: entryOrder.slTicks, tgts: entryOrder.tgts },
-  dragLineSet: (gp, np) => { const L = draggableLines().find(L => Math.abs(L.get() - gp) < 0.001); if (L) { L.set(np); drawLines(); renderLive(); } return entryOrder ? entryOrder.slTicks : null; } };
+  dragLineSet: (gp, np) => { const L = draggableLines().find(L => Math.abs(L.get() - gp) < 0.001); if (L) { L.set(np); drawLines(); renderLive(); } return entryOrder ? entryOrder.slTicks : null; },
+  pxm: () => chart.priceScale('right').options().scaleMargins, fit: () => fitChart(),
+  dbgAxis: (cx) => ({ axisW: priceAxisW(), over: overPriceAxis(cx) }) };
