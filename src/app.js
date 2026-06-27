@@ -1366,9 +1366,22 @@ function onEntryButton(side) {
   const mult = Math.max(1, parseInt($('qty').value, 10) || 1);
   if (kind === 'market') { openPosition(side, curPx(), curBaseT(), activeAtm, mult); }
   else {
-    const price = rnd(parseFloat($('entryPrice').value));
-    if (!price) return toast('Enter an entry price');
-    entryOrder = { side, kind, price, atm: activeAtm, mult, ...bracketFromAtm(activeAtm) };
+    const a = atm[activeAtm] || {};
+    let price, bracket;
+    if (kind === 'stop') {                          // stop entry = break of the current K-bar: Buy=high+1tick, Sell=low-1tick
+      const ext = curBarExtreme();
+      price = rnd(side === 'long' ? ext.hi + TICK : ext.lo - TICK);
+      const inp = $('entryPrice'); if (inp) inp.value = f2(price);   // show the auto-computed level
+      if (a.struct) {   // snapshot structural stop to THIS (signal) bar: opposite extreme; target = rr×risk
+        const stopPx = side === 'long' ? ext.lo - TICK : ext.hi + TICK;
+        const slT = Math.max(1, Math.round(Math.abs(price - stopPx) / TICK));
+        bracket = { slTicks: slT, tgts: [{ ticks: Math.max(1, Math.round(slT * (a.rr || 1))), qty: 1 }] };
+      }
+    } else {
+      price = rnd(parseFloat($('entryPrice').value));
+      if (!price) return toast('Enter an entry price');
+    }
+    entryOrder = { side, kind, price, atm: activeAtm, mult, ...(bracket || bracketFromAtm(activeAtm)) };
     toast(`${side === 'long' ? 'Buy' : 'Sell'} ${kind === 'limit' ? 'Limit' : 'Stop'} @ ${f2(price)} + bracket`);
     drawLines(); renderLive();
   }
@@ -1385,7 +1398,7 @@ function cancelOrder(spec) {   // × on a working order: 'entry' cancels the pen
 function openPosition(side, px, t, atmName, mult, bracket) {
   const a = atm[atmName] || {}; entryOrder = null;
   let sl, srcT;
-  if (a.struct) {                                  // structural stop at the current bar's extreme (short=high, long=low) + RR target
+  if (a.struct && (!bracket || !bracket.slTicks)) {   // struct + no snapshot (market entry) → stop from CURRENT bar's extreme
     const ext = curBarExtreme();
     const stopPx = side === 'long' ? ext.lo - TICK : ext.hi + TICK;
     sl = Math.max(1, Math.round(Math.abs(px - stopPx) / TICK));
