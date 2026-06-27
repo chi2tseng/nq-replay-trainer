@@ -93,9 +93,14 @@ new ResizeObserver(sizeChart).observe($('chartwrap'));
 window.addEventListener('resize', sizeChart);
 // ---- price-axis vertical zoom (wheel over the right axis) + auto-fit ----
 const PX_MARGIN_DEF = 0.1; let pxMargin = PX_MARGIN_DEF;   // symmetric vertical margin on the price scale; wheel grows/shrinks it
-function applyPriceZoom() { chart.priceScale('right').applyOptions({ autoScale: true, scaleMargins: { top: pxMargin, bottom: pxMargin } }); }
+let pxShift = 0;                                          // vertical pan offset: drag the chart body up/down to move the price view
+function applyPriceZoom() {
+  const top = Math.max(0, Math.min(0.88, pxMargin + pxShift));     // asymmetric margins = pan; clamp keeps data on-screen
+  const bottom = Math.max(0, Math.min(0.88, pxMargin - pxShift));
+  chart.priceScale('right').applyOptions({ autoScale: true, scaleMargins: { top, bottom } });
+}
 applyPriceZoom();
-function fitChart() { pxMargin = PX_MARGIN_DEF; applyPriceZoom(); chart.timeScale().fitContent(); }   // auto-fit: reset price zoom + fit all revealed bars
+function fitChart() { pxMargin = PX_MARGIN_DEF; pxShift = 0; applyPriceZoom(); chart.timeScale().fitContent(); }   // auto-fit: reset price zoom + pan + fit all revealed bars
 function priceAxisW() { try { const w = chart.priceScale('right').width(); if (w > 0) return w; } catch (e) {} return 62; }
 function overPriceAxis(clientX) { const r = $('chart').getBoundingClientRect(); return clientX - r.left >= r.width - Math.max(priceAxisW(), 44); }
 // wheel over the price axis = zoom price vertically; over the chart = LWC's native time zoom
@@ -888,6 +893,7 @@ function resetToolAfterDraw() { tool = ''; pendingPt = null; updateToolUI(); }  
 
 // ---------- chart tools: drag stop/target/entry lines + click tools (set-start / annotations) ----------
 let tool = '', drag = null, dragH = null;   // dragH = drawing-anchor being dragged (endpoint edit)
+let vpan = null;                            // vertical price-pan: {y0, s0} while dragging empty chart space up/down
 let magnet = loadJSON('rt_magnet', false);  // snap drawing points to the nearest OHLC of the hovered bar (TradingView magnet)
 function barByTime(t) { let lo = 0, hi = bars.length - 1; while (lo <= hi) { const m = (lo + hi) >> 1; if (bars[m].time === t) return bars[m]; if (bars[m].time < t) lo = m + 1; else hi = m - 1; } return null; }
 function magnetPrice(time, raw) {
@@ -1037,6 +1043,7 @@ $('chart').addEventListener('mousedown', e => {
   if (hd) { selDrawing = hd; startBodyDrag(hd, x, y); chart.applyOptions({ handleScroll: false, handleScale: false }); repaintOverlays(); e.preventDefault(); return; }
   if (locked()) { const L = nearestLine(y); if (L) { drag = L; chart.applyOptions({ handleScroll: false, handleScale: false }); e.preventDefault(); return; } }  // 3) stop/target/entry lines
   if (selDrawing) { selDrawing = null; repaintOverlays(); }   // 4) empty space -> deselect (lets the chart pan)
+  if (!overPriceAxis(e.clientX)) vpan = { y0: y, s0: pxShift };   // 5) start vertical price-pan (LWC still pans time horizontally)
 });
 window.addEventListener('mousemove', e => {
   const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
@@ -1046,11 +1053,17 @@ window.addEventListener('mousemove', e => {
     return;
   }
   if (dragBody) { moveBody(x, y); return; }       // moving a whole drawing
+  if (vpan && !drag && !dragH) {                   // vertical price-pan: drag down -> price view moves down
+    const h = $('chart').clientHeight || 1;
+    pxShift = Math.max(-0.78, Math.min(0.78, vpan.s0 + (y - vpan.y0) / h));
+    applyPriceZoom();
+  }
   if (!drag) return;
   const p = candle.coordinateToPrice(y);
   if (p != null) { drag.set(rnd(p)); drawLines(); renderLive(); }
 });
 window.addEventListener('mouseup', () => {
+  vpan = null;
   if (dragH) { dragH = null; saveJSON('rt_drawings', drawings); chart.applyOptions({ handleScroll: true, handleScale: true }); return; }
   if (dragBody) { dragBody = null; saveJSON('rt_drawings', drawings); chart.applyOptions({ handleScroll: true, handleScale: true }); return; }
   if (drag) { drag = null; chart.applyOptions({ handleScroll: true, handleScale: true }); }
@@ -1389,20 +1402,31 @@ function processSub(b) {
 
   const long = position.side === 'long';
   const stop = orders.find(o => o.type === 'stop');
-  // 2) STOP first (conservative when a bar straddles both stop and target)
-  if (stop) {
+  // Intrabar fill ORDER (precise): each base sub-bar is processed individually, and within one
+  // sub-bar that straddles BOTH stop and target we infer order from the bar's shape —
+  // up bar (close>=open) traces O→low→high (low touched first); down bar traces O→high→low.
+  // Long: stop is below (low side), target above; short is mirrored. → stopFirst when the
+  // stop's side is the first extreme reached. (Use a finer base dataset, e.g. NQ 15s, for fewer ties.)
+  const lowFirst = b.close >= b.open;
+  const stopFirst = long ? lowFirst : !lowFirst;
+  const doStop = () => {
+    if (!stop || !position) return false;
     const sP = stop.price;
     const hit = long ? (b.open <= sP || b.low <= sP) : (b.open >= sP || b.high >= sP);
-    if (hit) { const px = long ? (b.open <= sP ? b.open : sP) : (b.open >= sP ? b.open : sP); exitQty(position.qty, px, b.time, 'stop'); return; }
-  }
-  // 3) TARGETS (nearest first)
-  const tgs = orders.filter(o => o.type === 'target').sort((x, y) => long ? x.price - y.price : y.price - x.price);
-  for (const tg of tgs) {
-    if (!position) break;
-    const tP = tg.price;
-    const hit = long ? (b.open >= tP || b.high >= tP) : (b.open <= tP || b.low <= tP);
-    if (hit) { const px = long ? (b.open >= tP ? b.open : tP) : (b.open <= tP ? b.open : tP); orders = orders.filter(o => o !== tg); exitQty(tg.qty, px, b.time, 'target'); }
-  }
+    if (hit) { const px = long ? (b.open <= sP ? b.open : sP) : (b.open >= sP ? b.open : sP); exitQty(position.qty, px, b.time, 'stop'); return true; }
+    return false;
+  };
+  const doTargets = () => {
+    const tgs = orders.filter(o => o.type === 'target').sort((x, y) => long ? x.price - y.price : y.price - x.price);
+    for (const tg of tgs) {
+      if (!position) break;
+      const tP = tg.price;
+      const hit = long ? (b.open >= tP || b.high >= tP) : (b.open <= tP || b.low <= tP);
+      if (hit) { const px = long ? (b.open >= tP ? b.open : tP) : (b.open <= tP ? b.open : tP); orders = orders.filter(o => o !== tg); exitQty(tg.qty, px, b.time, 'target'); }
+    }
+  };
+  if (stopFirst) { if (doStop()) return; doTargets(); }   // stop side reached first this sub-bar
+  else { doTargets(); doStop(); }                          // target side reached first; stop takes any remainder
   // 4) breakeven / trailing for subsequent bars
   if (position) updateStops(b);
 }
