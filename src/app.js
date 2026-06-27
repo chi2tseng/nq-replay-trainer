@@ -8,13 +8,14 @@ let INSTR = { symbol: 'NQ', tickSize: 0.25, tickValue: 5 }; // active contract s
 const DATASETS = [
   { id: 'nq1y', label: 'NQ · 1m · 1 year (real CME · Databento)',    url: 'data/NQ_db_1m.json',  instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },   // $20/pt
   { id: 'nq15', label: 'NQ · 15s · 3 months (real CME · Databento)', url: 'data/NQ_db_15s.json', base: 0.25, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
+  { id: 'nq5s', label: 'NQ · 5s · 3 weeks (real CME · Databento)',  url: 'data/NQ_db_5s.json', base: 5 / 60, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },  // 5s base → clean 15s/20s/30s
   { id: 'es1y', label: 'ES · 1m · 1 year (real CME · Databento)',    url: 'data/ES_db_1m.json',  instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
   { id: 'nq5',  label: 'NQ · 5m · 60d (real · Yahoo)',  url: 'data/NQ_real_5m.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
   { id: 'es5',  label: 'ES · 5m · 60d (real · Yahoo)',  url: 'data/ES_real_5m.json', instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
   { id: 'ym5',  label: 'YM · 5m · 60d (real · Yahoo)',  url: 'data/YM_real_5m.json', instr: { symbol: 'YM', tickSize: 1, tickValue: 5 } },        // $5/pt
   { id: 'tick', label: 'NQ · 30s · Jun 7–12 (real tick)', url: 'data/NQ_30s.json',  instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
 ];
-const STD_TF = [0.5, 1, 2, 3, 5, 10, 15, 30, 60];   // standard timeframes in minutes (0.5 = 30s)
+const STD_TF = [0.25, 1 / 3, 0.5, 1, 2, 3, 5, 10, 15, 30, 60];   // standard timeframes in minutes (0.25=15s, 1/3=20s, 0.5=30s)
 let BASE_TF = 1;        // base bar resolution (minutes) — auto-detected per dataset
 let TF_OPTIONS = [];    // built per dataset (base + standard multiples)
 let wired = false, dataIdx = 0;
@@ -224,7 +225,7 @@ window.addEventListener('mousedown', (e) => { if (ctxEl && ctxEl.style.display =
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideCtx(); });
 
 // ---------- chart legend overlay (OHLCV readout, follows crosshair) ----------
-function legendTfLabel() { return tf < 1 ? (tf * 60) + 's' : tf + 'm'; }
+function legendTfLabel() { return tf < 1 ? Math.round(tf * 60) + 's' : tf + 'm'; }
 function fmtVol(v) { if (v == null || !isFinite(v)) return '–'; const n = Math.abs(v); if (n >= 1e6) return (v / 1e6).toFixed(2) + 'M'; if (n >= 1e3) return (v / 1e3).toFixed(1) + 'K'; return String(Math.round(v)); }
 function legendBarFor(param) {
   let i = -1;
@@ -1086,7 +1087,7 @@ $('chart').addEventListener('mousemove', e => {
 // ---------- timeframe aggregation ----------
 function aggregate(base, m) {
   if (m === BASE_TF) return base.map((b, i) => ({ ...b, subStart: i, subEnd: i }));
-  const out = []; let cur = null; const span = m * 60;
+  const out = []; let cur = null; const span = Math.round(m * 60);   // integer seconds — avoids float drift on 20s (=1/3 min)
   for (let i = 0; i < base.length; i++) {
     const b = base[i]; const bucket = Math.floor(b.time / span) * span;
     if (!cur || cur.time !== bucket) { cur = { time: bucket, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume, subStart: i, subEnd: i }; out.push(cur); }
@@ -1213,14 +1214,14 @@ function stampBarIndices() { for (let i = 0; i < bars.length; i++) bars[i].__i =
 
 function updateChartTypeUI() { const s = $('chartTypeSelect'); if (s && s.value !== chartType) s.value = chartType; }
 function vd(b) { return { time: b.time, value: b.volume, color: b.close >= b.open ? 'rgba(38,166,154,.5)' : 'rgba(239,83,80,.5)' }; }
-const mBucket = (ts) => Math.floor(ts / (tf * 60)) * (tf * 60);
+const mBucket = (ts) => { const sp = Math.round(tf * 60); return Math.floor(ts / sp) * sp; };
 
 // ---------- init ----------
 init();
 async function init() { buildDataSelect(); initLayout(); await loadDataset(DATASETS[0]); }
 
 function detectBaseTf(b) { let mn = Infinity; for (let i = 1; i < Math.min(b.length, 800); i++) { const dl = b[i].time - b[i - 1].time; if (dl > 0 && dl < mn) mn = dl; } return mn === Infinity ? 1 : Math.max(1 / 60, mn / 60); }  // floor 1s so 15s/30s bases detect correctly
-function buildTfOptions() { TF_OPTIONS = [BASE_TF, ...STD_TF.filter(m => m > BASE_TF)]; }
+function buildTfOptions() { const bs = Math.round(BASE_TF * 60); TF_OPTIONS = [BASE_TF, ...STD_TF.filter(m => m > BASE_TF && Math.round(m * 60) % bs === 0)]; }   // only clean multiples of the base (so 20s never shows on a 15s base, etc.)
 
 async function loadDataset(ds) {
   const url = typeof ds === 'string' ? ds : ds.url;   // tolerate a bare url too
@@ -1288,7 +1289,7 @@ function wireCalendar() {
   });
   document.addEventListener('mousedown', (e) => { const p = $('datePopover'); if (p && p.classList.contains('open') && !p.contains(e.target) && !$('dateBtn').contains(e.target)) closeCal(); });
 }
-function buildTfSelect() { $('tfSelect').innerHTML = TF_OPTIONS.map(m => `<option value="${m}" ${m === tf ? 'selected' : ''}>${m < 1 ? m * 60 + 's' : m + 'm'}</option>`).join(''); }
+function buildTfSelect() { $('tfSelect').innerHTML = TF_OPTIONS.map(m => `<option value="${m}" ${m === tf ? 'selected' : ''}>${m < 1 ? Math.round(m * 60) + 's' : m + 'm'}</option>`).join(''); }
 function buildDataSelect() { $('dataSelect').innerHTML = DATASETS.map((ds, i) => `<option value="${i}" ${i === dataIdx ? 'selected' : ''}>${ds.label}</option>`).join(''); }
 
 // ---------- timeframe / index bookkeeping ----------
@@ -1333,7 +1334,7 @@ function pause() { playing = false; $('btnPlay').textContent = 'play_arrow'; cle
 function rthOpenIdx(s) { for (let i = s.start; i <= s.end; i++) { const m = etMinutes(baseBars[i].time); if (m >= 570 && m < 960) return i; } return s.start; }  // first bar in 09:30–15:59 ET = US cash open (skips the 18:00 ET Globex open)
 function gotoSession(i) {
   if (locked()) return toast("Can't jump while in a position / working order");
-  pause(); baseIdx = rthOpenIdx(sessions[i]); syncIdxFromBase(); hardReveal(); renderLive();
+  pause(); baseIdx = rthOpenIdx(sessions[i]); syncIdxFromBase(); hardReveal(); renderAll();   // renderAll so the dashboard "Today" tally follows the replay day
   const sel = $('sessionSelect'); if (sel) sel.value = String(i);
   closeCal();
 }
@@ -1570,6 +1571,13 @@ function renderLive() {
   $('entryPriceRow').style.display = $('entryType').value === 'market' ? 'none' : '';
 }
 
+// current replay session (= "today") tally — bucketed by the same futures trading-day key the chart uses
+function todayStats() {
+  const key = (sessions[currentSessionIdx()] || {}).key || null;
+  const ts = key ? trades.filter(t => tradingDayKey(t.entryTime) === key) : [];
+  const pnl = ts.reduce((s, t) => s + t.pnl, 0);
+  return { key, n: ts.length, pnl, w: ts.filter(t => t.pnl > 0).length, l: ts.filter(t => t.pnl < 0).length };
+}
 function renderTrades() {
   $('tradesTable').querySelector('tbody').innerHTML = trades.map((t, i) => `<tr>
     <td>${i + 1}</td><td class="${t.side === 'long' ? 'long-tag' : 'short-tag'}">${t.side === 'long' ? 'L' : 'S'}</td><td>${t.qty}</td>
@@ -1578,7 +1586,9 @@ function renderTrades() {
     <td>${t.ticks >= 0 ? '+' : ''}${t.ticks}</td><td class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</td>
     <td>${t.R == null ? '–' : t.R.toFixed(2)}</td><td>${t.atm}</td><td>${t.exitType}</td></tr>`).reverse().join('');
   const net = trades.reduce((s, t) => s + t.pnl, 0);
-  $('tradesSummary').textContent = `${trades.length} trades · Net ${usd(net)}`;
+  const td = todayStats();
+  $('tradesSummary').textContent = `${trades.length} trades · Net ${usd(net)}`
+    + (td.key ? `      ·  Today (${td.key}): ${usd(td.pnl)} · ${td.n} trade${td.n === 1 ? '' : 's'}` : '');
 }
 
 function renderDash() {
@@ -1600,6 +1610,11 @@ function renderDash() {
   $('atmStats').innerHTML = `<table><thead><tr><th>ATM</th><th>Trades</th><th>Win%</th><th>Net $</th></tr></thead><tbody>` +
     Object.entries(byAtm).map(([k, ts]) => { const w = ts.filter(t => t.pnl > 0).length, l = ts.filter(t => t.pnl < 0).length, nt = ts.reduce((s, t) => s + t.pnl, 0);
       return `<tr><td>${k}</td><td>${ts.length}</td><td>${(w + l) ? (w / (w + l) * 100).toFixed(0) : 0}%</td><td class="${nt >= 0 ? 'pos' : 'neg'}">${usd(nt)}</td></tr>`; }).join('') + `</tbody></table>`;
+  const td = todayStats();
+  $('todayPnl').className = 'todaypnl ' + (td.n === 0 ? 'flat' : (td.pnl >= 0 ? 'pos' : 'neg'));
+  $('todayPnl').innerHTML = `<span class="tp-label">Today</span><span class="tp-date">${td.key || '—'}</span>`
+    + `<span class="tp-val ${td.pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${usd(td.pnl)}</span>`
+    + `<span class="tp-sub">${td.n ? `${td.n} trade${td.n === 1 ? '' : 's'} · ${td.w}W ${td.l}L` : 'no trades yet'}</span>`;
   drawEquity();
   $('panelDash').title = `Max Drawdown ${usd(dd)}`;
 }
