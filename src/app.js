@@ -1298,7 +1298,16 @@ function tfIndexAtBase(bi) { // TF-bar index whose bucket contains baseBars[bi]
   while (lo <= hi) { const mid = (lo + hi) >> 1; if (bars[mid].time <= t) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
   return ans;
 }
-function syncIdxFromBase() { idx = tfIndexAtBase(baseIdx); }
+function syncIdxFromBase() {
+  idx = tfIndexAtBase(baseIdx);
+  // tfIndexAtBase returns the TF bar that *contains* baseIdx, which can run past it (an
+  // incomplete current bar after a TF switch / jump). Showing that bar would leak future
+  // sub-bars, and curPx() would read a sub-bar that isn't the displayed candle's close.
+  // Snap back to the last fully-revealed TF bar, then align baseIdx to its end so
+  // curPx() (=baseBars[baseIdx].close) always equals the current candle's close.
+  if (idx > 0 && bars[idx].subEnd > baseIdx) idx--;
+  baseIdx = bars[idx].subEnd;
+}
 
 // ---------- reveal / replay ----------
 function hardReveal() { candle.setData(bars.slice(0, idx + 1).map(cd)); vol.setData(bars.slice(0, idx + 1).map(vd)); refreshMarkers(); drawLines(); renderLegend(null); oscHardReveal(); }
