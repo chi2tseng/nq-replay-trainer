@@ -58,11 +58,13 @@ let trades = loadJSON('rt_trades', []);
 let markers = [];            // {baseTime, position, color, shape, text}
 let lines = [];              // active price-line handles
 
+if (loadJSON('rt_atm_v', 0) < 1) { try { localStorage.removeItem('rt_atm'); } catch (e) {} saveJSON('rt_atm_v', 1); }   // one-time: adopt 40pt/40pt default bracket
 let atm = normalizeAtms(loadJSON('rt_atm', defaultAtms()));
 let activeAtm = Object.keys(atm)[0];
 
 function defaultAtms() {
   return {
+    '40pt / 40pt':        { sl: 160, targets: [{ ticks: 160, qty: 1 }], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },   // 160 ticks = 40 pt on NQ/ES (0.25 tick)
     'Flat 10/20':         { sl: 10, targets: [{ ticks: 20, qty: 1 }], be: { on: false, trig: 12, off: 1 }, trail: { on: false, trig: 16, dist: 8 } },
     'Scalp 8/8 +BE':      { sl: 8,  targets: [{ ticks: 8, qty: 1 }],  be: { on: true,  trig: 6,  off: 1 }, trail: { on: false, trig: 8,  dist: 5 } },
     'Runner 2T BE+Trail': { sl: 12, targets: [{ ticks: 20, qty: 1 }, { ticks: 50, qty: 1 }], be: { on: true, trig: 10, off: 2 }, trail: { on: true, trig: 16, dist: 10 } },
