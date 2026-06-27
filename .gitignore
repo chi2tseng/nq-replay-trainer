@@ -14,3 +14,6 @@ scripts/.db_key
 
 # 10-year per-year NQ history (~400MB total) — local backtesting only, NOT served by the app
 data/NQ_y20*.json
+
+# per-day tick (trades) replay files — fetched on demand, local-only (too big for GitHub)
+data/tick/

@@ -9,6 +9,7 @@ const DATASETS = [
   { id: 'nq1y', label: 'NQ · 1m · 1 year (real CME · Databento)',    url: 'data/NQ_db_1m.json',  instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },   // $20/pt
   { id: 'nq15', label: 'NQ · 15s · 3 months (real CME · Databento)', url: 'data/NQ_db_15s.json', base: 0.25, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
   { id: 'nq5s', label: 'NQ · 5s · 3 weeks (real CME · Databento)',  url: 'data/NQ_db_5s.json', base: 5 / 60, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },  // 5s base → clean 15s/20s/30s
+  { id: 'nqtick', label: 'NQ · Tick replay · Tradovate (pick a day)', tick: true, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },  // per-day real prints, fetched on demand
   { id: 'es1y', label: 'ES · 1m · 1 year (real CME · Databento)',    url: 'data/ES_db_1m.json',  instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
   { id: 'nq5',  label: 'NQ · 5m · 60d (real · Yahoo)',  url: 'data/NQ_real_5m.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
   { id: 'es5',  label: 'ES · 5m · 60d (real · Yahoo)',  url: 'data/ES_real_5m.json', instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
@@ -51,6 +52,9 @@ let tf = 1;                  // timeframe in minutes
 let idx = 0;                 // last revealed TF-bar index
 let baseIdx = 0;             // last revealed 1-min index (== bars[idx].subEnd)
 let playing = false, timer = null;
+// Tradovate-style tick replay: one day's real prints as the base resolution
+let tickMode = false, tickMs = [], availTickDays = [], curTickDay = null, simMs = 0, speedUITick = false;
+let fO = 0, fH = 0, fL = 0, fC = 0, fV = 0, fBucket = -1;   // live-forming candle accumulator
 
 let position = null;         // {side,qty,entry,entryTime,atm,slTicks,maxFav,beDone}
 let orders = [];             // working: {type:'stop'|'target', price, qty, ticks?}
@@ -1115,7 +1119,7 @@ $('chart').addEventListener('mousemove', e => {
 
 // ---------- timeframe aggregation ----------
 function aggregate(base, m) {
-  if (m === BASE_TF) return base.map((b, i) => ({ ...b, subStart: i, subEnd: i }));
+  if (!tickMode && m === BASE_TF) return base.map((b, i) => ({ ...b, subStart: i, subEnd: i }));   // tick mode always buckets (base = individual prints → never 1:1, would collide on shared seconds)
   const out = []; let cur = null; const span = Math.round(m * 60);   // integer seconds — avoids float drift on 20s (=1/3 min)
   for (let i = 0; i < base.length; i++) {
     const b = base[i]; const bucket = Math.floor(b.time / span) * span;
@@ -1253,6 +1257,8 @@ function detectBaseTf(b) { let mn = Infinity; for (let i = 1; i < Math.min(b.len
 function buildTfOptions() { const bs = Math.round(BASE_TF * 60); TF_OPTIONS = [BASE_TF, ...STD_TF.filter(m => m > BASE_TF && Math.round(m * 60) % bs === 0)]; }   // only clean multiples of the base (so 20s never shows on a 15s base, etc.)
 
 async function loadDataset(ds) {
+  if (ds && ds.tick) return enterTickMode(ds);          // Tradovate-style per-day tick replay
+  tickMode = false; setSpeedOptions(false);
   const url = typeof ds === 'string' ? ds : ds.url;   // tolerate a bare url too
   let data;
   try { const r = await fetch(url + (url.includes('?') ? '&' : '?') + 'v=' + Date.now()); if (!r.ok) throw 0; data = await r.json(); } // cache-bust so regenerated data files always load fresh
@@ -1314,7 +1320,7 @@ function wireCalendar() {
   $('dateBtn').onclick = (e) => { e.stopPropagation(); if (locked()) return toast("Can't jump while in a position / working order"); $('datePopover').classList.contains('open') ? closeCal() : openCal(); };
   $('datePopover').addEventListener('click', (e) => {
     const nav = e.target.closest('.cal-nav'); if (nav) { calM += +nav.dataset.mo; if (calM < 0) { calM = 11; calY--; } if (calM > 11) { calM = 0; calY++; } renderCalendar(); return; }
-    const day = e.target.closest('.cal-day.has'); if (day && day.dataset.key != null && dayIdx[day.dataset.key] != null) gotoSession(dayIdx[day.dataset.key]);
+    const day = e.target.closest('.cal-day.has'); if (day && day.dataset.key != null) { if (tickMode) { closeCal(); loadTickDay(day.dataset.key); } else if (dayIdx[day.dataset.key] != null) gotoSession(dayIdx[day.dataset.key]); }
   });
   document.addEventListener('mousedown', (e) => { const p = $('datePopover'); if (p && p.classList.contains('open') && !p.contains(e.target) && !$('dateBtn').contains(e.target)) closeCal(); });
 }
@@ -1340,12 +1346,13 @@ function syncIdxFromBase() {
 }
 
 // ---------- reveal / replay ----------
-function hardReveal() { candle.setData(bars.slice(0, idx + 1).map(cd)); vol.setData(bars.slice(0, idx + 1).map(vd)); refreshMarkers(); drawLines(); renderLegend(null); oscHardReveal(); }
+function hardReveal() { candle.setData(bars.slice(0, idx + 1).map(cd)); vol.setData(bars.slice(0, idx + 1).map(vd)); refreshMarkers(); drawLines(); renderLegend(null); oscHardReveal(); if (tickMode) resetForming(); }
 function stepFwd() {
   if (idx >= bars.length - 1) { pause(); return; }
   idx++; candle.update(cd(bars[idx])); vol.update(vd(bars[idx]));
   for (let i = bars[idx].subStart; i <= bars[idx].subEnd; i++) { processSub(baseBars[i]); }
   baseIdx = bars[idx].subEnd;
+  if (tickMode) { resetForming(); simMs = tickMs[baseIdx] || 0; }
   renderLive(); renderLegend(null); oscStepFwd();
 }
 function stepBack() {
@@ -1354,12 +1361,88 @@ function stepBack() {
   idx--; baseIdx = bars[idx].subEnd; hardReveal(); renderLive();
 }
 function play() {
+  if (tickMode) return playTick();
   if (playing) return pause();
   if (idx >= bars.length - 1) return;
   playing = true; $('btnPlay').textContent = 'pause';
   timer = setInterval(stepFwd, 1000 / Number($('speedSelect').value));
 }
 function pause() { playing = false; $('btnPlay').textContent = 'play_arrow'; clearInterval(timer); timer = null; }
+
+// ===================== Tradovate-style per-day TICK replay =====================
+// A day's real trade prints (data/tick/<SYM>_<day>.json) become the base resolution:
+// each print is a sub-bar → fills are tick-accurate, and during PLAY the current candle
+// forms live print-by-print, paced in real time (speed = realtime ×).
+const TICK_FRAME_MS = 50;
+function setSpeedOptions(t) {
+  if (t === speedUITick) return; speedUITick = t;
+  const opts = t ? [[1, '1× realtime'], [2, '2×'], [5, '5×'], [10, '10×'], [30, '30×'], [60, '60×'], [120, '120×']]
+                 : [[1, '1 bar/s'], [2, '2 bar/s'], [4, '4 bar/s'], [8, '8 bar/s'], [20, '20 bar/s']];
+  const def = t ? 10 : 2;
+  $('speedSelect').innerHTML = opts.map(([v, l]) => `<option value="${v}" ${v === def ? 'selected' : ''}>${l}</option>`).join('');
+}
+async function enterTickMode(ds) {
+  if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; if ($('symbol')) $('symbol').textContent = INSTR.symbol; if ($('entryPrice')) $('entryPrice').step = String(TICK); }
+  let idxFile;
+  try { const r = await fetch('data/tick/index.json?v=' + Date.now()); idxFile = r.ok ? await r.json() : []; } catch (e) { idxFile = []; }
+  availTickDays = (Array.isArray(idxFile) ? idxFile : (idxFile.days || [])).slice().sort();
+  if (!availTickDays.length) { tickMode = true; toast('No tick days yet — run scripts/fetch_tick_days.py to pull a day'); if (!wired) { wire(); wired = true; } return true; }
+  return loadTickDay(availTickDays[availTickDays.length - 1]);
+}
+async function loadTickDay(day) {
+  let d;
+  try { const r = await fetch(`data/tick/${INSTR.symbol}_${day}.json?v=` + Date.now()); if (!r.ok) throw 0; d = await r.json(); }
+  catch (e) { toast('Tick day not available locally: ' + day); return false; }
+  pause(); position = null; entryOrder = null; orders = []; markers = []; tool = ''; pendingPt = null;
+  tickMode = true; curTickDay = day; setSpeedOptions(true);
+  if (d.tick) { TICK = d.tick; INSTR = { ...INSTR, tickSize: d.tick }; }
+  const n = d.p.length; baseBars = new Array(n); tickMs = new Array(n);
+  for (let i = 0; i < n; i++) { const p = d.p[i], ms = d.t0 + d.dt[i]; tickMs[i] = ms; baseBars[i] = { time: Math.floor(ms / 1000), open: p, high: p, low: p, close: p, volume: d.s[i] }; }
+  BASE_TF = 1 / 60;                                            // nominal; tick mode always buckets
+  TF_OPTIONS = [1 / 60, 1 / 12, 0.25, 0.5, 1, 2, 3, 5];        // 1s 5s 15s 30s 1m 2m 3m 5m
+  tf = 1;                                                      // default 1-min view (candle forms live)
+  sessions = [{ key: day, start: 0, end: n - 1 }];            // one day; calendar lists all fetched days
+  dayIdx = {}; availTickDays.forEach(k => { dayIdx[k] = 0; });
+  $('sessionSelect').innerHTML = `<option value="0">${day}</option>`;
+  buildTfSelect(); buildAtmSelect();
+  $('startSlider').max = n - 1;
+  rebuildTf();
+  baseIdx = rthOpenIdx(sessions[0]); syncIdxFromBase();
+  sizeChart(); hardReveal(); chart.timeScale().fitContent();
+  if (chartType && chartType !== 'candles') { const _t = chartType; chartType = '__'; setChartType(_t); }
+  if (!wired) { wire(); wired = true; }
+  renderAll();
+  toast(`Tick replay · ${day} · ${n.toLocaleString()} prints (speed = realtime ×)`);
+  return true;
+}
+function resetForming() {
+  if (!bars.length || !baseBars.length) return;
+  const b = bars[idx], s = b.subStart;
+  fBucket = b.time; fO = baseBars[s].close; fH = fO; fL = fO; fC = fO; fV = 0;
+  for (let i = s; i <= baseIdx && i < baseBars.length; i++) { const p = baseBars[i].close; if (p > fH) fH = p; if (p < fL) fL = p; fC = p; fV += baseBars[i].volume; }
+}
+function commitForming() { const bar = { time: fBucket, open: fO, high: fH, low: fL, close: fC, volume: fV, __i: idx }; candle.update(cd(bar)); vol.update(vd(bar)); }
+function revealTick(i) {
+  const b = baseBars[i], sp = Math.round(tf * 60), bucket = Math.floor(b.time / sp) * sp;
+  if (bucket !== fBucket) { if (idx < bars.length) { candle.update(cd(bars[idx])); vol.update(vd(bars[idx])); } idx = Math.min(idx + 1, bars.length - 1); fBucket = bucket; fO = b.close; fH = b.close; fL = b.close; fC = b.close; fV = 0; }
+  const p = b.close; if (p > fH) fH = p; if (p < fL) fL = p; fC = p; fV += b.volume;
+  processSub(b);
+}
+function playTickFrame() {
+  const mult = Number($('speedSelect').value) || 1;
+  simMs += mult * TICK_FRAME_MS;
+  let n = 0;
+  while (baseIdx < baseBars.length - 1 && tickMs[baseIdx + 1] <= simMs) { baseIdx++; revealTick(baseIdx); if (++n > 250000) break; }
+  if (n) { commitForming(); renderLive(); renderLegend(null); }
+  if (baseIdx >= baseBars.length - 1) pause();
+}
+function playTick() {
+  if (playing) return pause();
+  if (baseIdx >= baseBars.length - 1) return;
+  playing = true; $('btnPlay').textContent = 'pause';
+  resetForming(); simMs = tickMs[baseIdx] || 0;
+  timer = setInterval(playTickFrame, TICK_FRAME_MS);
+}
 function rthOpenIdx(s) { for (let i = s.start; i <= s.end; i++) { const m = etMinutes(baseBars[i].time); if (m >= 570 && m < 960) return i; } return s.start; }  // first bar in 09:30–15:59 ET = US cash open (skips the 18:00 ET Globex open)
 function gotoSession(i) {
   if (locked()) return toast("Can't jump while in a position / working order");
