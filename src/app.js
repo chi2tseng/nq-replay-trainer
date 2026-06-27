@@ -62,6 +62,7 @@ let lines = [];              // active price-line handles
 if (loadJSON('rt_atm_v', 0) < 2) { try { localStorage.removeItem('rt_atm'); } catch (e) {} saveJSON('rt_atm_v', 2); }   // one-time: adopt structural-stop 1:1 default bracket
 let atm = normalizeAtms(loadJSON('rt_atm', defaultAtms()));
 let activeAtm = Object.keys(atm)[0];
+let riskOn = loadJSON('rt_risk_on', false), riskUsd = loadJSON('rt_risk_usd', 200);   // fixed-$ position sizing: contracts derived from $risk ÷ stop
 
 function defaultAtms() {
   return {
@@ -174,6 +175,34 @@ function bracketFromAtm(name) {   // snapshot an ATM template's stop + targets (
   return { slTicks: a.sl || 0, tgts: (a.targets || []).filter(t => t.ticks > 0 && t.qty > 0).map(t => ({ ticks: t.ticks, qty: t.qty })) };
 }
 function curBarExtreme() { const b = bars[Math.min(idx, bars.length - 1)]; return b ? { hi: b.high, lo: b.low } : { hi: 0, lo: 0 }; }   // current K-bar high/low for structural stops
+
+// ---- fixed-risk position sizing: contracts = floor($risk ÷ (stopTicks × $/tick)) ----
+function plannedStopTicks(side, kind, price) {   // stop distance (ticks) the active ATM would apply to this prospective order
+  const a = atm[activeAtm] || {};
+  if (a.struct) {                                // structural stop = signal/current bar's opposite extreme ±1 tick
+    const ext = curBarExtreme();
+    const oppExtreme = side === 'long' ? ext.lo - TICK : ext.hi + TICK;
+    const entryRef = kind === 'stop' ? rnd(side === 'long' ? ext.hi + TICK : ext.lo - TICK)   // breakout level
+                   : kind === 'limit' ? (price || curPx()) : curPx();
+    return Math.max(1, Math.round(Math.abs(entryRef - oppExtreme) / TICK));
+  }
+  return a.sl > 0 ? a.sl : 0;                    // fixed SL ticks (0 = template has no stop → can't size)
+}
+function sizeForRisk(stopTicks) { return (riskUsd > 0 && stopTicks > 0) ? Math.max(1, Math.floor(riskUsd / (stopTicks * INSTR.tickValue))) : null; }
+function resolveQty(side, kind, price) { if (riskOn) { const n = sizeForRisk(plannedStopTicks(side, kind, price)); if (n) return n; } return Math.max(1, parseInt($('qty').value, 10) || 1); }
+function renderRiskReadout() {
+  const box = $('riskReadout'); if (!box) return;
+  const q = $('qty'), qm = $('qtyMinus'), qp = $('qtyPlus'); if (q) q.disabled = riskOn; if (qm) qm.disabled = riskOn; if (qp) qp.disabled = riskOn;
+  if (!riskOn || !baseBars.length) { box.style.display = 'none'; return; }
+  const kind = $('entryType').value;
+  const px = kind === 'limit' ? rnd(parseFloat($('entryPrice').value) || curPx()) : undefined;
+  const cell = (side, cls, lbl) => {
+    const st = plannedStopTicks(side, kind, px), n = sizeForRisk(st);
+    if (!n) return `<span class="rk ${cls}"><span>${lbl}</span><span>— set a stop</span></span>`;
+    return `<span class="rk ${cls}"><span>${lbl} <b>${n}</b></span><span>${st}t · ${usd(n * st * INSTR.tickValue)}</span></span>`;
+  };
+  box.style.display = ''; box.innerHTML = cell('long', 'buy', 'BUY') + cell('short', 'sell', 'SELL');
+}
 function placeEntryAt(side, kind, price) {
   if (position) return toast('Already in a position — flatten first');
   const mult = Math.max(1, parseInt($('qty').value, 10) || 1);
@@ -1373,8 +1402,7 @@ function locked() { return !!position || !!entryOrder; }
 function onEntryButton(side) {
   if (position) { if (position.side !== side) return flatten('reverse'); return toast('Already in a position — FLATTEN first'); }
   const kind = $('entryType').value;
-  const mult = Math.max(1, parseInt($('qty').value, 10) || 1);
-  if (kind === 'market') { openPosition(side, curPx(), curBaseT(), activeAtm, mult); }
+  if (kind === 'market') { openPosition(side, curPx(), curBaseT(), activeAtm, resolveQty(side, 'market')); }
   else {
     const a = atm[activeAtm] || {};
     let price, bracket;
@@ -1391,6 +1419,7 @@ function onEntryButton(side) {
       price = rnd(parseFloat($('entryPrice').value));
       if (!price) return toast('Enter an entry price');
     }
+    const mult = resolveQty(side, kind, price);
     entryOrder = { side, kind, price, atm: activeAtm, mult, ...(bracket || bracketFromAtm(activeAtm)) };
     toast(`${side === 'long' ? 'Buy' : 'Sell'} ${kind === 'limit' ? 'Limit' : 'Stop'} @ ${f2(price)} + bracket`);
     drawLines(); renderLive();
@@ -1430,7 +1459,7 @@ function openPosition(side, px, t, atmName, mult, bracket) {
 
 function flatten() { if (position) exitQty(position.qty, curPx(), curBaseT(), 'manual'); else cancelEntry(); }
 function reverse() { if (!position) return; const s = position.side; exitQty(position.qty, curPx(), curBaseT(), 'reverse'); onEntryButtonDirect(s === 'long' ? 'short' : 'long'); }
-function onEntryButtonDirect(side) { openPosition(side, curPx(), curBaseT(), activeAtm, Math.max(1, parseInt($('qty').value, 10) || 1)); }
+function onEntryButtonDirect(side) { openPosition(side, curPx(), curBaseT(), activeAtm, resolveQty(side, 'market')); }
 
 // ---------- per-(1-min) bar processing ----------
 function processSub(b) {
@@ -1569,6 +1598,7 @@ function renderLive() {
   const _db = $('dateBtn'); if (_db) _db.disabled = lock;
   const _dl = $('dateLabel'); if (_dl) { const _s = sessions[currentSessionIdx()]; _dl.textContent = _s ? _s.key : '—'; }
   $('entryPriceRow').style.display = $('entryType').value === 'market' ? 'none' : '';
+  renderRiskReadout();
 }
 
 // current replay session (= "today") tally — bucketed by the same futures trading-day key the chart uses
@@ -1707,7 +1737,7 @@ function wire() {
   document.addEventListener('mousedown', (e) => { const p = $('indPopover'), b = $('btnIndicators'); if (p && p.classList.contains('open') && !p.contains(e.target) && !b.contains(e.target)) { p.classList.remove('open'); b.classList.remove('active'); } });
   $('oscClose').onclick = () => { setOscMode('off'); const s = $('oscSelect'); if (s) s.value = 'off'; };
 
-  $('entryType').onchange = () => { $('entryPriceRow').style.display = $('entryType').value === 'market' ? 'none' : ''; if ($('entryType').value !== 'market' && !$('entryPrice').value) $('entryPrice').value = f2(curPx()); };
+  $('entryType').onchange = () => { $('entryPriceRow').style.display = $('entryType').value === 'market' ? 'none' : ''; if ($('entryType').value !== 'market' && !$('entryPrice').value) $('entryPrice').value = f2(curPx()); renderRiskReadout(); };
   $('btnBuy').onclick = () => onEntryButton('long');
   $('btnSell').onclick = () => onEntryButton('short');
   $('btnFlatten').onclick = flatten;
@@ -1721,8 +1751,14 @@ function wire() {
   });
   $('qtyMinus').onclick = () => { $('qty').value = Math.max(1, (parseInt($('qty').value, 10) || 1) - 1); };
   $('qtyPlus').onclick = () => { $('qty').value = (parseInt($('qty').value, 10) || 1) + 1; };
+  // fixed-risk position sizing controls
+  $('riskOn').checked = riskOn; $('riskUsd').value = riskUsd;
+  $('riskOn').onchange = (e) => { riskOn = e.target.checked; saveJSON('rt_risk_on', riskOn); renderRiskReadout(); };
+  $('riskUsd').oninput = (e) => { riskUsd = Math.max(0, parseFloat(e.target.value) || 0); saveJSON('rt_risk_usd', riskUsd); renderRiskReadout(); };
+  $('entryPrice').addEventListener('input', renderRiskReadout);
+  renderRiskReadout();
 
-  $('atmSelect').onchange = (e) => { activeAtm = e.target.value; loadAtmIntoEditor(activeAtm); };
+  $('atmSelect').onchange = (e) => { activeAtm = e.target.value; loadAtmIntoEditor(activeAtm); renderRiskReadout(); };
   $('btnAtmSave').onclick = saveAtm;
   $('btnAtmDel').onclick = delAtm;
 

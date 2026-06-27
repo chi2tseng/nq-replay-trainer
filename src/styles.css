@@ -603,6 +603,17 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 .stepper button:hover{ background:#2f3340; }
 .stepper input{ flex:1; width:auto; min-width:0; text-align:center; border:none; border-left:1px solid var(--line); border-right:1px solid var(--line); border-radius:0; background:transparent; }
 .bs-row{ display:flex; gap:8px; margin-top:8px; }
+/* fixed-risk position sizing */
+.risk-row{ gap:8px; }
+.risk-row .risk-tog{ display:flex; align-items:center; gap:6px; color:var(--txt); cursor:pointer; font-size:12px; white-space:nowrap; }
+.risk-amt{ display:flex; align-items:center; gap:3px; color:var(--dim); white-space:nowrap; }
+.risk-amt input{ width:62px; }
+.risk-readout{ display:flex; flex-direction:column; gap:4px; margin:8px 0 0; padding:7px 9px; background:var(--panel2); border:1px solid var(--line); border-radius:7px; font-size:12px; font-variant-numeric:tabular-nums; }
+.risk-readout .rk{ display:flex; justify-content:space-between; gap:10px; white-space:nowrap; }
+.risk-readout .rk b{ font-weight:800; font-size:13px; }
+.risk-readout .rk.buy{ color:var(--green); }
+.risk-readout .rk.sell{ color:var(--red); }
+.stepper input:disabled, .stepper button:disabled{ opacity:.4; cursor:not-allowed; }
 .bs{ flex:1; display:flex; flex-direction:column; align-items:center; gap:1px; padding:9px 0; border:none; border-radius:8px; font-weight:700; cursor:pointer; transition:filter .12s, background .12s; }
 .bs .bs-t{ font-size:15px; letter-spacing:.5px; }
 .bs .bs-s{ font-size:10px; font-weight:600; opacity:.8; }
