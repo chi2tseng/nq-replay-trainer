@@ -295,7 +295,7 @@ const RIPSTER = [   // Ripster EMA Clouds — pairs + per-cloud style; matches t
   { fast: 180, slow: 200, a: 0.32, dir: false, fill: '#5b8def', line: 'rgba(91,141,239,0.95)' },// blue band
 ];
 // one-time reset of indicator prefs → new clean defaults (blank chart, EMA 10 only, TV-style removable)
-if (loadJSON('rt_ind_v', 0) < 3) { ['rt_ripster', 'rt_oscMode', 'rt_vwap', 'rt_bb', 'rt_ema', 'rt_ema_p', 'rt_atr_len'].forEach(k => { try { localStorage.removeItem(k); } catch (e) {} }); saveJSON('rt_ind_v', 3); }
+if (loadJSON('rt_ind_v', 0) < 4) { ['rt_ripster', 'rt_oscMode', 'rt_vwap', 'rt_bb', 'rt_ema', 'rt_ema_p', 'rt_atr_len'].forEach(k => { try { localStorage.removeItem(k); } catch (e) {} }); saveJSON('rt_ind_v', 4); }
 let ripsterOn = loadJSON('rt_ripster', false);
 let ripsterData = [];
 function emaArr(vals, n) { const k = 2 / (n + 1), out = new Array(vals.length); let prev; for (let i = 0; i < vals.length; i++) { prev = i === 0 ? vals[0] : vals[i] * k + prev * (1 - k); out[i] = prev; } return out; }
@@ -355,13 +355,14 @@ const OSC_COL = {
   macd:  '#2962ff', signal: '#fcd535',    // MACD line / signal line
   up:    '#26a69a', down: '#ef5350',      // histogram + matches candle body colors
   atr:   '#f0b90b',                       // ATR line (amber)
+  atrHalf: '#a9842c',                     // half-ATR line (dim amber, dashed) = 0.5-ATR target distance
 };
 
 // ---- state ----
-let oscMode = loadJSON('rt_oscMode', 'off');   // 'rsi' | 'macd' | 'atr' | 'off'
-let atrLen  = (n => (Number.isFinite(n) && n >= 1) ? n : 14)(loadJSON('rt_atr_len', 14));  // adjustable ATR period
+let oscMode = loadJSON('rt_oscMode', 'atr');   // 'rsi' | 'macd' | 'atr' | 'off'  (ATR 10 shown by default)
+let atrLen  = (n => (Number.isFinite(n) && n >= 1) ? n : 10)(loadJSON('rt_atr_len', 10));  // adjustable ATR period (default 10)
 let oscChart = null, oscSyncing = false;       // reentrancy guard for range sync
-let rsiSeries = null, macdHist = null, macdLine = null, sigLine = null, atrSeries = null;
+let rsiSeries = null, macdHist = null, macdLine = null, sigLine = null, atrSeries = null, atrHalfSeries = null;
 let oscRsi = [], oscMacd = [], oscAtr = [];    // full-length computed arrays (parallel to bars[])
 
 // ---- indicator math (TradingView-accurate) -------------------------------
@@ -474,11 +475,12 @@ function oscResize() {
 function oscBuildSeries() {
   if (!oscChart) return;
   // tear down whatever exists
-  [rsiSeries, macdHist, macdLine, sigLine, atrSeries].forEach(s => { if (s) try { oscChart.removeSeries(s); } catch (e) {} });
-  rsiSeries = macdHist = macdLine = sigLine = atrSeries = null;
+  [rsiSeries, macdHist, macdLine, sigLine, atrSeries, atrHalfSeries].forEach(s => { if (s) try { oscChart.removeSeries(s); } catch (e) {} });
+  rsiSeries = macdHist = macdLine = sigLine = atrSeries = atrHalfSeries = null;
 
   if (oscMode === 'atr') {
     atrSeries = oscChart.addLineSeries({ color: OSC_COL.atr, lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
+    atrHalfSeries = oscChart.addLineSeries({ color: OSC_COL.atrHalf, lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: true });   // ½ ATR (target distance)
   } else if (oscMode === 'rsi') {
     rsiSeries = oscChart.addLineSeries({ color: OSC_COL.rsi, lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
     rsiSeries.applyOptions({ autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }) });
@@ -501,9 +503,9 @@ function oscHardReveal() {
   const hi = Math.min(idx, bars.length - 1);
 
   if (oscMode === 'atr' && atrSeries) {
-    const d = [];
-    for (let i = 0; i <= hi; i++) if (oscAtr[i] != null) d.push({ time: bars[i].time, value: oscAtr[i] });
-    atrSeries.setData(d);
+    const d = [], dh = [];
+    for (let i = 0; i <= hi; i++) if (oscAtr[i] != null) { d.push({ time: bars[i].time, value: oscAtr[i] }); dh.push({ time: bars[i].time, value: oscAtr[i] / 2 }); }
+    atrSeries.setData(d); if (atrHalfSeries) atrHalfSeries.setData(dh);
   } else if (oscMode === 'rsi' && rsiSeries) {
     const d = [];
     for (let i = 0; i <= hi; i++) if (oscRsi[i] != null) d.push({ time: bars[i].time, value: oscRsi[i] });
@@ -525,7 +527,7 @@ function oscStepFwd() {
   if (oscMode === 'off' || !oscChart) return;
   const i = idx; if (i < 0 || i >= bars.length) return;
   if (oscMode === 'atr' && atrSeries) {
-    if (oscAtr[i] != null) atrSeries.update({ time: bars[i].time, value: oscAtr[i] });
+    if (oscAtr[i] != null) { atrSeries.update({ time: bars[i].time, value: oscAtr[i] }); if (atrHalfSeries) atrHalfSeries.update({ time: bars[i].time, value: oscAtr[i] / 2 }); }
   } else if (oscMode === 'rsi' && rsiSeries) {
     if (oscRsi[i] != null) rsiSeries.update({ time: bars[i].time, value: oscRsi[i] });
   } else if (oscMode === 'macd' && macdLine) {
@@ -541,7 +543,7 @@ function setOscMode(m) {
   oscMode = m; saveJSON('rt_oscMode', m);
   const tag = $('oscTag'); if (tag) tag.textContent = m === 'off' ? 'OSC' : (m === 'atr' ? 'ATR ' + atrLen : m.toUpperCase());
   if (m === 'off') {
-    if (oscChart) { [rsiSeries, macdHist, macdLine, sigLine, atrSeries].forEach(s => { if (s) try { oscChart.removeSeries(s); } catch (e) {} }); rsiSeries = macdHist = macdLine = sigLine = atrSeries = null; }
+    if (oscChart) { [rsiSeries, macdHist, macdLine, sigLine, atrSeries, atrHalfSeries].forEach(s => { if (s) try { oscChart.removeSeries(s); } catch (e) {} }); rsiSeries = macdHist = macdLine = sigLine = atrSeries = atrHalfSeries = null; }
     if ($('oscPane')) $('oscPane').style.display = 'none';
   } else {
     ensureOscChart(); oscBuildSeries(); oscHardReveal();
