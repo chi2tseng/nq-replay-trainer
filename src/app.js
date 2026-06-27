@@ -58,12 +58,13 @@ let trades = loadJSON('rt_trades', []);
 let markers = [];            // {baseTime, position, color, shape, text}
 let lines = [];              // active price-line handles
 
-if (loadJSON('rt_atm_v', 0) < 1) { try { localStorage.removeItem('rt_atm'); } catch (e) {} saveJSON('rt_atm_v', 1); }   // one-time: adopt 40pt/40pt default bracket
+if (loadJSON('rt_atm_v', 0) < 2) { try { localStorage.removeItem('rt_atm'); } catch (e) {} saveJSON('rt_atm_v', 2); }   // one-time: adopt structural-stop 1:1 default bracket
 let atm = normalizeAtms(loadJSON('rt_atm', defaultAtms()));
 let activeAtm = Object.keys(atm)[0];
 
 function defaultAtms() {
   return {
+    'Struct SL · 1:1':    { struct: true, rr: 1, sl: 0, targets: [], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },   // stop at current bar's high(short)/low(long) ±1tick; target = 1× risk
     '40pt / 40pt':        { sl: 160, targets: [{ ticks: 160, qty: 1 }], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },   // 160 ticks = 40 pt on NQ/ES (0.25 tick)
     'Flat 10/20':         { sl: 10, targets: [{ ticks: 20, qty: 1 }], be: { on: false, trig: 12, off: 1 }, trail: { on: false, trig: 16, dist: 8 } },
     'Scalp 8/8 +BE':      { sl: 8,  targets: [{ ticks: 8, qty: 1 }],  be: { on: true,  trig: 6,  off: 1 }, trail: { on: false, trig: 8,  dist: 5 } },
@@ -168,8 +169,10 @@ function initLayout() { applyLayout(false); attachGutter($('gutterCol'), 'x'); a
 function ctxPriceAt(clientY) { return candle.coordinateToPrice(clientY - $('chart').getBoundingClientRect().top); }
 function bracketFromAtm(name) {   // snapshot an ATM template's stop + targets (ticks) onto a working order
   const a = atm[name] || {};
+  if (a.struct) return { slTicks: 0, tgts: [], struct: true, rr: a.rr || 1 };   // structural stop is computed from the fill bar
   return { slTicks: a.sl || 0, tgts: (a.targets || []).filter(t => t.ticks > 0 && t.qty > 0).map(t => ({ ticks: t.ticks, qty: t.qty })) };
 }
+function curBarExtreme() { const b = bars[Math.min(idx, bars.length - 1)]; return b ? { hi: b.high, lo: b.low } : { hi: 0, lo: 0 }; }   // current K-bar high/low for structural stops
 function placeEntryAt(side, kind, price) {
   if (position) return toast('Already in a position — flatten first');
   const mult = Math.max(1, parseInt($('qty').value, 10) || 1);
@@ -1381,8 +1384,16 @@ function cancelOrder(spec) {   // × on a working order: 'entry' cancels the pen
 
 function openPosition(side, px, t, atmName, mult, bracket) {
   const a = atm[atmName] || {}; entryOrder = null;
-  const sl = bracket ? bracket.slTicks : a.sl;                 // honor a working order's (possibly dragged) bracket
-  const srcT = bracket ? bracket.tgts : a.targets;
+  let sl, srcT;
+  if (a.struct) {                                  // structural stop at the current bar's extreme (short=high, long=low) + RR target
+    const ext = curBarExtreme();
+    const stopPx = side === 'long' ? ext.lo - TICK : ext.hi + TICK;
+    sl = Math.max(1, Math.round(Math.abs(px - stopPx) / TICK));
+    srcT = [{ ticks: Math.max(1, Math.round(sl * (a.rr || 1))), qty: 1 }];   // target = rr × risk (1:1)
+  } else {
+    sl = bracket ? bracket.slTicks : a.sl;                       // honor a working order's (possibly dragged) bracket
+    srcT = bracket ? bracket.tgts : a.targets;
+  }
   const tgts = (srcT || []).filter(x => x.ticks > 0 && x.qty > 0).map(x => ({ ticks: x.ticks, qty: x.qty * mult }));
   if (!tgts.length) tgts.push({ ticks: sl > 0 ? sl * 2 : 20, qty: mult }); // fallback single target
   const totalQty = tgts.reduce((s, x) => s + x.qty, 0);
@@ -1487,8 +1498,14 @@ function drawLines() {
     lines.push(pl(entryOrder.price, '#2962ff', LightweightCharts.LineStyle.Dotted, entryOrder.kind === 'limit' ? 'LMT' : 'STP'));
     // preview the ATM bracket that auto-attaches on fill (draggable to adjust before fill)
     const long = entryOrder.side === 'long';
-    if (entryOrder.slTicks > 0) lines.push(pl(rnd(long ? entryOrder.price - entryOrder.slTicks * TICK : entryOrder.price + entryOrder.slTicks * TICK), '#ef5350', LightweightCharts.LineStyle.Dashed, '↳STP'));
-    (entryOrder.tgts || []).forEach((tg, i) => { if (tg.ticks > 0) lines.push(pl(rnd(long ? entryOrder.price + tg.ticks * TICK : entryOrder.price - tg.ticks * TICK), '#26a69a', LightweightCharts.LineStyle.Dashed, '↳T' + (i + 1))); });
+    if (entryOrder.struct) {   // structural stop preview from the current bar; target = 1× risk
+      const ext = curBarExtreme(); const sp = rnd(long ? ext.lo - TICK : ext.hi + TICK); const risk = Math.abs(entryOrder.price - sp);
+      lines.push(pl(sp, '#ef5350', LightweightCharts.LineStyle.Dashed, '↳STP'));
+      lines.push(pl(rnd(long ? entryOrder.price + risk : entryOrder.price - risk), '#26a69a', LightweightCharts.LineStyle.Dashed, '↳T1'));
+    } else {
+      if (entryOrder.slTicks > 0) lines.push(pl(rnd(long ? entryOrder.price - entryOrder.slTicks * TICK : entryOrder.price + entryOrder.slTicks * TICK), '#ef5350', LightweightCharts.LineStyle.Dashed, '↳STP'));
+      (entryOrder.tgts || []).forEach((tg, i) => { if (tg.ticks > 0) lines.push(pl(rnd(long ? entryOrder.price + tg.ticks * TICK : entryOrder.price - tg.ticks * TICK), '#26a69a', LightweightCharts.LineStyle.Dashed, '↳T' + (i + 1))); });
+    }
   }
   if (position) {
     lines.push(pl(position.entry, '#787b86', LightweightCharts.LineStyle.Dotted, 'ENTRY'));
