@@ -8,6 +8,7 @@ let INSTR = { symbol: 'NQ', tickSize: 0.25, tickValue: 5 }; // active contract s
 const DATASETS = [
   { id: 'nq1y', label: 'NQ · 1m · 1 year (real CME · Databento)',    url: 'data/NQ_db_1m.json',  instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },   // $20/pt
   { id: 'nq15', label: 'NQ · 15s · 3 months (real CME · Databento)', url: 'data/NQ_db_15s.json', base: 0.25, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
+  { id: 'es1y', label: 'ES · 1m · 1 year (real CME · Databento)',    url: 'data/ES_db_1m.json',  instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
   { id: 'nq5',  label: 'NQ · 5m · 60d (real · Yahoo)',  url: 'data/NQ_real_5m.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
   { id: 'es5',  label: 'ES · 5m · 60d (real · Yahoo)',  url: 'data/ES_real_5m.json', instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
   { id: 'ym5',  label: 'YM · 5m · 60d (real · Yahoo)',  url: 'data/YM_real_5m.json', instr: { symbol: 'YM', tickSize: 1, tickValue: 5 } },        // $5/pt

@@ -11,3 +11,6 @@ Thumbs.db
 # databento raw dumps + key
 data/*_db*.csv
 scripts/.db_key
+
+# 10-year per-year NQ history (~400MB total) — local backtesting only, NOT served by the app
+data/NQ_y20*.json
