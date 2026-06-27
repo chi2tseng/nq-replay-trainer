@@ -488,16 +488,15 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 }
 #indLegend .il-row{
   display:flex; align-items:center; gap:6px; width:auto;
-  padding:1px 6px 1px 3px; border-radius:4px; cursor:pointer;
+  padding:1px 4px 1px 6px; border-radius:4px;
   background:transparent; border:1px solid transparent;        /* no box — text floats over the chart */
-  white-space:nowrap; transition:background .1s, opacity .1s;
+  white-space:nowrap; transition:background .1s;
 }
 #indLegend .il-row:hover{ background:rgba(30,35,41,.86); }
-#indLegend .il-row.off{ opacity:.45; }
-#indLegend .il-row.off:hover{ opacity:.8; }
-/* eye is subtle until you hover the row (TradingView reveals the action icons on hover) */
-#indLegend .il-eye{ font-size:15px; color:var(--dim); opacity:.45; transition:opacity .1s, color .1s; }
-#indLegend .il-row:hover .il-eye{ opacity:1; color:var(--txt); }
+/* TradingView-style remove (X): hidden until you hover the row, turns red on its own hover */
+#indLegend .il-x{ font-size:15px; color:var(--dim); opacity:0; cursor:pointer; margin-left:2px; transition:opacity .1s, color .1s; }
+#indLegend .il-row:hover .il-x{ opacity:.7; }
+#indLegend .il-x:hover{ opacity:1; color:#ef5350; }
 #indLegend .il-name{ color:var(--txt); font-weight:600; }     /* name neutral; the VALUE carries the plot color */
 #indLegend .il-params{ color:var(--dim); font-size:11px; }
 #indLegend .il-vals{ font-variant-numeric:tabular-nums; font-family:var(--mono); }

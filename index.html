@@ -33,12 +33,13 @@
           <div class="pop-note">8/9 · 5/12 · 34/50 · 72/89 · 180/200</div>
           <label class="pop-row"><input type="checkbox" id="indVwap" /><span class="ind-swatch" style="background:#e040fb"></span>VWAP (session-anchored)</label>
           <label class="pop-row"><input type="checkbox" id="indBB" /><span class="ind-swatch" style="background:#f0b90b"></span>Bollinger Bands 20 / 2&sigma;</label>
-          <label class="pop-row"><input type="checkbox" id="indEma" /><span class="ind-swatch" style="background:#42a5f5"></span>EMA Ribbon</label>
-          <div class="pop-row sub"><span>EMA periods</span><input type="text" id="emaPeriods" placeholder="9,21,50,200" /></div>
+          <label class="pop-row"><input type="checkbox" id="indEma" /><span class="ind-swatch" style="background:#42a5f5"></span>EMA (選你要的週期)</label>
+          <div class="pop-row sub"><span>EMA periods</span><input type="text" id="emaPeriods" placeholder="10" /></div>
           <div class="pop-h" style="margin-top:10px">Oscillator (sub-pane)</div>
           <div class="pop-row sub"><span>Mode</span>
-            <select id="oscSelect"><option value="rsi">RSI 14</option><option value="macd">MACD 12·26·9</option><option value="off">Off</option></select>
+            <select id="oscSelect"><option value="off">Off</option><option value="atr">ATR</option><option value="rsi">RSI 14</option><option value="macd">MACD 12·26·9</option></select>
           </div>
+          <div class="pop-row sub"><span>ATR period</span><input type="text" id="atrLen" placeholder="14" /></div>
         </div>
       </div>
     </div>

@@ -252,12 +252,12 @@ function renderIndLegend(i) {
   if (i == null || i < 0 || i >= bars.length) i = Math.min(idx, bars.length - 1);
   const rows = [];
   const tint = (c, s) => `<span style="color:${c}">${s}</span>`;
-  const add = (key, on, title, params, vals) => rows.push(
-    `<div class="il-row${on ? '' : ' off'}" data-ind="${key}" title="Click to toggle">` +
-    `<span class="il-eye material-symbols-outlined">${on ? 'visibility' : 'visibility_off'}</span>` +
+  const add = (key, on, title, params, vals) => { if (!on) return; rows.push(   // TV-style: only ACTIVE indicators show
+    `<div class="il-row" data-ind="${key}">` +
     `<span class="il-name">${title}</span>` +
     (params ? `<span class="il-params">${params}</span>` : '') +
-    (on && vals ? `<span class="il-vals">${vals}</span>` : '') + `</div>`);
+    (vals ? `<span class="il-vals">${vals}</span>` : '') +
+    `<span class="il-x material-symbols-outlined" data-del="${key}" title="Remove">close</span>` + `</div>`); };
   add('rip', ripsterOn, 'Ripster EMA Clouds', '8·9 5·12 34·50 72·89 180·200', '');
   add('vwap', vwapOn, 'VWAP', '', tint(VWAP_COLOR, `<b>${fmtIndVal(vwapData[i])}</b>`));
   add('bb', bbOn, 'BB', '20 2', `${tint('var(--dim)', fmtIndVal(bbData.up[i]))} ${tint(BB_MID, '<b>' + fmtIndVal(bbData.mid[i]) + '</b>')} ${tint('var(--dim)', fmtIndVal(bbData.lo[i]))}`);
@@ -275,7 +275,7 @@ function toggleInd(which) {
 function initIndLegend() {
   const el = $('indLegend'); if (!el) return;
   el.addEventListener('mousedown', (e) => e.stopPropagation());   // clicking the legend must not start a chart drag
-  el.addEventListener('click', (e) => { const row = e.target.closest('.il-row'); if (row && row.dataset.ind) toggleInd(row.dataset.ind); });
+  el.addEventListener('click', (e) => { const x = e.target.closest('[data-del]'); if (x) toggleInd(x.dataset.del); });   // X removes (turns off)
   renderIndLegend();
 }
 
@@ -287,7 +287,9 @@ const RIPSTER = [   // Ripster EMA Clouds — pairs + per-cloud style; matches t
   { fast: 72,  slow: 89,  a: 0.30, dir: false, fill: '#9c7a4d', line: 'rgba(156,122,77,0.9)' }, // brown band
   { fast: 180, slow: 200, a: 0.32, dir: false, fill: '#5b8def', line: 'rgba(91,141,239,0.95)' },// blue band
 ];
-let ripsterOn = loadJSON('rt_ripster', true);
+// one-time reset of indicator prefs → new clean defaults (blank chart, EMA 10 only, TV-style removable)
+if (loadJSON('rt_ind_v', 0) < 3) { ['rt_ripster', 'rt_oscMode', 'rt_vwap', 'rt_bb', 'rt_ema', 'rt_ema_p', 'rt_atr_len'].forEach(k => { try { localStorage.removeItem(k); } catch (e) {} }); saveJSON('rt_ind_v', 3); }
+let ripsterOn = loadJSON('rt_ripster', false);
 let ripsterData = [];
 function emaArr(vals, n) { const k = 2 / (n + 1), out = new Array(vals.length); let prev; for (let i = 0; i < vals.length; i++) { prev = i === 0 ? vals[0] : vals[i] * k + prev * (1 - k); out[i] = prev; } return out; }
 function computeRipster() { const c = bars.map(b => (b.high + b.low) / 2); ripsterData = RIPSTER.map(r => ({ fast: emaArr(c, r.fast), slow: emaArr(c, r.slow), st: r })); } // hl2 source (Ripster default)
@@ -345,13 +347,15 @@ const OSC_COL = {
   guide: '#3a4150',                       // 30/70/50 guide lines
   macd:  '#2962ff', signal: '#fcd535',    // MACD line / signal line
   up:    '#26a69a', down: '#ef5350',      // histogram + matches candle body colors
+  atr:   '#f0b90b',                       // ATR line (amber)
 };
 
 // ---- state ----
-let oscMode = loadJSON('rt_oscMode', 'rsi');   // 'rsi' | 'macd' | 'off'
+let oscMode = loadJSON('rt_oscMode', 'off');   // 'rsi' | 'macd' | 'atr' | 'off'
+let atrLen  = (n => (Number.isFinite(n) && n >= 1) ? n : 14)(loadJSON('rt_atr_len', 14));  // adjustable ATR period
 let oscChart = null, oscSyncing = false;       // reentrancy guard for range sync
-let rsiSeries = null, macdHist = null, macdLine = null, sigLine = null;
-let oscRsi = [], oscMacd = [];                 // full-length computed arrays (parallel to bars[])
+let rsiSeries = null, macdHist = null, macdLine = null, sigLine = null, atrSeries = null;
+let oscRsi = [], oscMacd = [], oscAtr = [];    // full-length computed arrays (parallel to bars[])
 
 // ---- indicator math (TradingView-accurate) -------------------------------
 // Wilder's RSI(14): seed with simple averages over first `len` deltas, then RMA.
@@ -395,11 +399,25 @@ function computeMACD(src, fast, slow, sigLen) {
   return out;
 }
 
+// Wilder's ATR(len): seed with SMA of first `len` true ranges, then RMA. null until seeded.
+function computeATR(bars, len) {
+  const n = bars.length, out = new Array(n).fill(null);
+  if (n < 2 || len < 1) return out;
+  const tr = new Array(n);
+  tr[0] = bars[0].high - bars[0].low;
+  for (let i = 1; i < n; i++) { const pc = bars[i - 1].close; tr[i] = Math.max(bars[i].high - bars[i].low, Math.abs(bars[i].high - pc), Math.abs(bars[i].low - pc)); }
+  if (n < len) return out;
+  let a = 0; for (let i = 0; i < len; i++) a += tr[i]; a /= len; out[len - 1] = a;
+  for (let i = len; i < n; i++) { a = (a * (len - 1) + tr[i]) / len; out[i] = a; }
+  return out;
+}
+
 // ---- compute (call on rebuildTf + dataset load) --------------------------
 function oscCompute() {
   const close = bars.map(b => b.close);
   oscRsi = computeRSI(close, 14);
   oscMacd = computeMACD(close, 12, 26, 9);
+  oscAtr = computeATR(bars, atrLen);
 }
 
 // ---- chart creation (lazy: only when first turned on) --------------------
@@ -449,10 +467,12 @@ function oscResize() {
 function oscBuildSeries() {
   if (!oscChart) return;
   // tear down whatever exists
-  [rsiSeries, macdHist, macdLine, sigLine].forEach(s => { if (s) try { oscChart.removeSeries(s); } catch (e) {} });
-  rsiSeries = macdHist = macdLine = sigLine = null;
+  [rsiSeries, macdHist, macdLine, sigLine, atrSeries].forEach(s => { if (s) try { oscChart.removeSeries(s); } catch (e) {} });
+  rsiSeries = macdHist = macdLine = sigLine = atrSeries = null;
 
-  if (oscMode === 'rsi') {
+  if (oscMode === 'atr') {
+    atrSeries = oscChart.addLineSeries({ color: OSC_COL.atr, lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
+  } else if (oscMode === 'rsi') {
     rsiSeries = oscChart.addLineSeries({ color: OSC_COL.rsi, lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
     rsiSeries.applyOptions({ autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }) });
     rsiSeries.createPriceLine({ price: 70, color: OSC_COL.guide, lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '70' });
@@ -470,10 +490,14 @@ function oscBuildSeries() {
 function oscHardReveal() {
   if (oscMode === 'off') { if ($('oscPane')) $('oscPane').style.display = 'none'; return; }
   ensureOscChart(); $('oscPane').style.display = '';
-  if (!rsiSeries && !macdLine) oscBuildSeries();
+  if (!rsiSeries && !macdLine && !atrSeries) oscBuildSeries();
   const hi = Math.min(idx, bars.length - 1);
 
-  if (oscMode === 'rsi' && rsiSeries) {
+  if (oscMode === 'atr' && atrSeries) {
+    const d = [];
+    for (let i = 0; i <= hi; i++) if (oscAtr[i] != null) d.push({ time: bars[i].time, value: oscAtr[i] });
+    atrSeries.setData(d);
+  } else if (oscMode === 'rsi' && rsiSeries) {
     const d = [];
     for (let i = 0; i <= hi; i++) if (oscRsi[i] != null) d.push({ time: bars[i].time, value: oscRsi[i] });
     rsiSeries.setData(d);
@@ -493,7 +517,9 @@ function oscHardReveal() {
 function oscStepFwd() {
   if (oscMode === 'off' || !oscChart) return;
   const i = idx; if (i < 0 || i >= bars.length) return;
-  if (oscMode === 'rsi' && rsiSeries) {
+  if (oscMode === 'atr' && atrSeries) {
+    if (oscAtr[i] != null) atrSeries.update({ time: bars[i].time, value: oscAtr[i] });
+  } else if (oscMode === 'rsi' && rsiSeries) {
     if (oscRsi[i] != null) rsiSeries.update({ time: bars[i].time, value: oscRsi[i] });
   } else if (oscMode === 'macd' && macdLine) {
     const m = oscMacd[i]; if (!m) return;
@@ -506,9 +532,9 @@ function oscStepFwd() {
 // ---- mode switch (selector handler) --------------------------------------
 function setOscMode(m) {
   oscMode = m; saveJSON('rt_oscMode', m);
-  const tag = $('oscTag'); if (tag) tag.textContent = m === 'off' ? 'OSC' : m.toUpperCase();
+  const tag = $('oscTag'); if (tag) tag.textContent = m === 'off' ? 'OSC' : (m === 'atr' ? 'ATR ' + atrLen : m.toUpperCase());
   if (m === 'off') {
-    if (oscChart) { [rsiSeries, macdHist, macdLine, sigLine].forEach(s => { if (s) try { oscChart.removeSeries(s); } catch (e) {} }); rsiSeries = macdHist = macdLine = sigLine = null; }
+    if (oscChart) { [rsiSeries, macdHist, macdLine, sigLine, atrSeries].forEach(s => { if (s) try { oscChart.removeSeries(s); } catch (e) {} }); rsiSeries = macdHist = macdLine = sigLine = atrSeries = null; }
     if ($('oscPane')) $('oscPane').style.display = 'none';
   } else {
     ensureOscChart(); oscBuildSeries(); oscHardReveal();
@@ -517,11 +543,21 @@ function setOscMode(m) {
   }
 }
 
+// ---- adjustable ATR period -----------------------------------------------
+function setAtrLen(v) {
+  const n = parseInt(v, 10);
+  if (!Number.isFinite(n) || n < 1 || n > 200) { const inp = $('atrLen'); if (inp) inp.value = atrLen; return toast('ATR period 1–200'); }
+  atrLen = n; saveJSON('rt_atr_len', n); oscAtr = computeATR(bars, atrLen);
+  if (oscMode === 'atr') { oscHardReveal(); const t = $('oscTag'); if (t) t.textContent = 'ATR ' + n; }
+  toast('ATR ' + n);
+}
+
 // ---- one-time wiring (call from wire()) ----------------------------------
 function wireOsc() {
   const sel = $('oscSelect'); if (!sel) return;
   sel.value = oscMode;
   sel.onchange = (e) => setOscMode(e.target.value);
+  const ai = $('atrLen'); if (ai) { ai.value = atrLen; ai.onchange = (e) => setAtrLen(e.target.value); }
   // initial paint (only builds the 2nd chart if not 'off')
   oscCompute(); setOscMode(oscMode);
 }
@@ -537,10 +573,10 @@ window.__osc = () => ({ mode: oscMode, hasChart: !!oscChart, rsiLen: oscRsi.filt
 // ===================================================================
 
 // ---------- indicator state (persisted) ----------
-let vwapOn = loadJSON('rt_vwap', true);
+let vwapOn = loadJSON('rt_vwap', false);
 let bbOn   = loadJSON('rt_bb',   false);
-let emaOn  = loadJSON('rt_ema',  false);
-let emaPeriods = (loadJSON('rt_ema_p', [9, 21, 50, 200]) || [9, 21, 50, 200])
+let emaOn  = loadJSON('rt_ema',  true);
+let emaPeriods = (loadJSON('rt_ema_p', [10]) || [10])
   .filter(n => Number.isFinite(n) && n >= 1).slice(0, 6); // guard persisted value
 const BB_PERIOD = 20, BB_MULT = 2;
 
