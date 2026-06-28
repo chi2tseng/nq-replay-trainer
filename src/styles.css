@@ -130,6 +130,12 @@ input[type=checkbox]{
 
 #clock{color:var(--dim);font-size:13px}
 #clockPrice{font-weight:700;color:var(--txt);font-size:13px}
+.alert-btn{display:inline-flex;align-items:center;gap:3px;padding:5px 8px;line-height:1}
+.alert-btn.on{color:var(--amber,#f0b90b)}
+#alertLbl{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums}
+#alertLbl:empty{display:none}
+#clock.alert-flash{animation:clkflash .5s ease-in-out 3}
+@keyframes clkflash{0%,100%{color:var(--dim)}50%{color:#f0b90b}}
 
 /* =========================================================================
    Main: chart + side panel

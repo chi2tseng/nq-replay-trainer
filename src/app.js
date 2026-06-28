@@ -65,6 +65,8 @@ let orders = [];             // working: {type:'stop'|'target', price, qty, tick
 let entryOrder = null;       // pending entry: {side, kind:'limit'|'stop', price, atm, mult}
 let trades = loadJSON('rt_trades', []);
 let tradeLogs = loadJSON('rt_trade_logs', []);   // named saved trade logs: [{id,name,ts,trades:[...]}]
+let alertMin = loadJSON('rt_alert_min', 690);    // remind me when the replay crosses this ET time (minutes since midnight; 690 = 11:30). null = off
+let prevAlertMin = null;                          // previous revealed bar's ET minutes — used to detect the upward cross
 let markers = [];            // {baseTime, position, color, shape, text}
 let lines = [];              // active price-line handles
 
@@ -1470,7 +1472,7 @@ function maybeReWindow() {                            // trim once the series ha
   feedWindow(true); refreshMarkers(); oscHardReveal();
   return true;
 }
-function hardReveal() { feedWindow(false); refreshMarkers(); drawLines(); renderLegend(null); oscHardReveal(); resetForming(); }
+function hardReveal() { feedWindow(false); refreshMarkers(); drawLines(); renderLegend(null); oscHardReveal(); resetForming(); setAlertBaseline(); }
 function stepFwd() {
   if (idx >= bars.length - 1) { pause(); return; }
   idx++;
@@ -1479,7 +1481,7 @@ function stepFwd() {
   for (let i = bars[idx].subStart; i <= bars[idx].subEnd; i++) { processSub(baseBars[i]); }
   baseIdx = bars[idx].subEnd;
   resetForming();
-  renderLive(); renderLegend(null);
+  renderLive(); renderLegend(null); alertCheck();
 }
 function stepBack() {
   if (locked()) return toast("Can't step back while in a position / working order");
@@ -1497,6 +1499,39 @@ function play() {
   else { playBudget = 0; timer = setInterval(playFrame, TICK_FRAME_MS); }                                       // bars/s: steady display-bar rate
 }
 function pause() { playing = false; $('btnPlay').textContent = 'play_arrow'; clearInterval(timer); timer = null; }
+// ---- time alert: remind when the replay crosses a target ET time ----
+function fmtMin(m) { return pad(Math.floor(m / 60)) + ':' + pad(m % 60); }
+function setAlertBaseline() { prevAlertMin = baseBars.length ? etMinutes(curBaseT()) : null; }   // call after any jump/load so a jump never false-fires
+function alertCheck() {   // call on forward advance: fire once when the revealed time crosses the target upward
+  if (alertMin == null || !baseBars.length) return;
+  const cur = etMinutes(curBaseT());
+  if (prevAlertMin != null && prevAlertMin < alertMin && cur >= alertMin) fireAlert();
+  prevAlertMin = cur;
+}
+function beep() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return;
+    const ac = new Ctx();
+    [0, 0.18].forEach(dt => { const o = ac.createOscillator(), g = ac.createGain(); o.type = 'sine'; o.frequency.value = 880; o.connect(g); g.connect(ac.destination);
+      const t0 = ac.currentTime + dt; g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.3, t0 + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.15); o.start(t0); o.stop(t0 + 0.17); });
+    setTimeout(() => { try { ac.close(); } catch (e) {} }, 800);
+  } catch (e) {}
+}
+function fireAlert() {
+  pause(); beep();
+  toast(`⏰ ${fmtMin(alertMin)} ET reached — reminder`);
+  const c = $('clock'); if (c) { c.classList.remove('alert-flash'); void c.offsetWidth; c.classList.add('alert-flash'); setTimeout(() => c.classList.remove('alert-flash'), 1800); }
+}
+function renderAlertLbl() { const b = $('btnAlert'), l = $('alertLbl'); if (!b || !l) return; l.textContent = alertMin == null ? '' : fmtMin(alertMin); b.classList.toggle('on', alertMin != null); }
+function setAlertTime() {
+  const inp = prompt('Remind me when the replay reaches (ET, HH:MM). Blank to turn off:', alertMin == null ? '11:30' : fmtMin(alertMin));
+  if (inp == null) return;
+  const s = inp.trim();
+  if (!s) alertMin = null;
+  else { const m = s.match(/^(\d{1,2}):(\d{2})$/); if (!m) return toast('Use HH:MM, e.g. 11:30'); const h = +m[1], mi = +m[2]; if (h > 23 || mi > 59) return toast('Invalid time'); alertMin = h * 60 + mi; }
+  saveJSON('rt_alert_min', alertMin); setAlertBaseline(); renderAlertLbl();
+  toast(alertMin == null ? 'Reminder off' : `Reminder set: ${fmtMin(alertMin)} ET`);
+}
 
 // ===================== Tradovate-style per-day TICK replay =====================
 // A day's real trade prints (data/tick/<SYM>_<day>.json) become the base resolution:
@@ -1568,7 +1603,7 @@ function playFrame() {   // steady display-bars/sec reveal; each base sub-bar = 
     if (playBudget < cost) break;
     playBudget -= cost; baseIdx++; revealTick(baseIdx); if (++n > 500000) break;
   }
-  if (n) { maybeReWindow(); commitForming(); renderLive(); renderLegend(null); }
+  if (n) { maybeReWindow(); commitForming(); renderLive(); renderLegend(null); alertCheck(); }
   if (baseIdx >= baseBars.length - 1) pause();
 }
 function baseMs(i) { return tickMode ? tickMs[i] : baseBars[i].time * 1000; }   // absolute ms of base bar i (tick OR normal sub-bar)
@@ -1577,7 +1612,7 @@ function playRtFrame() {   // Realtime: advance a sim clock at mult × real mark
   simMs += mult * TICK_FRAME_MS;
   let n = 0;
   while (baseIdx < baseBars.length - 1 && baseMs(baseIdx + 1) <= simMs) { baseIdx++; revealTick(baseIdx); if (++n > 500000) break; }
-  if (n) { maybeReWindow(); commitForming(); renderLive(); renderLegend(null); }
+  if (n) { maybeReWindow(); commitForming(); renderLive(); renderLegend(null); alertCheck(); }
   if (baseIdx >= baseBars.length - 1) pause();
 }
 function rthOpenIdx(s) { for (let i = s.start; i <= s.end; i++) { const m = etMinutes(baseBars[i].time); if (m >= 570 && m < 960) return i; } return s.start; }  // first bar in 09:30–15:59 ET = US cash open (skips the 18:00 ET Globex open)
@@ -2283,6 +2318,7 @@ function wire() {
   $('startSlider').oninput = (e) => setStart(+e.target.value);
   $('btnPickStart').onclick = () => { if (locked()) { return toast("Can't set start while in a position / working order"); } setTool('start'); };
   $('btnFit').onclick = fitChart;
+  $('btnAlert').onclick = setAlertTime; renderAlertLbl();
   $('annUp').onclick = () => setTool('au');
   $('annDown').onclick = () => setTool('ad');
   $('annLong').onclick = () => setTool('long');
