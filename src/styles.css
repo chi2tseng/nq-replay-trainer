@@ -401,6 +401,20 @@ td.neg{color:var(--red)}
 .dd-trow .pos{color:var(--green)} .dd-trow .neg{color:var(--red)}
 .dd-sub{font-size:11px;color:var(--dim);margin-top:3px;font-variant-numeric:tabular-nums}
 .dd-chart{display:block;width:100%;height:260px;background:#131722;border:1px solid var(--line);border-radius:6px}
+/* saved trade logs modal */
+.log-row{display:flex;align-items:center;gap:12px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.log-info{flex:1;min-width:0}
+.log-name{font-size:13.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.log-sub{font-size:11px;color:var(--dim);margin-top:3px;font-variant-numeric:tabular-nums}
+.log-sub .pos{color:var(--green)} .log-sub .neg{color:var(--red)}
+.log-act{display:flex;align-items:center;gap:6px;flex:none}
+.log-load{display:inline-flex;align-items:center;gap:5px;padding:6px 11px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--txt);cursor:pointer;font-size:12px;font-weight:600}
+.log-load:hover{background:var(--accent,#2962ff);border-color:var(--accent,#2962ff);color:#fff}
+.log-load .material-symbols-outlined{font-size:16px}
+.log-del{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:none;border-radius:7px;background:transparent;color:var(--dim);cursor:pointer}
+.log-del:hover{background:rgba(239,83,80,.16);color:var(--red)}
+.log-del .material-symbols-outlined{font-size:18px}
+.log-empty{color:var(--dim);font-size:13px;text-align:center;padding:24px 8px}
 
 /* shared pnl helpers (used outside #posBox too) */
 .pnl-pos{color:var(--green)}

@@ -64,6 +64,7 @@ let position = null;         // {side,qty,entry,entryTime,atm,slTicks,maxFav,beD
 let orders = [];             // working: {type:'stop'|'target', price, qty, ticks?}
 let entryOrder = null;       // pending entry: {side, kind:'limit'|'stop', price, atm, mult}
 let trades = loadJSON('rt_trades', []);
+let tradeLogs = loadJSON('rt_trade_logs', []);   // named saved trade logs: [{id,name,ts,trades:[...]}]
 let markers = [];            // {baseTime, position, color, shape, text}
 let lines = [];              // active price-line handles
 
@@ -2122,6 +2123,47 @@ function deleteTrade(i) {   // remove a single trade record (does not touch any 
   trades.splice(i, 1); saveJSON('rt_trades', trades); renderAll();
 }
 
+// ---------- saved trade logs (snapshot the current trades under a name, recall/delete later) ----------
+function saveTradeLog() {
+  if (!trades.length) return toast('No trades to save');
+  const def = `${(sessions[currentSessionIdx()] || {}).key || 'Log'} · ${INSTR.symbol}`;
+  const name = (prompt('Save current trades as:', def) || '').trim();
+  if (!name) return;
+  const net = trades.reduce((s, t) => s + t.pnl, 0);
+  tradeLogs.push({ id: 'log' + Date.now(), name, ts: Math.floor(Date.now() / 1000), n: trades.length, net, trades: JSON.parse(JSON.stringify(trades)) });
+  saveJSON('rt_trade_logs', tradeLogs); toast(`Saved "${name}" (${trades.length} trades)`);
+}
+function loadTradeLog(id) {
+  const log = tradeLogs.find(l => l.id === id); if (!log) return;
+  if (trades.length && !confirm(`Load "${log.name}" (${log.trades.length} trades)? This replaces the current trade list — save it first if you want to keep it.`)) return;
+  trades = JSON.parse(JSON.stringify(log.trades)); saveJSON('rt_trades', trades);
+  pnlCalY = 0; renderAll(); closeLogs(); switchTab(true); toast(`Loaded "${log.name}"`);
+}
+function deleteTradeLog(id) {
+  const log = tradeLogs.find(l => l.id === id); if (!log) return;
+  if (!confirm(`Delete saved log "${log.name}"? (your current trades are not affected)`)) return;
+  tradeLogs = tradeLogs.filter(l => l.id !== id); saveJSON('rt_trade_logs', tradeLogs); renderLogList();
+}
+function openLogs() { renderLogList(); $('logModal').classList.add('open'); }
+function closeLogs() { const el = $('logModal'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } }
+function renderLogList() {
+  const el = $('logModal'); if (!el) return;
+  const logs = tradeLogs.slice().sort((a, b) => b.ts - a.ts);
+  const rows = logs.length ? logs.map(l => {
+    const net = l.net != null ? l.net : l.trades.reduce((s, t) => s + t.pnl, 0), n = l.n != null ? l.n : l.trades.length;
+    return `<div class="log-row"><div class="log-info"><div class="log-name">${l.name}</div>`
+      + `<div class="log-sub">${tFmt(l.ts)} · ${n} trade${n === 1 ? '' : 's'} · <b class="${net >= 0 ? 'pos' : 'neg'}">${usd(net)}</b></div></div>`
+      + `<div class="log-act"><button class="log-load" data-id="${l.id}"><span class="material-symbols-outlined">download_for_offline</span>Load</button>`
+      + `<button class="log-del" data-id="${l.id}" title="Delete saved log"><span class="material-symbols-outlined">delete</span></button></div></div>`;
+  }).join('') : `<div class="log-empty">No saved logs yet. Trade, then hit “Save log”.</div>`;
+  el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">Saved trade logs</span> · ${logs.length}</div>`
+    + `<button class="dd-x" id="logClose"><span class="material-symbols-outlined">close</span></button></div>`
+    + `<div class="dd-list">${rows}</div></div>`;
+  $('logClose').onclick = closeLogs;
+  el.querySelectorAll('.log-load').forEach(b => b.onclick = () => loadTradeLog(b.dataset.id));
+  el.querySelectorAll('.log-del').forEach(b => b.onclick = () => deleteTradeLog(b.dataset.id));
+}
+
 // ---------- wiring ----------
 function wire() {
   $('btnPlay').onclick = play;
@@ -2207,6 +2249,10 @@ function wire() {
   });
   $('dayDetail').addEventListener('click', (e) => { if (e.target === $('dayDetail')) closeDayDetail(); });   // click backdrop to close
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('dayDetail') && $('dayDetail').classList.contains('open')) closeDayDetail(); });
+  $('logModal').addEventListener('click', (e) => { if (e.target === $('logModal')) closeLogs(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('logModal') && $('logModal').classList.contains('open')) closeLogs(); });
+  $('btnSaveLog').onclick = saveTradeLog;
+  $('btnLogs').onclick = openLogs;
   $('btnExportCsv').onclick = exportCsv;
   $('btnReset').onclick = resetAll;
   $('tradesTable').addEventListener('click', (e) => { const b = e.target.closest('.trade-del'); if (b) deleteTrade(+b.dataset.ti); });
