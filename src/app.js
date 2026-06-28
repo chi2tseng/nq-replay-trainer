@@ -1152,7 +1152,7 @@ $('chart').addEventListener('mousedown', e => {
   if (hd) { selDrawing = hd; startBodyDrag(hd, x, y); chart.applyOptions({ handleScroll: false, handleScale: false }); repaintOverlays(); e.preventDefault(); return; }
   if (locked()) { const L = nearestLine(y); if (L) { drag = L; chart.applyOptions({ handleScroll: false, handleScale: false }); e.preventDefault(); return; } }  // 3) stop/target/entry lines
   if (selDrawing) { selDrawing = null; repaintOverlays(); }   // 4) empty space -> deselect (lets the chart pan)
-  if (!overPriceAxis(e.clientX)) vpan = { y0: y, x0: x, s0: pxShift, axis: null };   // 5) start a pan; axis locks (v/h) on first move so a vertical drag doesn't also scroll time
+  if (!overPriceAxis(e.clientX)) vpan = { lx: x, ly: y };   // 5) start a free pan — price follows vertical motion, LWC pans time horizontally (never locked)
 });
 window.addEventListener('mousemove', e => {
   const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
@@ -1162,17 +1162,15 @@ window.addEventListener('mousemove', e => {
     return;
   }
   if (dragBody) { moveBody(x, y); return; }       // moving a whole drawing
-  if (vpan && !drag && !dragH) {                   // axis-locked pan: vertical drag = price 1:1 (no sideways time-scroll); horizontal drag = time pan only
-    const dx = x - vpan.x0, dy = y - vpan.y0;
-    if (!vpan.axis && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) { vpan.axis = Math.abs(dy) > Math.abs(dx) ? 'v' : 'h'; if (vpan.axis === 'v') chart.applyOptions({ handleScroll: false }); }
-    if (vpan.axis === 'v') { priceAuto = false; pxShift = vpan.s0 + dy / ($('chart').clientHeight || 1); applyPriceZoom(); }
+  if (vpan && !drag && !dragH) {                   // free 2D pan: price follows vertical motion (1:1), LWC pans time on horizontal motion — both work, neither locked
+    const idy = y - vpan.ly, idx = x - vpan.lx; vpan.lx = x; vpan.ly = y;
+    if (idy !== 0 && Math.abs(idy) >= Math.abs(idx)) { priceAuto = false; pxShift += idy / ($('chart').clientHeight || 1); applyPriceZoom(); }
   }
   if (!drag) return;
   const p = candle.coordinateToPrice(y);
   if (p != null) { drag.set(rnd(p)); drawLines(); renderLive(); }
 });
 window.addEventListener('mouseup', () => {
-  if (vpan && vpan.axis === 'v') chart.applyOptions({ handleScroll: true });   // restore time-scroll after a vertical pan
   vpan = null;
   if (dragH) { dragH = null; saveJSON('rt_drawings', drawings); chart.applyOptions({ handleScroll: true, handleScale: true }); return; }
   if (dragBody) { dragBody = null; saveJSON('rt_drawings', drawings); chart.applyOptions({ handleScroll: true, handleScale: true }); return; }
