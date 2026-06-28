@@ -1822,14 +1822,16 @@ function renderTrades() {
 
 // ---------- Tradervue-style P&L calendar + per-trade entry/exit chart ----------
 let pnlCalY = 0, pnlCalM = 0;
-function captureTradeChart(entryT, exitT) {   // OHLC candles around the trade, bucketed at the ACTIVE timeframe you were trading, with generous context
+const POST_EXIT_BARS = 5;   // K-bars kept AFTER the sell/close in the journal snapshot
+function captureTradeChart(entryT, exitT) {   // OHLC candles around the trade, bucketed at the ACTIVE timeframe, reconstructed from the full dataset
   if (!baseBars.length) return null;
-  const lastT = baseBars[Math.min(baseIdx, baseBars.length - 1)].time;
+  const endT = baseBars[baseBars.length - 1].time;   // full dataset end — reconstruct PAST the replay edge so the post-exit tail is always there
   const tfSec = Math.max(1, Math.round((typeof tf === 'number' ? tf : BASE_TF) * 60));   // 1 candle = 1 bar of the timeframe in view
   const dur = Math.max(tfSec, exitT - entryT);
-  const pad = Math.max(25 * tfSec, Math.round(dur * 0.8));   // ≥25 timeframe-bars of context each side so the screenshot isn't cramped
-  const loT = entryT - pad, hiT = Math.min(exitT + pad, lastT);   // never reveal past the played edge
-  let span = tfSec; while ((hiT - loT) / span > 200) span *= 2;   // keep the candle count sane on very long trades
+  const prePad = Math.max(25 * tfSec, Math.round(dur * 0.8));   // lead-in context before the entry
+  const exitBucket = Math.floor(exitT / tfSec) * tfSec;
+  const loT = entryT - prePad, hiT = Math.min(exitBucket + (POST_EXIT_BARS + 1) * tfSec - 1, endT);   // through the end of the 5th bar after exit
+  let span = tfSec; while ((hiT - loT) / span > 220) span *= 2;   // keep the candle count sane on very long trades
   const out = []; let cur = null;
   for (let i = 0; i < baseBars.length; i++) {
     const b = baseBars[i]; if (b.time < loT) continue; if (b.time > hiT) break;
@@ -2056,10 +2058,27 @@ function delAtm() { const name = $('atmName').value.trim(); if (atm[name] && Obj
 // ---------- misc ----------
 let toastT = null;
 function toast(msg) { let el = $('toast'); if (!el) { el = document.createElement('div'); el.id = 'toast'; el.className = 'toast'; document.body.appendChild(el); } el.textContent = msg; el.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('show'), 1600); }
+function tradeBars(t) {   // the journal candle snapshot for a trade — stored at exit (incl. post-exit tail), else reconstructed from the current dataset
+  if (t.chart && t.chart.length) return t.chart;
+  const lb = liveTradeBars(t); return lb && lb.length ? lb : [];
+}
+function dlCsv(name, text) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = name; a.click(); }
 function exportCsv() {
-  const head = 'idx,side,qty,entryTime,exitTime,entry,exit,ticks,pnl,R,atm,exitType';
-  const rows = trades.map((t, i) => [i + 1, t.side, t.qty, tFmt(t.entryTime), tFmt(t.exitTime), t.entry, t.exit, t.ticks, t.pnl, t.R == null ? '' : t.R.toFixed(3), t.atm, t.exitType].join(','));
-  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([head + '\n' + rows.join('\n')], { type: 'text/csv' })); a.download = 'replay_trades.csv'; a.click();
+  // 1) trade summary
+  const head = 'idx,side,qty,entryTime,exitTime,entry,exit,ticks,pnl,R,atm,exitType,tf,sym,bars';
+  const rows = trades.map((t, i) => [i + 1, t.side, t.qty, tFmt(t.entryTime), tFmt(t.exitTime), t.entry, t.exit, t.ticks, t.pnl, t.R == null ? '' : t.R.toFixed(3), t.atm, t.exitType, t.tf != null ? t.tf : '', t.sym || INSTR.symbol, tradeBars(t).length].join(','));
+  dlCsv('replay_trades.csv', head + '\n' + rows.join('\n'));
+  // 2) per-trade chart bars (long format) — reconstructed candles incl. the 5 bars after exit; seg = before|in|after
+  const bhead = 'trade_idx,seg,bar_epoch,bar_time,open,high,low,close';
+  const brows = [];
+  trades.forEach((t, i) => {
+    const bars = tradeBars(t); if (!bars.length) return;
+    const span = bars.length > 1 ? (bars[1].t - bars[0].t) : Math.max(1, Math.round((t.tf != null ? t.tf : BASE_TF) * 60));
+    const eb = Math.floor(t.entryTime / span) * span, xb = Math.floor(t.exitTime / span) * span;
+    bars.forEach(b => { const seg = b.t < eb ? 'before' : (b.t > xb ? 'after' : 'in'); brows.push([i + 1, seg, b.t, tFmt(b.t), b.o, b.h, b.l, b.c].join(',')); });
+  });
+  dlCsv('replay_trade_bars.csv', bhead + '\n' + brows.join('\n'));
+  toast(`Exported ${trades.length} trades + ${brows.length} chart bars`);
 }
 function resetAll() { if (!confirm('Clear all trade records?')) return; trades = []; saveJSON('rt_trades', trades); position = null; entryOrder = null; orders = []; markers = []; refreshMarkers(); drawLines(); renderAll(); }
 
