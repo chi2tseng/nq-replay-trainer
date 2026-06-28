@@ -329,7 +329,8 @@ function renderIndLegend(i) {
   add('bb', bbOn, 'BB', '20 2', `${tint('var(--dim)', fmtIndVal(bbData.up[i]))} ${tint(BB_MID, '<b>' + fmtIndVal(bbData.mid[i]) + '</b>')} ${tint('var(--dim)', fmtIndVal(bbData.lo[i]))}`);
   const emaVals = emaData.map(e => tint(e.color, fmtIndVal(e.arr[i]))).join(' ');
   add('ema', emaOn, 'EMA', emaPeriods.join(' '), emaVals);
-  if (vpOn) add('vp', true, 'Vol Profile', vpData ? vpData.key : 'prior day', vpData ? `${tint(VP_POC, 'POC ' + f2(vpData.poc))}  ${tint(VP_VA, 'VA ' + f2(vpData.vah) + '/' + f2(vpData.val))}` : '–');
+  if (vpOn) add('vp', true, 'VP prior', vpData ? vpData.key : '', vpData ? `${tint(VP_POC, 'POC ' + f2(vpData.poc))}  ${tint(VP_VA, 'VA ' + f2(vpData.vah) + '/' + f2(vpData.val))}` : '–');
+  if (vpTodayOn) add('vptoday', true, 'VP today', vpTodayData ? 'developing' : '', vpTodayData ? `${tint(VPT_POC, 'POC ' + f2(vpTodayData.poc))}  ${tint(VPT_VA, 'VA ' + f2(vpTodayData.vah) + '/' + f2(vpTodayData.val))}` : '–');
   el.innerHTML = rows.join('');
 }
 function toggleInd(which) {
@@ -338,6 +339,7 @@ function toggleInd(which) {
   else if (which === 'bb') { setBB(!bbOn); const c = $('indBB'); if (c) c.checked = bbOn; }
   else if (which === 'ema') { setEMA(!emaOn); const c = $('indEma'); if (c) c.checked = emaOn; }
   else if (which === 'vp') { setVp(!vpOn); const c = $('indVp'); if (c) c.checked = vpOn; }
+  else if (which === 'vptoday') { setVpToday(!vpTodayOn); const c = $('indVpToday'); if (c) c.checked = vpTodayOn; }
   renderIndLegend();
 }
 function initIndLegend() {
@@ -648,6 +650,8 @@ let bbOn   = loadJSON('rt_bb',   false);
 let emaOn  = loadJSON('rt_ema',  true);
 let vpOn   = loadJSON('rt_vp',   true);   // fixed-range volume profile of the PRIOR trading day (POC + 70% value area)
 let vpData = null, vpSessionKey = null;
+let vpTodayOn = loadJSON('rt_vp_today', true);   // TODAY's developing volume profile — recomputed live as the replay reveals bars
+let vpTodayData = null, vpTodayEdge = -1;
 let emaPeriods = (loadJSON('rt_ema_p', [10]) || [10])
   .filter(n => Number.isFinite(n) && n >= 1).slice(0, 6); // guard persisted value
 const BB_PERIOD = 20, BB_MULT = 2;
@@ -793,23 +797,17 @@ function setEmaPeriods(csv) {
   computeEMA(); indicatorRepaint(); toast('EMA: ' + list.join('/'));
 }
 
-// ---------- Fixed-range Volume Profile of the PRIOR trading day (POC + 70% value area VAH/VAL) ----------
+// ---------- Volume Profile: PRIOR day (fixed) + TODAY (developing) — POC + 70% value area (VAH/VAL) ----------
 const VP_FILL = 'rgba(38,166,154,0.16)', VP_FILL_VA = 'rgba(38,166,154,0.42)', VP_POC = '#ef5350', VP_VA = '#3b82f6';
+const VPT_FILL = 'rgba(240,185,11,0.12)', VPT_FILL_VA = 'rgba(240,185,11,0.34)', VPT_POC = '#f0b90b', VPT_VA = '#f0b90b';
 const VP_BINS = 80;
-function computeVP() {   // build the profile over yesterday's RTH (09:30–16:00 ET) base bars; static for the current day
-  vpData = null;
-  if (!vpOn || sessions.length < 2 || !baseBars.length) return;
-  const ci = currentSessionIdx(), pi = ci - 1; if (pi < 0) return;
-  const s = sessions[pi];
-  let picked = [];
-  for (let i = s.start; i <= s.end; i++) { const m = etMinutes(baseBars[i].time); if (m >= 570 && m < 960) picked.push(i); }
-  if (picked.length < 5) { picked = []; for (let i = s.start; i <= s.end; i++) picked.push(i); }   // holiday / no RTH → full session
-  if (picked.length < 2) return;
+function buildProfile(idxs) {   // volume-by-price over the given base-bar indices → bins + POC + 70% value area
+  if (idxs.length < 2) return null;
   let lo = Infinity, hi = -Infinity;
-  for (const i of picked) { const b = baseBars[i]; if (b.low < lo) lo = b.low; if (b.high > hi) hi = b.high; }
-  if (!(hi > lo)) return;
+  for (const i of idxs) { const b = baseBars[i]; if (b.low < lo) lo = b.low; if (b.high > hi) hi = b.high; }
+  if (!(hi > lo)) return null;
   const N = VP_BINS, binH = (hi - lo) / N, binVol = new Array(N).fill(0);
-  for (const i of picked) { const b = baseBars[i];
+  for (const i of idxs) { const b = baseBars[i];
     const a = Math.max(0, Math.min(N - 1, Math.floor((b.low - lo) / binH)));
     const z = Math.max(0, Math.min(N - 1, Math.floor((b.high - lo) / binH)));
     const per = (b.volume || 1) / (z - a + 1);
@@ -818,47 +816,65 @@ function computeVP() {   // build the profile over yesterday's RTH (09:30–16:0
   let pocIdx = 0; for (let k = 1; k < N; k++) if (binVol[k] > binVol[pocIdx]) pocIdx = k;
   const total = binVol.reduce((x, v) => x + v, 0), target = total * 0.7;
   let loI = pocIdx, hiI = pocIdx, acc = binVol[pocIdx];
-  while (acc < target && (loI > 0 || hiI < N - 1)) {            // grow the value area outward toward 70% of volume
-    const up = hiI < N - 1 ? binVol[hiI + 1] : -1, dn = loI > 0 ? binVol[loI - 1] : -1;
-    if (up >= dn) acc += binVol[++hiI]; else acc += binVol[--loI];
-  }
-  vpData = { binVol, N, lo, hi, binH, maxVol: Math.max(...binVol), vaLoIdx: loI, vaHiIdx: hiI,
-    poc: lo + (pocIdx + 0.5) * binH, vah: lo + (hiI + 1) * binH, val: lo + loI * binH,
-    rangeStartTime: baseBars[picked[0]].time, key: s.key };
+  while (acc < target && (loI > 0 || hiI < N - 1)) { const up = hiI < N - 1 ? binVol[hiI + 1] : -1, dn = loI > 0 ? binVol[loI - 1] : -1; if (up >= dn) acc += binVol[++hiI]; else acc += binVol[--loI]; }
+  return { binVol, N, lo, hi, binH, maxVol: Math.max(...binVol), vaLoIdx: loI, vaHiIdx: hiI,
+    poc: lo + (pocIdx + 0.5) * binH, vah: lo + (hiI + 1) * binH, val: lo + loI * binH };
 }
-function maybeUpdateVP() {   // recompute only when the displayed trading day changes (cheap guard each render)
-  if (!vpOn) { if (vpData) { vpData = null; vpRepaint(); } vpSessionKey = null; return; }
-  const s = sessions[currentSessionIdx()], k = s ? s.key : null;
-  if (k !== vpSessionKey) { vpSessionKey = k; computeVP(); vpRepaint(); }
+function rthIdxs(s, endI) { const e = endI == null ? s.end : Math.min(endI, s.end), out = []; for (let i = s.start; i <= e; i++) { const m = etMinutes(baseBars[i].time); if (m >= 570 && m < 960) out.push(i); } return out; }
+function computeVP() {   // PRIOR day's RTH profile — static for the current day
+  vpData = null;
+  if (!vpOn || sessions.length < 2 || !baseBars.length) return;
+  const pi = currentSessionIdx() - 1; if (pi < 0) return;
+  const s = sessions[pi];
+  let idxs = rthIdxs(s); if (idxs.length < 5) { idxs = []; for (let i = s.start; i <= s.end; i++) idxs.push(i); }   // holiday → full session
+  const prof = buildProfile(idxs); if (!prof) return;
+  vpData = Object.assign(prof, { rangeStartTime: baseBars[idxs[0]].time, key: s.key });
+}
+function computeVPToday() {   // TODAY's developing RTH profile — only the bars revealed so far (grows as the replay advances)
+  vpTodayData = null;
+  if (!vpTodayOn || !sessions.length || !baseBars.length) return;
+  const ci = currentSessionIdx(); if (ci < 0) return;
+  const s = sessions[ci], idxs = rthIdxs(s, baseIdx);
+  const prof = buildProfile(idxs); if (!prof) return;
+  vpTodayData = Object.assign(prof, { rangeStartTime: baseBars[idxs[0]].time });
+}
+function maybeUpdateVP() {   // prior-day recomputes on day change; today's recomputes whenever the revealed edge moves
+  let dirty = false;
+  if (vpOn) { const s = sessions[currentSessionIdx()], k = s ? s.key : null; if (k !== vpSessionKey) { vpSessionKey = k; computeVP(); dirty = true; } }
+  else if (vpData) { vpData = null; vpSessionKey = null; dirty = true; }
+  if (vpTodayOn) { if (baseIdx !== vpTodayEdge) { vpTodayEdge = baseIdx; computeVPToday(); dirty = true; } }
+  else if (vpTodayData) { vpTodayData = null; vpTodayEdge = -1; dirty = true; }
+  if (dirty) vpRepaint();
+}
+function drawVPProfile(ctx, ts, paneW, prof, col, dashed, labelLeft) {   // histogram + POC/VAH/VAL lines for one profile
+  const y = p => candle.priceToCoordinate(p);
+  const yLo = y(prof.lo), yHi = y(prof.hi);
+  let xa = ts.timeToCoordinate(prof.rangeStartTime); if (xa == null) xa = 4; xa = Math.max(4, xa);
+  if (yLo != null && yHi != null) {
+    const binPx = (yLo - yHi) / prof.N, maxBarW = Math.min(150, paneW * 0.2);
+    for (let k = 0; k < prof.N; k++) { const v = prof.binVol[k]; if (v <= 0) continue;
+      const bw = (v / prof.maxVol) * maxBarW, yTop = y(prof.lo + (k + 1) * prof.binH);
+      ctx.fillStyle = (k >= prof.vaLoIdx && k <= prof.vaHiIdx) ? col.fillVA : col.fill;
+      ctx.fillRect(xa, yTop, bw, Math.max(1, binPx - 1)); }
+  }
+  const drawLine = (price, color, w, label) => { const yy = y(price); if (yy == null) return;
+    ctx.strokeStyle = color; ctx.lineWidth = w; ctx.setLineDash(dashed ? [5, 3] : []); ctx.beginPath(); ctx.moveTo(xa, yy); ctx.lineTo(paneW, yy); ctx.stroke(); ctx.setLineDash([]);
+    ctx.font = '700 10px ui-monospace,monospace'; const txt = `${label} ${f2(price)}`, tw = ctx.measureText(txt).width + 8, lx = labelLeft ? xa + 2 : paneW - tw - 2;
+    rrect(ctx, lx, yy - 7, tw, 14, 3); ctx.fillStyle = color; ctx.fill(); ctx.fillStyle = '#fff'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.fillText(txt, lx + 4, yy); };
+  drawLine(prof.vah, col.va, 1.4, col.tag + 'VAH');
+  drawLine(prof.val, col.va, 1.4, col.tag + 'VAL');
+  drawLine(prof.poc, col.poc, 1.6, col.tag + 'POC');
 }
 const vpPrimitive = {
   attached(p) { this._req = p.requestUpdate; },
   updateAllViews() {},
   paneViews: () => [{ zOrder: () => 'bottom', renderer: () => ({ draw: (target) => {
-    if (!vpOn || !vpData) return;
+    if ((!vpOn || !vpData) && (!vpTodayOn || !vpTodayData)) return;
     try {
       target.useMediaCoordinateSpace((scope) => {
         const ctx = scope.context, ts = chart.timeScale(), paneW = (scope.mediaSize && scope.mediaSize.width) || 99999;
-        const y = p => candle.priceToCoordinate(p);
-        const yLo = y(vpData.lo), yHi = y(vpData.hi);
-        let xa = ts.timeToCoordinate(vpData.rangeStartTime); if (xa == null) xa = 4; xa = Math.max(4, xa);   // left edge of yesterday's range (clamped on-screen)
-        // histogram (horizontal volume bars), value-area bins brighter
-        if (yLo != null && yHi != null) {
-          const binPx = (yLo - yHi) / vpData.N, maxBarW = Math.min(150, paneW * 0.22);
-          for (let k = 0; k < vpData.N; k++) { const v = vpData.binVol[k]; if (v <= 0) continue;
-            const bw = (v / vpData.maxVol) * maxBarW, yTop = y(vpData.lo + (k + 1) * vpData.binH);
-            ctx.fillStyle = (k >= vpData.vaLoIdx && k <= vpData.vaHiIdx) ? VP_FILL_VA : VP_FILL;
-            ctx.fillRect(xa, yTop, bw, Math.max(1, binPx - 1)); }
-        }
-        // POC / VAH / VAL lines extend from yesterday's range across to the right edge, with labels
-        const drawLine = (price, color, w, label) => { const yy = y(price); if (yy == null) return;
-          ctx.strokeStyle = color; ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(xa, yy); ctx.lineTo(paneW, yy); ctx.stroke();
-          ctx.font = '700 10px ui-monospace,monospace'; const txt = `${label} ${f2(price)}`, tw = ctx.measureText(txt).width + 8;
-          rrect(ctx, paneW - tw - 2, yy - 7, tw, 14, 3); ctx.fillStyle = color; ctx.fill();
-          ctx.fillStyle = '#fff'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.fillText(txt, paneW - tw + 2, yy); };
-        drawLine(vpData.vah, VP_VA, 1.4, 'VAH');
-        drawLine(vpData.val, VP_VA, 1.4, 'VAL');
-        drawLine(vpData.poc, VP_POC, 1.6, 'POC');
+        if (vpOn && vpData) drawVPProfile(ctx, ts, paneW, vpData, { fill: VP_FILL, fillVA: VP_FILL_VA, poc: VP_POC, va: VP_VA, tag: '' }, false, false);                 // prior day: solid, labels right
+        if (vpTodayOn && vpTodayData) drawVPProfile(ctx, ts, paneW, vpTodayData, { fill: VPT_FILL, fillVA: VPT_FILL_VA, poc: VPT_POC, va: VPT_VA, tag: 'd' }, true, true);   // developing: dashed amber, labels left
       });
       window.__vp = { n: ((window.__vp || {}).n || 0) + 1, ok: true };
     } catch (e) { window.__vp = { err: String(e) }; }
@@ -867,6 +883,7 @@ const vpPrimitive = {
 if (candle.attachPrimitive) candle.attachPrimitive(vpPrimitive);
 function vpRepaint() { if (vpPrimitive._req) vpPrimitive._req(); }
 function setVp(on) { vpOn = on; saveJSON('rt_vp', vpOn); vpSessionKey = null; maybeUpdateVP(); vpRepaint(); renderIndLegend(); }
+function setVpToday(on) { vpTodayOn = on; saveJSON('rt_vp_today', vpTodayOn); vpTodayEdge = -1; maybeUpdateVP(); vpRepaint(); renderIndLegend(); }
 
 // ---------- drawings (horizontal line / trend line / ray / rectangle) ----------
 const drawingsPrimitive = {
@@ -2424,6 +2441,7 @@ function wire() {
   $('indBB').checked = bbOn; $('indBB').onchange = (e) => setBB(e.target.checked);
   $('indEma').checked = emaOn; $('indEma').onchange = (e) => setEMA(e.target.checked);
   $('indVp').checked = vpOn; $('indVp').onchange = (e) => setVp(e.target.checked);
+  $('indVpToday').checked = vpTodayOn; $('indVpToday').onchange = (e) => setVpToday(e.target.checked);
   $('emaPeriods').value = emaPeriods.join(','); $('emaPeriods').onchange = (e) => setEmaPeriods(e.target.value);
   wireOsc();
   $('chartTypeSelect').value = chartType; $('chartTypeSelect').onchange = (e) => setChartType(e.target.value);
