@@ -411,9 +411,10 @@ td.neg{color:var(--red)}
 .log-load{display:inline-flex;align-items:center;gap:5px;padding:6px 11px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--txt);cursor:pointer;font-size:12px;font-weight:600}
 .log-load:hover{background:var(--accent,#2962ff);border-color:var(--accent,#2962ff);color:#fff}
 .log-load .material-symbols-outlined{font-size:16px}
-.log-del{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:none;border-radius:7px;background:transparent;color:var(--dim);cursor:pointer}
+.log-rename,.log-del{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:none;border-radius:7px;background:transparent;color:var(--dim);cursor:pointer}
+.log-rename:hover{background:var(--panel);color:var(--txt)}
 .log-del:hover{background:rgba(239,83,80,.16);color:var(--red)}
-.log-del .material-symbols-outlined{font-size:18px}
+.log-rename .material-symbols-outlined,.log-del .material-symbols-outlined{font-size:18px}
 .log-empty{color:var(--dim);font-size:13px;text-align:center;padding:24px 8px}
 
 /* shared pnl helpers (used outside #posBox too) */

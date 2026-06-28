@@ -2150,6 +2150,13 @@ function deleteTradeLog(id) {
   if (!confirm(`Delete saved log "${log.name}"? (your current trades are not affected)`)) return;
   tradeLogs = tradeLogs.filter(l => l.id !== id); saveJSON('rt_trade_logs', tradeLogs); renderLogList();
 }
+function renameTradeLog(id) {
+  const log = tradeLogs.find(l => l.id === id); if (!log) return;
+  const name = (prompt('Rename log:', log.name) || '').trim();
+  if (!name || name === log.name) return;
+  log.name = name; saveJSON('rt_trade_logs', tradeLogs); renderLogList();
+}
+function escHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function openLogs() { renderLogList(); $('logModal').classList.add('open'); }
 function closeLogs() { const el = $('logModal'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } }
 function renderLogList() {
@@ -2157,9 +2164,10 @@ function renderLogList() {
   const logs = tradeLogs.slice().sort((a, b) => b.ts - a.ts);
   const rows = logs.length ? logs.map(l => {
     const net = l.net != null ? l.net : l.trades.reduce((s, t) => s + t.pnl, 0), n = l.n != null ? l.n : l.trades.length;
-    return `<div class="log-row"><div class="log-info"><div class="log-name">${l.name}</div>`
+    return `<div class="log-row"><div class="log-info"><div class="log-name" title="${escHtml(l.name)}">${escHtml(l.name)}</div>`
       + `<div class="log-sub">${tFmt(l.ts)} · ${n} trade${n === 1 ? '' : 's'} · <b class="${net >= 0 ? 'pos' : 'neg'}">${usd(net)}</b></div></div>`
       + `<div class="log-act"><button class="log-load" data-id="${l.id}"><span class="material-symbols-outlined">download_for_offline</span>Load</button>`
+      + `<button class="log-rename" data-id="${l.id}" title="Rename log"><span class="material-symbols-outlined">edit</span></button>`
       + `<button class="log-del" data-id="${l.id}" title="Delete saved log"><span class="material-symbols-outlined">delete</span></button></div></div>`;
   }).join('') : `<div class="log-empty">No saved logs yet. Trade, then hit “Save log”.</div>`;
   el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">Saved trade logs</span> · ${logs.length}</div>`
@@ -2167,6 +2175,7 @@ function renderLogList() {
     + `<div class="dd-list">${rows}</div></div>`;
   $('logClose').onclick = closeLogs;
   el.querySelectorAll('.log-load').forEach(b => b.onclick = () => loadTradeLog(b.dataset.id));
+  el.querySelectorAll('.log-rename').forEach(b => b.onclick = () => renameTradeLog(b.dataset.id));
   el.querySelectorAll('.log-del').forEach(b => b.onclick = () => deleteTradeLog(b.dataset.id));
 }
 
