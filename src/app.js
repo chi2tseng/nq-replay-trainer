@@ -52,6 +52,10 @@ let tf = 1;                  // timeframe in minutes
 let idx = 0;                 // last revealed TF-bar index
 let baseIdx = 0;             // last revealed 1-min index (== bars[idx].subEnd)
 let playing = false, timer = null;
+// windowed rendering: the chart series holds only the recent ~window bars (continuous datasets like
+// NQ-1m-year = 350k+ bars would otherwise feed every revealed bar into LWC, making stepping crawl).
+const RENDER_WINDOW = 4000, WINDOW_SLACK = 1500;
+let seriesFrom = 0;          // first absolute bar index currently in the candle/vol series (logical 0)
 // Tradovate-style tick replay: one day's real prints as the base resolution
 let tickMode = false, tickMs = [], availTickDays = [], curTickDay = null, simMs = 0, speedUITick = false;
 let fO = 0, fH = 0, fL = 0, fC = 0, fV = 0, fBucket = -1;   // live-forming candle accumulator
@@ -118,7 +122,8 @@ function applyPriceZoom() {
 applyPriceZoom();
 function fitRecent(n) {   // frame the most recent n bars (+ a little right margin) and re-fit the price to them
   pxMargin = PX_MARGIN_DEF; pxShift = 0; priceAuto = true;
-  const from = Math.max(0, idx - (n - 1)), to = idx + 6;
+  const li = idx - seriesFrom;                              // logical index of the latest bar in the windowed series
+  const from = Math.max(0, li - (n - 1)), to = li + 6;
   try { chart.timeScale().setVisibleLogicalRange({ from, to }); } catch (e) { chart.timeScale().fitContent(); }
   applyPriceZoom();
 }
@@ -362,7 +367,7 @@ const ripsterPrimitive = {
         target.useMediaCoordinateSpace((scope) => {
           const ctx = scope.context, ts = chart.timeScale(), range = ts.getVisibleLogicalRange();
           if (!range) return;
-          const from = Math.max(0, Math.floor(range.from)), to = Math.min(bars.length - 1, Math.ceil(range.to));
+          const from = seriesFrom + Math.max(0, Math.floor(range.from)), to = Math.min(bars.length - 1, seriesFrom + Math.ceil(range.to));   // logical→absolute (windowed series)
           const xs = []; for (let i = from; i <= to; i++) xs[i] = ts.timeToCoordinate(bars[i].time);
           for (const cl of ripsterData) {
             for (let i = from; i < to; i++) {
@@ -551,19 +556,19 @@ function oscHardReveal() {
   if (oscMode === 'off') { if ($('oscPane')) $('oscPane').style.display = 'none'; return; }
   ensureOscChart(); $('oscPane').style.display = '';
   if (!rsiSeries && !macdLine && !atrSeries) oscBuildSeries();
-  const hi = Math.min(idx, bars.length - 1);
+  const hi = Math.min(idx, bars.length - 1), lo = revealStart(hi);   // mirror the price-series render window
 
   if (oscMode === 'atr' && atrSeries) {
     const d = [], dh = [];
-    for (let i = 0; i <= hi; i++) if (oscAtr[i] != null) { d.push({ time: bars[i].time, value: oscAtr[i] }); dh.push({ time: bars[i].time, value: oscAtr[i] / 2 }); }
+    for (let i = lo; i <= hi; i++) if (oscAtr[i] != null) { d.push({ time: bars[i].time, value: oscAtr[i] }); dh.push({ time: bars[i].time, value: oscAtr[i] / 2 }); }
     atrSeries.setData(d); if (atrHalfSeries) atrHalfSeries.setData(dh);
   } else if (oscMode === 'rsi' && rsiSeries) {
     const d = [];
-    for (let i = 0; i <= hi; i++) if (oscRsi[i] != null) d.push({ time: bars[i].time, value: oscRsi[i] });
+    for (let i = lo; i <= hi; i++) if (oscRsi[i] != null) d.push({ time: bars[i].time, value: oscRsi[i] });
     rsiSeries.setData(d);
   } else if (oscMode === 'macd' && macdLine) {
     const dl = [], ds = [], dh = [];
-    for (let i = 0; i <= hi; i++) {
+    for (let i = lo; i <= hi; i++) {
       const m = oscMacd[i]; if (!m) continue;
       if (m.macd   != null) dl.push({ time: bars[i].time, value: m.macd });
       if (m.signal != null) ds.push({ time: bars[i].time, value: m.signal });
@@ -714,10 +719,9 @@ const indicatorPrimitive = {
         target.useMediaCoordinateSpace((scope) => {
           const ctx = scope.context, ts = chart.timeScale();
           const range = ts.getVisibleLogicalRange(); if (!range) return;
-          // clamp to revealed bars too: don't draw indicator past idx during replay
-          const last = Math.min(bars.length - 1, idx);
-          const from = Math.max(0, Math.floor(range.from));
-          const to = Math.min(last, Math.ceil(range.to));
+          // logical→absolute (windowed series); clamp to revealed bars too: don't draw indicator past idx during replay
+          const from = seriesFrom + Math.max(0, Math.floor(range.from));
+          const to = Math.min(bars.length - 1, idx, seriesFrom + Math.ceil(range.to));
           if (to < from) return;
           const xs = []; for (let i = from; i <= to; i++) xs[i] = ts.timeToCoordinate(bars[i].time);
 
@@ -1154,7 +1158,7 @@ function nearestHandle(x, y) {
 // map a chart-x pixel to the nearest revealed bar's time (snap to bar grid, clamp to 0..idx)
 function xToTime(x) {
   const lg = chart.timeScale().coordinateToLogical(x); if (lg == null) return null;
-  let i = Math.round(lg); i = Math.max(0, Math.min(Math.min(idx, bars.length - 1), i));
+  let i = Math.round(lg) + seriesFrom; i = Math.max(0, Math.min(Math.min(idx, bars.length - 1), i));   // logical→absolute (windowed series)
   return bars[i] ? bars[i].time : null;
 }
 chart.subscribeClick(param => {
@@ -1315,8 +1319,9 @@ function setChartType(type) {
   // 2) build + assign the new series to the SAME `candle` variable the whole app uses
   candle = makePriceSeries();
 
-  // 3) re-feed exactly what is currently revealed (idx = last revealed TF bar)
-  candle.setData(bars.slice(0, idx + 1).map(cd));
+  // 3) re-feed exactly what is currently revealed within the render window (idx = last revealed TF bar)
+  seriesFrom = revealStart(idx);
+  candle.setData(bars.slice(seriesFrom, idx + 1).map(cd));
 
   // 4) re-attach overlays. Primitives read `candle` via closure, so after the
   //    reassignment above they already point at the new series; we just need to
@@ -1442,14 +1447,31 @@ function syncIdxFromBase() {
 }
 
 // ---------- reveal / replay ----------
-function hardReveal() { candle.setData(bars.slice(0, idx + 1).map(cd)); vol.setData(bars.slice(0, idx + 1).map(vd)); refreshMarkers(); drawLines(); renderLegend(null); oscHardReveal(); resetForming(); }
+// windowed rendering helpers — RENDER_WINDOW / WINDOW_SLACK / seriesFrom declared up in state
+function revealStart(i) { return Math.max(0, i - RENDER_WINDOW + 1); }
+function feedWindow(keepView) {                       // (re)feed price+vol with just the recent window ending at idx
+  const from = revealStart(idx), shift = from - seriesFrom;
+  const range = keepView ? chart.timeScale().getVisibleLogicalRange() : null;
+  candle.setData(bars.slice(from, idx + 1).map(cd));
+  vol.setData(bars.slice(from, idx + 1).map(vd));
+  seriesFrom = from;
+  if (range && shift) { try { chart.timeScale().setVisibleLogicalRange({ from: range.from - shift, to: range.to - shift }); } catch (e) {} }
+}
+function maybeReWindow() {                            // trim once the series has grown a slack past the window (keeps step/play O(window))
+  if (idx - seriesFrom <= RENDER_WINDOW + WINDOW_SLACK) return false;
+  feedWindow(true); refreshMarkers(); oscHardReveal();
+  return true;
+}
+function hardReveal() { feedWindow(false); refreshMarkers(); drawLines(); renderLegend(null); oscHardReveal(); resetForming(); }
 function stepFwd() {
   if (idx >= bars.length - 1) { pause(); return; }
-  idx++; candle.update(cd(bars[idx])); vol.update(vd(bars[idx]));
+  idx++;
+  if (maybeReWindow()) {}                             // grew past window → re-fed (incl. the new bar) + osc
+  else { candle.update(cd(bars[idx])); vol.update(vd(bars[idx])); oscStepFwd(); }
   for (let i = bars[idx].subStart; i <= bars[idx].subEnd; i++) { processSub(baseBars[i]); }
   baseIdx = bars[idx].subEnd;
   resetForming();
-  renderLive(); renderLegend(null); oscStepFwd();
+  renderLive(); renderLegend(null);
 }
 function stepBack() {
   if (locked()) return toast("Can't step back while in a position / working order");
@@ -1538,7 +1560,7 @@ function playFrame() {   // steady display-bars/sec reveal; each base sub-bar = 
     if (playBudget < cost) break;
     playBudget -= cost; baseIdx++; revealTick(baseIdx); if (++n > 500000) break;
   }
-  if (n) { commitForming(); renderLive(); renderLegend(null); }
+  if (n) { maybeReWindow(); commitForming(); renderLive(); renderLegend(null); }
   if (baseIdx >= baseBars.length - 1) pause();
 }
 function baseMs(i) { return tickMode ? tickMs[i] : baseBars[i].time * 1000; }   // absolute ms of base bar i (tick OR normal sub-bar)
@@ -1547,7 +1569,7 @@ function playRtFrame() {   // Realtime: advance a sim clock at mult × real mark
   simMs += mult * TICK_FRAME_MS;
   let n = 0;
   while (baseIdx < baseBars.length - 1 && baseMs(baseIdx + 1) <= simMs) { baseIdx++; revealTick(baseIdx); if (++n > 500000) break; }
-  if (n) { commitForming(); renderLive(); renderLegend(null); }
+  if (n) { maybeReWindow(); commitForming(); renderLive(); renderLegend(null); }
   if (baseIdx >= baseBars.length - 1) pause();
 }
 function rthOpenIdx(s) { for (let i = s.start; i <= s.end; i++) { const m = etMinutes(baseBars[i].time); if (m >= 570 && m < 960) return i; } return s.start; }  // first bar in 09:30–15:59 ET = US cash open (skips the 18:00 ET Globex open)
@@ -1813,7 +1835,8 @@ function renderTrades() {
     <td>${tFmt(t.entryTime)}</td><td>${tFmt(t.exitTime)}</td>
     <td class="mono">${f2(t.entry)}</td><td class="mono">${f2(t.exit)}</td>
     <td>${t.ticks >= 0 ? '+' : ''}${t.ticks}</td><td class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</td>
-    <td>${t.R == null ? '–' : t.R.toFixed(2)}</td><td>${t.atm}</td><td>${t.exitType}</td></tr>`).reverse().join('');
+    <td>${t.R == null ? '–' : t.R.toFixed(2)}</td><td>${t.atm}</td><td>${t.exitType}</td>
+    <td><button class="trade-del" data-ti="${i}" title="Delete this trade"><span class="material-symbols-outlined">close</span></button></td></tr>`).reverse().join('');
   const net = trades.reduce((s, t) => s + t.pnl, 0);
   const td = todayStats();
   $('tradesSummary').textContent = `${trades.length} trades · Net ${usd(net)}`
@@ -2062,11 +2085,24 @@ function tradeBars(t) {   // the journal candle snapshot for a trade — stored 
   if (t.chart && t.chart.length) return t.chart;
   const lb = liveTradeBars(t); return lb && lb.length ? lb : [];
 }
+function tradeTrend(t) {   // price-action / 走勢 stats from the captured window: excursion + trend before entry + follow-through after exit (ticks)
+  const bars = tradeBars(t); if (!bars.length) return { mfe: '', mae: '', post: '', pre: '', hi: '', lo: '' };
+  const tick = (t.sym === INSTR.symbol ? INSTR.tickSize : (INSTR.tickSize || 0.25)) || 0.25, long = t.side === 'long';
+  const span = bars.length > 1 ? (bars[1].t - bars[0].t) : Math.max(1, Math.round((t.tf != null ? t.tf : BASE_TF) * 60));
+  const eb = Math.floor(t.entryTime / span) * span, xb = Math.floor(t.exitTime / span) * span;
+  const inB = bars.filter(b => b.t >= eb && b.t <= xb), aft = bars.filter(b => b.t > xb), bef = bars.filter(b => b.t < eb);
+  let mfe = 0, mae = 0;
+  if (inB.length) { const hi = Math.max(...inB.map(b => b.h)), lo = Math.min(...inB.map(b => b.l)); mfe = long ? hi - t.entry : t.entry - lo; mae = long ? t.entry - lo : hi - t.entry; }
+  const post = aft.length ? (long ? aft[aft.length - 1].c - t.exit : t.exit - aft[aft.length - 1].c) : 0;   // + = price kept going your way after exit (left money on the table)
+  const pre = bef.length ? (long ? t.entry - bef[0].o : bef[0].o - t.entry) : 0;                            // + = you entered with momentum (price trended your way into entry)
+  const tk = v => Math.round(v / tick);
+  return { mfe: tk(Math.max(0, mfe)), mae: tk(Math.max(0, mae)), post: tk(post), pre: tk(pre), hi: f2(Math.max(...bars.map(b => b.h))), lo: f2(Math.min(...bars.map(b => b.l))) };
+}
 function dlCsv(name, text) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = name; a.click(); }
 function exportCsv() {
-  // 1) trade summary
-  const head = 'idx,side,qty,entryTime,exitTime,entry,exit,ticks,pnl,R,atm,exitType,tf,sym,bars';
-  const rows = trades.map((t, i) => [i + 1, t.side, t.qty, tFmt(t.entryTime), tFmt(t.exitTime), t.entry, t.exit, t.ticks, t.pnl, t.R == null ? '' : t.R.toFixed(3), t.atm, t.exitType, t.tf != null ? t.tf : '', t.sym || INSTR.symbol, tradeBars(t).length].join(','));
+  // 1) trade summary — incl. price-trend / 走勢 columns (excursion, pre-entry trend, post-exit follow-through, window hi/lo)
+  const head = 'idx,side,qty,entryTime,exitTime,entry,exit,ticks,pnl,R,atm,exitType,tf,sym,bars,mfeTicks,maeTicks,preTrendTicks,postExitTicks,windowHigh,windowLow';
+  const rows = trades.map((t, i) => { const tr = tradeTrend(t); return [i + 1, t.side, t.qty, tFmt(t.entryTime), tFmt(t.exitTime), t.entry, t.exit, t.ticks, t.pnl, t.R == null ? '' : t.R.toFixed(3), t.atm, t.exitType, t.tf != null ? t.tf : '', t.sym || INSTR.symbol, tradeBars(t).length, tr.mfe, tr.mae, tr.pre, tr.post, tr.hi, tr.lo].join(','); });
   dlCsv('replay_trades.csv', head + '\n' + rows.join('\n'));
   // 2) per-trade chart bars (long format) — reconstructed candles incl. the 5 bars after exit; seg = before|in|after
   const bhead = 'trade_idx,seg,bar_epoch,bar_time,open,high,low,close';
@@ -2081,6 +2117,10 @@ function exportCsv() {
   toast(`Exported ${trades.length} trades + ${brows.length} chart bars`);
 }
 function resetAll() { if (!confirm('Clear all trade records?')) return; trades = []; saveJSON('rt_trades', trades); position = null; entryOrder = null; orders = []; markers = []; refreshMarkers(); drawLines(); renderAll(); }
+function deleteTrade(i) {   // remove a single trade record (does not touch any live position)
+  if (i < 0 || i >= trades.length) return;
+  trades.splice(i, 1); saveJSON('rt_trades', trades); renderAll();
+}
 
 // ---------- wiring ----------
 function wire() {
@@ -2169,6 +2209,7 @@ function wire() {
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('dayDetail') && $('dayDetail').classList.contains('open')) closeDayDetail(); });
   $('btnExportCsv').onclick = exportCsv;
   $('btnReset').onclick = resetAll;
+  $('tradesTable').addEventListener('click', (e) => { const b = e.target.closest('.trade-del'); if (b) deleteTrade(+b.dataset.ti); });
 
   document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;

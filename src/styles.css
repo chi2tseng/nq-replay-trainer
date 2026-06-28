@@ -309,6 +309,9 @@ td.pos{color:var(--green)}
 td.neg{color:var(--red)}
 .long-tag{color:var(--green);font-weight:700}
 .short-tag{color:var(--red);font-weight:700}
+.trade-del{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:none;border-radius:5px;background:transparent;color:var(--dim);cursor:pointer;opacity:.55}
+.trade-del:hover{background:rgba(239,83,80,.16);color:var(--red);opacity:1}
+.trade-del .material-symbols-outlined{font-size:16px}
 
 /* ---- dashboard ---------------------------------------------------------- */
 .todaypnl{
