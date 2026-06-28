@@ -103,19 +103,27 @@ window.addEventListener('resize', sizeChart);
 // ---- price-axis vertical zoom (wheel over the right axis) + auto-fit ----
 const PX_MARGIN_DEF = 0.1; let pxMargin = PX_MARGIN_DEF;   // symmetric vertical margin on the price scale; wheel grows/shrinks it
 let pxShift = 0;                                          // vertical pan offset: drag the chart body up/down to move the price view
+let priceAuto = true;                                    // price scale auto-fits (follows price); a manual vertical pan/zoom freezes it (natural), Fit re-enables
 function applyPriceZoom() {
-  const top = Math.max(0, Math.min(0.88, pxMargin + pxShift));     // asymmetric margins = pan; clamp keeps data on-screen
-  const bottom = Math.max(0, Math.min(0.88, pxMargin - pxShift));
-  chart.priceScale('right').applyOptions({ autoScale: true, scaleMargins: { top, bottom } });
+  const top = Math.max(0, Math.min(0.92, pxMargin + pxShift));     // asymmetric margins = pan
+  const bottom = Math.max(0, Math.min(0.92, pxMargin - pxShift));
+  chart.priceScale('right').applyOptions({ autoScale: priceAuto, scaleMargins: { top, bottom } });
 }
 applyPriceZoom();
-function fitChart() { pxMargin = PX_MARGIN_DEF; pxShift = 0; applyPriceZoom(); chart.timeScale().fitContent(); }   // auto-fit: reset price zoom + pan + fit all revealed bars
+function fitRecent(n) {   // frame the most recent n bars (+ a little right margin) and re-fit the price to them
+  pxMargin = PX_MARGIN_DEF; pxShift = 0; priceAuto = true;
+  const from = Math.max(0, idx - (n - 1)), to = idx + 6;
+  try { chart.timeScale().setVisibleLogicalRange({ from, to }); } catch (e) { chart.timeScale().fitContent(); }
+  applyPriceZoom();
+}
+function fitChart() { fitRecent(100); }   // Fit button / key 0 / dbl-click axis → recent ~100 bars (was: all revealed bars)
 function priceAxisW() { try { const w = chart.priceScale('right').width(); if (w > 0) return w; } catch (e) {} return 62; }
 function overPriceAxis(clientX) { const r = $('chart').getBoundingClientRect(); return clientX - r.left >= r.width - Math.max(priceAxisW(), 44); }
 // wheel over the price axis = zoom price vertically; over the chart = LWC's native time zoom
 $('chart').addEventListener('wheel', (e) => {
   if (!overPriceAxis(e.clientX)) return;
   e.preventDefault(); e.stopPropagation();
+  priceAuto = false;                                                                  // manual zoom → freeze auto-fit (natural)
   pxMargin = Math.max(0, Math.min(0.45, pxMargin + (e.deltaY > 0 ? 0.03 : -0.03)));   // down=zoom out, up=zoom in
   applyPriceZoom();
 }, { capture: true, passive: false });
@@ -1155,10 +1163,9 @@ window.addEventListener('mousemove', e => {
     return;
   }
   if (dragBody) { moveBody(x, y); return; }       // moving a whole drawing
-  if (vpan && !drag && !dragH) {                   // vertical price-pan: drag down -> price view moves down
-    const h = $('chart').clientHeight || 1;
-    pxShift = Math.max(-0.78, Math.min(0.78, vpan.s0 + (y - vpan.y0) / h));
-    applyPriceZoom();
+  if (vpan && !drag && !dragH) {                   // vertical price-pan: drag up/down moves the price view & freezes auto-fit (natural)
+    const h = $('chart').clientHeight || 1, dy = y - vpan.y0;
+    if (Math.abs(dy) > 2) { priceAuto = false; pxShift = Math.max(-1.4, Math.min(1.4, vpan.s0 + dy / h)); applyPriceZoom(); }
   }
   if (!drag) return;
   const p = candle.coordinateToPrice(y);
@@ -1342,7 +1349,7 @@ async function loadDataset(ds) {
   for (let i = sessions.length - 1; i >= 0; i--) { const m = etMinutes(baseBars[rthOpenIdx(sessions[i])].time); if (m >= 570 && m < 960) { startSes = sessions[i]; break; } }
   baseIdx = startSes ? rthOpenIdx(startSes) : Math.floor(baseBars.length / 2);
   syncIdxFromBase();
-  sizeChart(); hardReveal(); chart.timeScale().fitContent();
+  sizeChart(); hardReveal(); fitRecent(150);
   if (chartType && chartType !== 'candles') { const _t = chartType; chartType = '__'; setChartType(_t); }
   requestAnimationFrame(sizeChart); setTimeout(sizeChart, 300); setTimeout(sizeChart, 1200);
   if (!wired) { wire(); wired = true; }
@@ -1480,7 +1487,7 @@ async function loadTickDay(day) {
   $('startSlider').max = n - 1;
   rebuildTf();
   baseIdx = rthOpenIdx(sessions[0]); syncIdxFromBase();
-  sizeChart(); hardReveal(); chart.timeScale().fitContent();
+  sizeChart(); hardReveal(); fitRecent(150);
   if (chartType && chartType !== 'candles') { const _t = chartType; chartType = '__'; setChartType(_t); }
   if (!wired) { wire(); wired = true; }
   renderAll();
@@ -1540,7 +1547,7 @@ function setStart(biVal) {
 }
 function setTf(m) {
   if (locked()) { buildTfSelect(); return toast("Can't change timeframe while in a position / working order"); }
-  pause(); tf = m; rebuildTf(); syncIdxFromBase(); hardReveal(); chart.timeScale().fitContent(); renderLive();
+  pause(); tf = m; rebuildTf(); syncIdxFromBase(); hardReveal(); fitRecent(150); renderLive();
 }
 
 // ---------- order helpers ----------
