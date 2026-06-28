@@ -101,13 +101,12 @@ function sizeChart() { const el = $('chart'); const w = el.clientWidth, h = el.c
 new ResizeObserver(sizeChart).observe($('chartwrap'));
 window.addEventListener('resize', sizeChart);
 // ---- price-axis vertical zoom (wheel over the right axis) + auto-fit ----
-const PX_MARGIN_DEF = 0.1; let pxMargin = PX_MARGIN_DEF;   // symmetric vertical margin on the price scale; wheel grows/shrinks it
+const PX_MARGIN_DEF = 0.15; let pxMargin = PX_MARGIN_DEF;   // symmetric vertical margin on the price scale; wheel grows/shrinks it. Also = the 1:1 vertical-pan range (±pxMargin); wheel-out for more room
 let pxShift = 0;                                          // vertical pan offset: drag the chart body up/down to move the price view
 let priceAuto = true;                                    // price scale auto-fits (follows price); a manual vertical pan/zoom freezes it (natural), Fit re-enables
 function applyPriceZoom() {
-  const top = Math.max(0, Math.min(0.92, pxMargin + pxShift));     // asymmetric margins = pan
-  const bottom = Math.max(0, Math.min(0.92, pxMargin - pxShift));
-  chart.priceScale('right').applyOptions({ autoScale: priceAuto, scaleMargins: { top, bottom } });
+  pxShift = Math.max(-pxMargin, Math.min(pxMargin, pxShift));   // clamp to the margin room: both margins stay >=0 so the data block keeps its size → vertical pan tracks the mouse 1:1 (no compression). Wheel-zoom-out grows pxMargin = more pan room.
+  chart.priceScale('right').applyOptions({ autoScale: priceAuto, scaleMargins: { top: pxMargin + pxShift, bottom: pxMargin - pxShift } });
 }
 applyPriceZoom();
 function fitRecent(n) {   // frame the most recent n bars (+ a little right margin) and re-fit the price to them
@@ -1163,9 +1162,9 @@ window.addEventListener('mousemove', e => {
     return;
   }
   if (dragBody) { moveBody(x, y); return; }       // moving a whole drawing
-  if (vpan && !drag && !dragH) {                   // vertical price-pan: drag up/down moves the price view & freezes auto-fit (natural)
-    const h = $('chart').clientHeight || 1, dy = y - vpan.y0;
-    if (Math.abs(dy) > 2) { priceAuto = false; pxShift = Math.max(-1.4, Math.min(1.4, vpan.s0 + dy / h)); applyPriceZoom(); }
+  if (vpan && !drag && !dragH) {                   // vertical price-pan: drag up/down moves the price view 1:1 with the mouse & freezes auto-fit (natural)
+    const dy = y - vpan.y0;
+    if (Math.abs(dy) > 2) { priceAuto = false; pxShift = vpan.s0 + dy / ($('chart').clientHeight || 1); applyPriceZoom(); }
   }
   if (!drag) return;
   const p = candle.coordinateToPrice(y);
