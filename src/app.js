@@ -1669,10 +1669,13 @@ function openPosition(side, px, t, atmName, mult, bracket) {
   const tgts = (srcT || []).filter(x => x.ticks > 0 && x.qty > 0).map(x => ({ ticks: x.ticks, qty: x.qty * mult }));
   if (!tgts.length) tgts.push({ ticks: sl > 0 ? sl * 2 : 20, qty: mult }); // fallback single target
   const totalQty = tgts.reduce((s, x) => s + x.qty, 0);
-  position = { side, qty: totalQty, entry: px, entryTime: t, atm: atmName, slTicks: sl, maxFav: px, beDone: false };
+  tgts.sort((x, y) => x.ticks - y.ticks);
+  const stopPrice = sl > 0 ? rnd(side === 'long' ? px - sl * TICK : px + sl * TICK) : null;   // planned stop + target prices (kept for the journal/CSV)
+  const tps = tgts.map(tg => ({ ticks: tg.ticks, qty: tg.qty, price: rnd(side === 'long' ? px + tg.ticks * TICK : px - tg.ticks * TICK) }));
+  position = { side, qty: totalQty, entry: px, entryTime: t, atm: atmName, slTicks: sl, maxFav: px, beDone: false, stopPrice, tps };
   orders = [];
-  if (sl > 0) orders.push({ type: 'stop', price: rnd(side === 'long' ? px - sl * TICK : px + sl * TICK), qty: totalQty });
-  tgts.sort((x, y) => x.ticks - y.ticks).forEach(tg => orders.push({ type: 'target', ticks: tg.ticks, qty: tg.qty, price: rnd(side === 'long' ? px + tg.ticks * TICK : px - tg.ticks * TICK) }));
+  if (sl > 0) orders.push({ type: 'stop', price: stopPrice, qty: totalQty });
+  tps.forEach(tg => orders.push({ type: 'target', ticks: tg.ticks, qty: tg.qty, price: tg.price }));
   addMarker(t, side === 'long' ? 'belowBar' : 'aboveBar', side === 'long' ? '#26a69a' : '#ef5350', side === 'long' ? 'arrowUp' : 'arrowDown', `${side === 'long' ? 'L' : 'S'}${totalQty} ${f2(px)}`);
   drawLines(); renderLive();
 }
@@ -1781,7 +1784,7 @@ function exitQty(q, px, t, type) {
   const netTicks = long ? tcount(px, position.entry) : tcount(position.entry, px);
   const pnl = netTicks * INSTR.tickValue * q;
   const risk = (position.slTicks || 0) * INSTR.tickValue * q;
-  trades.push({ entryTime: position.entryTime, exitTime: t, side: position.side, qty: q, entry: position.entry, exit: px, ticks: netTicks, pnl, R: risk > 0 ? pnl / risk : null, atm: position.atm, exitType: type, tf: (typeof tf === 'number' ? tf : BASE_TF), sym: INSTR.symbol, chart: captureTradeChart(position.entryTime, t) });
+  trades.push({ entryTime: position.entryTime, exitTime: t, side: position.side, qty: q, entry: position.entry, exit: px, ticks: netTicks, pnl, R: risk > 0 ? pnl / risk : null, atm: position.atm, exitType: type, tf: (typeof tf === 'number' ? tf : BASE_TF), sym: INSTR.symbol, stop: position.stopPrice, stopTicks: position.slTicks, tps: (position.tps || []).map(p => ({ ticks: p.ticks, price: p.price })), chart: captureTradeChart(position.entryTime, t) });
   addMarker(t, long ? 'aboveBar' : 'belowBar', pnl >= 0 ? '#26a69a' : '#ef5350', long ? 'arrowDown' : 'arrowUp', usd(pnl));
   saveJSON('rt_trades', trades);
   position.qty -= q;
@@ -2106,12 +2109,29 @@ function tradeTrend(t) {   // price-action / 走勢 stats from the captured wind
   const tk = v => Math.round(v / tick);
   return { mfe: tk(Math.max(0, mfe)), mae: tk(Math.max(0, mae)), post: tk(post), pre: tk(pre), hi: f2(Math.max(...bars.map(b => b.h))), lo: f2(Math.min(...bars.map(b => b.l))) };
 }
+function tradeLevels(t) {   // planned stop + take-profit price/distance — stored on new trades, derived (from R / ATM / exit) for older ones
+  const tick = INSTR.tickSize || 0.25, long = t.side === 'long';
+  let stopTicks = (t.stopTicks != null) ? t.stopTicks : (t.R ? Math.round(Math.abs(t.ticks / t.R)) : null);
+  let stopPrice = (t.stop != null) ? t.stop : (stopTicks != null ? rnd(long ? t.entry - stopTicks * tick : t.entry + stopTicks * tick) : null);
+  let tps = (t.tps && t.tps.length) ? t.tps.slice() : null;
+  if (!tps) {
+    const a = atm[t.atm];
+    if (a && a.struct && stopTicks != null) tps = [{ ticks: Math.max(1, Math.round(stopTicks * (a.rr || 1))) }];
+    else if (a && a.targets && a.targets.length) tps = a.targets.map(x => ({ ticks: x.ticks }));
+    else if (t.exitType === 'target') tps = [{ ticks: Math.abs(t.ticks) }];
+    if (tps) tps = tps.map(x => ({ ticks: x.ticks, price: rnd(long ? t.entry + x.ticks * tick : t.entry - x.ticks * tick) }));
+  }
+  return {
+    stopPrice: stopPrice != null ? f2(stopPrice) : '', stopTicks: stopTicks != null ? stopTicks : '',
+    tpPrice: tps && tps.length ? tps.map(p => f2(p.price)).join('|') : '', tpTicks: tps && tps.length ? tps.map(p => p.ticks).join('|') : ''
+  };
+}
 function dlCsv(name, text) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = name; a.click(); }
-function exportCsv() {   // ONE file, two sections: [TRADES] summary (+price-trend cols) then [BARS] per-trade candles incl. the 5 after exit
+function exportCsv() {   // ONE file, two sections: [TRADES] summary (+stop/TP +price-trend cols) then [BARS] per-trade candles incl. the 5 after exit
   if (!trades.length) return toast('No trades to export');
-  // section 1 — trade summary (incl. price-trend / 走勢 columns: excursion, pre-entry trend, post-exit follow-through, window hi/lo)
-  const head = 'idx,side,qty,entryTime,exitTime,entry,exit,ticks,pnl,R,atm,exitType,tf,sym,bars,mfeTicks,maeTicks,preTrendTicks,postExitTicks,windowHigh,windowLow';
-  const rows = trades.map((t, i) => { const tr = tradeTrend(t); return [i + 1, t.side, t.qty, tFmt(t.entryTime), tFmt(t.exitTime), t.entry, t.exit, t.ticks, t.pnl, t.R == null ? '' : t.R.toFixed(3), t.atm, t.exitType, t.tf != null ? t.tf : '', t.sym || INSTR.symbol, tradeBars(t).length, tr.mfe, tr.mae, tr.pre, tr.post, tr.hi, tr.lo].join(','); });
+  // section 1 — trade summary (stop/take-profit levels + price-trend / 走勢 columns)
+  const head = 'idx,side,qty,entryTime,exitTime,entry,exit,stopPrice,stopTicks,tpPrice,tpTicks,ticks,pnl,R,atm,exitType,tf,sym,bars,mfeTicks,maeTicks,preTrendTicks,postExitTicks,windowHigh,windowLow';
+  const rows = trades.map((t, i) => { const tr = tradeTrend(t), lv = tradeLevels(t); return [i + 1, t.side, t.qty, tFmt(t.entryTime), tFmt(t.exitTime), t.entry, t.exit, lv.stopPrice, lv.stopTicks, lv.tpPrice, lv.tpTicks, t.ticks, t.pnl, t.R == null ? '' : t.R.toFixed(3), t.atm, t.exitType, t.tf != null ? t.tf : '', t.sym || INSTR.symbol, tradeBars(t).length, tr.mfe, tr.mae, tr.pre, tr.post, tr.hi, tr.lo].join(','); });
   // section 2 — per-trade chart bars (long format), reconstructed candles; seg = before|in|after
   const bhead = 'trade_idx,seg,bar_epoch,bar_time,open,high,low,close';
   const brows = [];
