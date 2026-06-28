@@ -1625,24 +1625,40 @@ function openPosition(side, px, t, atmName, mult, bracket) {
 function flatten() { if (position) exitQty(position.qty, curPx(), curBaseT(), 'manual'); else cancelEntry(); }
 function reverse() { if (!position) return; const s = position.side; exitQty(position.qty, curPx(), curBaseT(), 'reverse'); onEntryButtonDirect(s === 'long' ? 'short' : 'long'); }
 function onEntryButtonDirect(side) { openPosition(side, curPx(), curBaseT(), activeAtm, resolveQty(side, 'market')); }
-function placeBreakout(side) {   // Buy/Sell Stop: stop-entry at the current bar high +1t (buy) / low -1t (sell), structural stop at the opposite extreme, 2R target
+function placeBreakout(side) {   // Buy/Sell Stop: stop-entry at the current bar high +1t (buy) / low -1t (sell). SL/TP come from the active ATM, SNAPSHOTTED to this signal bar so they never jump to a later (fill) bar.
   if (position) return toast('Already in a position — flatten first');
   if (!baseBars.length) return;
-  const long = side === 'long', ext = curBarExtreme();
+  const long = side === 'long', a = atm[activeAtm] || {}, ext = curBarExtreme();
   const price = rnd(long ? ext.hi + TICK : ext.lo - TICK);
-  const stopPx = rnd(long ? ext.lo - TICK : ext.hi + TICK);
-  const slTicks = Math.max(1, Math.round(Math.abs(price - stopPx) / TICK));
-  const mult = (riskOn && sizeForRisk(slTicks)) ? sizeForRisk(slTicks) : Math.max(1, parseInt($('qty').value, 10) || 1);
-  entryOrder = { side, kind: 'stop', price, atm: activeAtm, mult, slTicks, tgts: [{ ticks: slTicks * 2, qty: 1 }] };   // 2R: target = 2× the structural-stop risk
+  let bracket;
+  if (a.struct) {   // structural stop = opposite extreme of THIS bar; target = rr × risk (fixed now, not recomputed at fill)
+    const stopPx = rnd(long ? ext.lo - TICK : ext.hi + TICK);
+    const slT = Math.max(1, Math.round(Math.abs(price - stopPx) / TICK));
+    bracket = { slTicks: slT, tgts: [{ ticks: Math.max(1, Math.round(slT * (a.rr || 1))), qty: 1 }] };
+  } else {
+    bracket = bracketFromAtm(activeAtm);   // fixed SL/TP ticks straight from the ATM template
+  }
+  const mult = (riskOn && sizeForRisk(bracket.slTicks)) ? sizeForRisk(bracket.slTicks) : Math.max(1, parseInt($('qty').value, 10) || 1);
+  entryOrder = { side, kind: 'stop', price, atm: activeAtm, mult, slTicks: bracket.slTicks, tgts: bracket.tgts };
   const inp = $('entryPrice'); if (inp) inp.value = f2(price);
-  toast(`${long ? 'Buy' : 'Sell'} Stop @ ${f2(price)} · stop ${f2(stopPx)} · 2R (${slTicks}t risk)`);
+  toast(`${long ? 'Buy' : 'Sell'} Stop @ ${f2(price)} · ${activeAtm}`);
   drawLines(); renderLive();
 }
 
+// synthetic bar = only the price action AFTER a stop-entry fill at E, so the fill bar can still
+// hit SL/TP this bar without a false trigger from its pre-entry range (price rose/fell to E first).
+function postEntryBar(b) {
+  const E = position.entry, long = position.side === 'long';
+  return long ? { time: b.time, open: E, high: b.high, low: b.close < E ? b.low : E, close: b.close, volume: b.volume }
+              : { time: b.time, open: E, high: b.close > E ? b.high : E, low: b.low, close: b.close, volume: b.volume };
+}
 // ---------- per-(1-min) bar processing ----------
 function processSub(b) {
-  // 1) pending entry
-  if (!position && entryOrder) { if (tryEntryFill(b)) return; }   // filled -> manage from next bar
+  // 1) pending entry — a STOP entry that fills now also checks SL/TP on the SAME bar (no waiting for the next)
+  if (!position && entryOrder) {
+    const wasStop = entryOrder.kind === 'stop';
+    if (tryEntryFill(b)) { if (wasStop) b = postEntryBar(b); else return; }
+  }
   if (!position) return;
 
   const long = position.side === 'long';
