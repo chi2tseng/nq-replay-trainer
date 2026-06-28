@@ -1910,6 +1910,45 @@ function priceTag(ctx, xRight, y, text, col) {   // price label pinned to the ri
   ctx.font = '700 11px ui-monospace,monospace'; const w = ctx.measureText(text).width + 12, h = 16, x = xRight - w, yt = Math.max(1, Math.min(y - h / 2, 242));
   rrect(ctx, x, yt, w, h, 3); ctx.fillStyle = col; ctx.fill(); ctx.fillStyle = '#fff'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.fillText(text, x + 6, yt + h / 2);
 }
+function swingPivots(bars, k) {   // local swing highs/lows: bar i is a pivot if its high/low is the extreme within ±k bars
+  const out = [];
+  for (let i = k; i < bars.length - k; i++) {
+    let isH = true, isL = true;
+    for (let j = i - k; j <= i + k && (isH || isL); j++) { if (j === i) continue; if (bars[j].h >= bars[i].h) isH = false; if (bars[j].l <= bars[i].l) isL = false; }
+    if (isH) out.push({ i, price: bars[i].h, type: 'H' });
+    if (isL) out.push({ i, price: bars[i].l, type: 'L' });
+  }
+  return out;
+}
+// pan-drag state shared across review canvases (document-level so a drag can continue off-canvas; added once)
+let _ddDrag = null;
+document.addEventListener('mousemove', (e) => {
+  if (!_ddDrag) return; const c = _ddDrag.c; if (!c || !c._view || !c._n) return;
+  const L = 6, RG = 70, plotW = Math.max(10, (c.clientWidth || 680) - L - RG);
+  const v = _ddDrag.view, width = v.to - v.from;
+  let from = v.from - (e.clientX - _ddDrag.startX) * (width / plotW);
+  from = Math.max(0, Math.min(c._n - width, from));
+  c._view = { from, to: from + width }; drawTradeChart(c, c._t);
+});
+document.addEventListener('mouseup', () => { if (_ddDrag) { if (_ddDrag.c) _ddDrag.c.style.cursor = 'grab'; _ddDrag = null; } });
+function mountTradeChart(c, t) {   // wire zoom (wheel) + pan (drag) + reset (dbl-click) on a trade-review canvas, then draw
+  c._t = t; c._view = null;        // fresh full view each open
+  if (!c._wired) {
+    c._wired = true; c.style.cursor = 'grab';
+    c.addEventListener('wheel', (e) => {
+      e.preventDefault(); if (!c._view || !c._n) return;
+      const L = 6, RG = 70, plotW = Math.max(10, (c.clientWidth || 680) - L - RG);
+      const frac = Math.max(0, Math.min(1, (e.clientX - c.getBoundingClientRect().left - L) / plotW));
+      const v = c._view, cur = v.from + frac * (v.to - v.from);
+      let w = Math.max(4, Math.min(c._n, (v.to - v.from) * (e.deltaY > 0 ? 1.2 : 1 / 1.2)));
+      let from = Math.max(0, Math.min(c._n - w, cur - frac * w));
+      c._view = { from, to: from + w }; drawTradeChart(c, c._t);
+    }, { passive: false });
+    c.addEventListener('mousedown', (e) => { if (e.button !== 0) return; _ddDrag = { c, startX: e.clientX, view: { ...c._view } }; c.style.cursor = 'grabbing'; e.preventDefault(); });
+    c.addEventListener('dblclick', () => { c._view = { from: 0, to: c._n }; drawTradeChart(c, c._t); });
+  }
+  drawTradeChart(c, t);
+}
 function drawTradeChart(c, t) {
   const dpr = Math.max(1, window.devicePixelRatio || 1);
   const cssW = (c.clientWidth && c.clientWidth > 40) ? c.clientWidth : 680, cssH = 260;   // match the element so candles never squish
@@ -1918,40 +1957,62 @@ function drawTradeChart(c, t) {
   const W = cssW, H = cssH; ctx.clearRect(0, 0, W, H);
   let bars = (t.chart && t.chart.length) ? t.chart : liveTradeBars(t), synth = false;
   if (!bars || !bars.length) { bars = synthBars(t); synth = true; }
-  const L = 6, RG = 70, TH = 22, BH = 16, padY = 8, top = TH, bot = H - BH, plotW = W - L - RG;   // margins: left / right-gutter / header / bottom
-  const lo = Math.min(...bars.map(b => b.l), t.entry, t.exit), hi = Math.max(...bars.map(b => b.h), t.entry, t.exit), rng = (hi - lo) || 1;
-  const y = p => top + padY + (hi - p) / rng * (bot - top - 2 * padY);
-  const n = bars.length, slot = plotW / n, bw = Math.max(1.5, slot * 0.62), x = i => L + (i + 0.5) * slot;
-  const xAt = ts => { let i = bars.findIndex(b => b.t >= ts); if (i < 0) i = n - 1; return x(Math.max(0, i)); };
-  const long = t.side === 'long', eX = xAt(t.entryTime), xX = xAt(t.exitTime), eY = y(t.entry), xY = y(t.exit);
+  const n = bars.length; c._n = n;
+  if (!c._view) c._view = { from: 0, to: n };          // view = [from,to) in bar-index space (fractional for smooth zoom)
+  let from = Math.max(0, c._view.from), to = Math.min(n, c._view.to);
+  if (to - from < 2) { to = Math.min(n, from + 2); from = Math.max(0, to - 2); }
+  c._view = { from, to };
+  const L = 6, RG = 70, TH = 22, BH = 16, padY = 8, top = TH, bot = H - BH, plotW = W - L - RG;
+  const x = i => L + (i + 0.5 - from) / (to - from) * plotW, slot = plotW / (to - from), bw = Math.max(1.2, slot * 0.62);
+  const idxAt = ts => { const i = bars.findIndex(b => b.t >= ts); return i < 0 ? n - 1 : i; };
+  const eIdx = idxAt(t.entryTime), xIdx = idxAt(t.exitTime), eX = x(eIdx), xX = x(xIdx), inPlot = px => px >= L - 1 && px <= W - RG + 1;
+  const i0 = Math.max(0, Math.floor(from)), i1 = Math.min(n - 1, Math.ceil(to) - 1), vis = bars.slice(i0, i1 + 1);
+  let lo = Math.min(...vis.map(b => b.l)), hi = Math.max(...vis.map(b => b.h));
+  if (inPlot(eX)) { lo = Math.min(lo, t.entry); hi = Math.max(hi, t.entry); }
+  if (inPlot(xX)) { lo = Math.min(lo, t.exit); hi = Math.max(hi, t.exit); }
+  const rng = (hi - lo) || 1, y = p => top + padY + (hi - p) / rng * (bot - top - 2 * padY);
+  const long = t.side === 'long', eY = y(t.entry), xY = y(t.exit);
   // header band — symbol · timeframe · side (left), P&L · ticks · R (right)
   const head = `${t.sym || INSTR.symbol} · ${tfLab(t.tf)}`;
   ctx.fillStyle = '#0f1320'; ctx.fillRect(0, 0, W, TH);
   ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.font = '700 12px sans-serif'; ctx.fillStyle = '#d1d4dc'; ctx.fillText(head, L + 2, TH / 2);
   ctx.fillStyle = long ? '#26a69a' : '#ef5350'; ctx.fillText(`  ${long ? 'LONG' : 'SHORT'} ${t.qty}`, L + 2 + ctx.measureText(head).width, TH / 2);
-  if (W > 360) {   // P&L · ticks · R on the right — skip on a narrow canvas so it never collides with the symbol
+  if (W > 360) {
     ctx.textAlign = 'right'; ctx.fillStyle = t.pnl >= 0 ? '#26a69a' : '#ef5350'; ctx.font = '700 12px ui-monospace,monospace';
     ctx.fillText(`${usd(t.pnl)} · ${t.ticks >= 0 ? '+' : ''}${t.ticks}t · ${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + 'R'}`, W - 6, TH / 2);
     ctx.textAlign = 'left';
   }
-  // shade the trade span (entry x → exit x)
+  ctx.save(); ctx.beginPath(); ctx.rect(L, top, plotW, bot - top); ctx.clip();   // everything that scrolls is clipped to the plot
+  // trade-span shading
   const sx = Math.min(eX, xX), sw = Math.max(2, Math.abs(xX - eX));
   ctx.fillStyle = t.pnl >= 0 ? 'rgba(38,166,154,.09)' : 'rgba(239,83,80,.09)'; ctx.fillRect(sx, top, sw, bot - top);
-  // candles
-  bars.forEach((b, i) => { const up = b.c >= b.o; ctx.strokeStyle = ctx.fillStyle = up ? '#26a69a' : '#ef5350'; const cx = x(i);
+  // recent high / low of the visible window: reference lines + price levels (左側標 H/L 點位)
+  const vHi = Math.max(...vis.map(b => b.h)), vLo = Math.min(...vis.map(b => b.l));
+  ctx.setLineDash([2, 3]); ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(150,158,176,.45)';
+  [vHi, vLo].forEach(p => { const yy = y(p); ctx.beginPath(); ctx.moveTo(L, yy); ctx.lineTo(W - RG, yy); ctx.stroke(); });
+  ctx.setLineDash([]); ctx.font = '700 10px ui-monospace,monospace'; ctx.fillStyle = '#aeb6c6'; ctx.textAlign = 'left';
+  ctx.textBaseline = 'top'; ctx.fillText('H ' + f2(vHi), L + 3, y(vHi) + 2);
+  ctx.textBaseline = 'bottom'; ctx.fillText('L ' + f2(vLo), L + 3, y(vLo) - 2);
+  // candles (visible range only)
+  for (let i = i0; i <= i1; i++) { const b = bars[i], up = b.c >= b.o; ctx.strokeStyle = ctx.fillStyle = up ? '#26a69a' : '#ef5350'; const cx = x(i);
     ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(cx, y(b.h)); ctx.lineTo(cx, y(b.l)); ctx.stroke();
-    const yo = y(b.o), yc = y(b.c); ctx.fillRect(cx - bw / 2, Math.min(yo, yc), bw, Math.max(1, Math.abs(yo - yc))); });
-  // entry / exit level lines across the plot
+    const yo = y(b.o), yc = y(b.c); ctx.fillRect(cx - bw / 2, Math.min(yo, yc), bw, Math.max(1, Math.abs(yo - yc))); }
+  // recent swing pivots: small dots + thinned price labels (近期高低點 以及點位)
+  const piv = swingPivots(bars, 3); let lastHx = -99, lastLx = -99; ctx.textAlign = 'center';
+  piv.forEach(p => { if (p.i < i0 || p.i > i1) return; const up = p.type === 'H', px = x(p.i), py = y(p.price);
+    ctx.fillStyle = up ? '#26a69a' : '#ef5350'; ctx.beginPath(); ctx.arc(px, py + (up ? -3 : 3), 2, 0, 6.2832); ctx.fill();
+    const last = up ? lastHx : lastLx; if (Math.abs(px - last) > 30) { ctx.font = '9px ui-monospace,monospace'; ctx.fillStyle = up ? '#7fd4cb' : '#f1a3a1'; ctx.textBaseline = up ? 'bottom' : 'top'; ctx.fillText(f2(p.price), px, up ? py - 7 : py + 7); if (up) lastHx = px; else lastLx = px; } });
+  // entry / exit level lines + markers
   ctx.setLineDash([4, 3]); ctx.lineWidth = 1.2;
   ctx.strokeStyle = '#2962ff'; ctx.beginPath(); ctx.moveTo(L, eY); ctx.lineTo(W - RG, eY); ctx.stroke();
   ctx.strokeStyle = t.pnl >= 0 ? '#26a69a' : '#ef5350'; ctx.beginPath(); ctx.moveTo(L, xY); ctx.lineTo(W - RG, xY); ctx.stroke();
   ctx.setLineDash([]);
-  // big entry/exit markers + price tags in the gutter
-  tradeMarker(ctx, eX, eY, long, '#2962ff');
-  tradeMarker(ctx, xX, xY, !long, t.pnl >= 0 ? '#26a69a' : '#ef5350');
+  if (inPlot(eX)) tradeMarker(ctx, eX, eY, long, '#2962ff');
+  if (inPlot(xX)) tradeMarker(ctx, xX, xY, !long, t.pnl >= 0 ? '#26a69a' : '#ef5350');
+  ctx.restore();
+  // gutter price tags (entry/exit) — outside the clip
   priceTag(ctx, W - 3, eY, f2(t.entry), '#2962ff');
   priceTag(ctx, W - 3, xY, f2(t.exit), t.pnl >= 0 ? '#26a69a' : '#ef5350');
-  // entry/exit times along the bottom (time-only; gated on width — the full date is in the card row + modal header)
   if (W > 300) {
     const tmShort = ts => tFmt(ts).replace(/^\d\d\/\d\d\s*/, '');
     ctx.font = '10px ui-monospace,monospace'; ctx.fillStyle = '#787b86'; ctx.textBaseline = 'bottom';
@@ -1969,10 +2030,10 @@ function openDayDetail(key) {
     + ts.map((t, i) => { const long = t.side === 'long';
       return `<div class="dd-trade"><div class="dd-tinfo"><div class="dd-trow">#${i + 1} <span class="${long ? 'long-tag' : 'short-tag'}">${long ? 'LONG' : 'SHORT'} ${t.qty}</span> <b class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</b> · ${t.ticks >= 0 ? '+' : ''}${t.ticks}t · ${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + 'R'}</div>`
         + `<div class="dd-sub">${tFmt(t.entryTime)} → ${tFmt(t.exitTime)} · ${f2(t.entry)} → ${f2(t.exit)} · ${t.atm} · ${t.exitType}</div></div>`
-        + `<canvas class="dd-chart" data-ti="${i}"></canvas></div>`; }).join('')
+        + `<canvas class="dd-chart" data-ti="${i}" title="Scroll to zoom · drag to pan · double-click to reset"></canvas></div>`; }).join('')
     + `</div></div>`;
   el.classList.add('open');
-  requestAnimationFrame(() => el.querySelectorAll('.dd-chart').forEach(c => drawTradeChart(c, ts[+c.dataset.ti])));   // draw after layout so canvas clientWidth is real
+  requestAnimationFrame(() => el.querySelectorAll('.dd-chart').forEach(c => mountTradeChart(c, ts[+c.dataset.ti])));   // draw after layout so canvas clientWidth is real
   $('ddClose').onclick = closeDayDetail;
 }
 function closeDayDetail() { const el = $('dayDetail'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } }
