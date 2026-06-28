@@ -1850,7 +1850,11 @@ function wire() {
   wireCalendar();
   $('tfSelect').onchange = (e) => setTf(+e.target.value);
   $('dataSelect').onchange = async (e) => { if (locked()) { $('dataSelect').value = dataIdx; return toast("Can't switch dataset while in a position / working order"); } const i = +e.target.value; const ok = await loadDataset(DATASETS[i]); if (ok) dataIdx = i; else $('dataSelect').value = dataIdx; };
-  $('speedSelect').onchange = () => { if (playing) { pause(); play(); } };
+  $('speedSelect').onchange = () => {
+    const sv = $('speedSelect').value;
+    if (sv.indexOf('rt:') === 0 && !tickMode && BASE_TF >= 1) { const m = +sv.slice(3) || 1; toast(`At ${m}× realtime a 1-min bar takes ${Math.round(60 / m)}s — switch to NQ Tick / 5s / 15s for live movement, or use a bars/s speed`); }
+    if (playing) { pause(); play(); }
+  };
   $('startSlider').oninput = (e) => setStart(+e.target.value);
   $('btnPickStart').onclick = () => { if (locked()) { return toast("Can't set start while in a position / working order"); } setTool('start'); };
   $('btnFit').onclick = fitChart;
