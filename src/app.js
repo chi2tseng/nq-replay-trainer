@@ -2119,9 +2119,14 @@ function exportCsv() {   // ONE file, two sections: [TRADES] summary (+price-tre
   toast(`Exported ${trades.length} trades + ${brows.length} bars (1 file)`);
 }
 function resetAll() { if (!confirm('Clear all trade records?')) return; trades = []; saveJSON('rt_trades', trades); position = null; entryOrder = null; orders = []; markers = []; refreshMarkers(); drawLines(); renderAll(); }
-function deleteTrade(i) {   // remove a single trade record (does not touch any live position)
+function deleteTrade(i) {   // remove a single trade record AND its entry/exit arrows from the chart (does not touch a live position)
   if (i < 0 || i >= trades.length) return;
-  trades.splice(i, 1); saveJSON('rt_trades', trades); renderAll();
+  const t = trades.splice(i, 1)[0];
+  saveJSON('rt_trades', trades);
+  const drop = pred => { const k = markers.findIndex(pred); if (k >= 0) markers.splice(k, 1); };
+  drop(m => m.baseTime === t.exitTime && m.text === usd(t.pnl));                 // this trade's exit arrow (time + $ match)
+  if (!trades.some(o => o.entryTime === t.entryTime)) drop(m => m.baseTime === t.entryTime);   // entry arrow — keep if a remaining (scaled) partial shares it
+  refreshMarkers(); renderAll();
 }
 
 // ---------- saved trade logs (snapshot the current trades under a name, recall/delete later) ----------
