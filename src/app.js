@@ -1436,8 +1436,10 @@ function play() {
   if (playing) return pause();
   if (baseIdx >= baseBars.length - 1) return;
   playing = true; $('btnPlay').textContent = 'pause';
-  playBudget = 0; resetForming();
-  timer = setInterval(playFrame, TICK_FRAME_MS);
+  resetForming();
+  const sv = String($('speedSelect').value);
+  if (sv.indexOf('rt:') === 0) { simMs = baseMs(baseIdx); timer = setInterval(playRtFrame, TICK_FRAME_MS); }   // Realtime: clock-paced (real tape on tick)
+  else { playBudget = 0; timer = setInterval(playFrame, TICK_FRAME_MS); }                                       // bars/s: steady display-bar rate
 }
 function pause() { playing = false; $('btnPlay').textContent = 'play_arrow'; clearInterval(timer); timer = null; }
 
@@ -1446,10 +1448,13 @@ function pause() { playing = false; $('btnPlay').textContent = 'play_arrow'; cle
 // each print is a sub-bar → fills are tick-accurate, and during PLAY the current candle
 // forms live print-by-print, paced in real time (speed = realtime ×).
 const TICK_FRAME_MS = 50;
-function setSpeedOptions() {   // one unified set — playback always forms smoothly at N display-bars/sec on every timeframe
+function setSpeedOptions() {   // Realtime (clock-paced) + steady bars/sec — both form the candle & work on every timeframe
   if (speedUITick) return; speedUITick = true;
-  const opts = [[0.5, '0.5 bar/s'], [1, '1 bar/s'], [2, '2 bar/s'], [5, '5 bar/s'], [10, '10 bar/s'], [30, '30 bar/s']];
-  $('speedSelect').innerHTML = opts.map(([v, l]) => `<option value="${v}" ${v === 1 ? 'selected' : ''}>${l}</option>`).join('');
+  const rt = [['rt:1', 'Realtime 1×'], ['rt:10', 'Realtime 10×'], ['rt:60', 'Realtime 60×'], ['rt:300', 'Realtime 300×']];
+  const bs = [[0.5, '0.5 bar/s'], [1, '1 bar/s'], [2, '2 bar/s'], [5, '5 bar/s'], [10, '10 bar/s'], [30, '30 bar/s']];
+  $('speedSelect').innerHTML =
+    `<optgroup label="Real-time (clock-paced)">` + rt.map(([v, l]) => `<option value="${v}">${l}</option>`).join('') + `</optgroup>` +
+    `<optgroup label="Steady rate">` + bs.map(([v, l]) => `<option value="${v}" ${v === 1 ? 'selected' : ''}>${l}</option>`).join('') + `</optgroup>`;
 }
 async function enterTickMode(ds) {
   if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; if ($('symbol')) $('symbol').textContent = INSTR.symbol; if ($('entryPrice')) $('entryPrice').step = String(TICK); }
@@ -1508,6 +1513,15 @@ function playFrame() {   // steady display-bars/sec reveal; each base sub-bar = 
     if (playBudget < cost) break;
     playBudget -= cost; baseIdx++; revealTick(baseIdx); if (++n > 500000) break;
   }
+  if (n) { commitForming(); renderLive(); renderLegend(null); }
+  if (baseIdx >= baseBars.length - 1) pause();
+}
+function baseMs(i) { return tickMode ? tickMs[i] : baseBars[i].time * 1000; }   // absolute ms of base bar i (tick OR normal sub-bar)
+function playRtFrame() {   // Realtime: advance a sim clock at mult × real market time, reveal due base bars + form the candle. On tick = the real tape; on bars = a bar every (bar-duration ÷ mult).
+  const mult = +String($('speedSelect').value).slice(3) || 1;
+  simMs += mult * TICK_FRAME_MS;
+  let n = 0;
+  while (baseIdx < baseBars.length - 1 && baseMs(baseIdx + 1) <= simMs) { baseIdx++; revealTick(baseIdx); if (++n > 500000) break; }
   if (n) { commitForming(); renderLive(); renderLegend(null); }
   if (baseIdx >= baseBars.length - 1) pause();
 }
