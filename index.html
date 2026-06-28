@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>NQ Replay Trainer</title>
-<link rel="stylesheet" href="src/styles.css?v=51" />
+<link rel="stylesheet" href="src/styles.css?v=52" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,400..600,0..1,0&display=block">
@@ -35,6 +35,8 @@
           <label class="pop-row"><input type="checkbox" id="indBB" /><span class="ind-swatch" style="background:#f0b90b"></span>Bollinger Bands 20 / 2&sigma;</label>
           <label class="pop-row"><input type="checkbox" id="indEma" /><span class="ind-swatch" style="background:#42a5f5"></span>EMA (選你要的週期)</label>
           <div class="pop-row sub"><span>EMA periods</span><input type="text" id="emaPeriods" placeholder="10" /></div>
+          <label class="pop-row"><input type="checkbox" id="indVp" /><span class="ind-swatch" style="background:linear-gradient(90deg,#26a69a,#ef5350,#3b82f6)"></span>Volume Profile — prior day</label>
+          <div class="pop-note">POC + 70% value area (VAH/VAL); yesterday's range, lines extend across today</div>
           <div class="pop-h" style="margin-top:10px">Oscillator (sub-pane)</div>
           <div class="pop-row sub"><span>Mode</span>
             <select id="oscSelect"><option value="off">Off</option><option value="atr">ATR</option><option value="rsi">RSI 14</option><option value="macd">MACD 12·26·9</option></select>
@@ -213,6 +215,6 @@
 </div>
 <div id="dayDetail" class="day-detail"></div>
 <div id="logModal" class="day-detail"></div>
-<script src="src/app.js?v=51"></script>
+<script src="src/app.js?v=52"></script>
 </body>
 </html>
