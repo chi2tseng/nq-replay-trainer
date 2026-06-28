@@ -1336,8 +1336,10 @@ async function loadDataset(ds) {
   buildSessions(); buildTfSelect(); buildAtmSelect();
   $('startSlider').max = baseBars.length - 1;
   rebuildTf();
-  // default: park at the US cash open (09:30 ET) of the 2nd available trading day
-  const startSes = sessions[1] || sessions[0];
+  // default: park at the 09:30 ET cash open of the LATEST trading day that actually has an RTH
+  // session (skip a trailing partial/evening-only day where rthOpenIdx would fall back to 18:00 ET)
+  let startSes = sessions[sessions.length - 1] || sessions[0];
+  for (let i = sessions.length - 1; i >= 0; i--) { const m = etMinutes(baseBars[rthOpenIdx(sessions[i])].time); if (m >= 570 && m < 960) { startSes = sessions[i]; break; } }
   baseIdx = startSes ? rthOpenIdx(startSes) : Math.floor(baseBars.length / 2);
   syncIdxFromBase();
   sizeChart(); hardReveal(); chart.timeScale().fitContent();
