@@ -51,16 +51,13 @@
       <button id="btnStepBack" title="Step back one bar (flat only)"><span class="material-symbols-outlined">chevron_left</span></button>
       <button id="btnPlay" class="play material-symbols-outlined" title="Play / Pause (P)">play_arrow</button>
       <button id="btnStepFwd" title="Step forward one bar (Space)"><span class="material-symbols-outlined">skip_next</span></button>
-      <select id="speedSelect" title="Playback speed">
-        <option value="1">1 bar/s</option>
-        <option value="2" selected>2 bar/s</option>
-        <option value="4">4 bar/s</option>
-        <option value="8">8 bar/s</option>
-        <option value="20">20 bar/s</option>
-        <option value="rt:1">Realtime 1×</option>
-        <option value="rt:10">Realtime 10×</option>
-        <option value="rt:30">Realtime 30×</option>
-        <option value="rt:120">Realtime 120×</option>
+      <select id="speedSelect" title="Playback speed — display bars per second; the candle forms smoothly from finer data">
+        <option value="0.5">0.5 bar/s</option>
+        <option value="1" selected>1 bar/s</option>
+        <option value="2">2 bar/s</option>
+        <option value="5">5 bar/s</option>
+        <option value="10">10 bar/s</option>
+        <option value="30">30 bar/s</option>
       </select>
       <input id="startSlider" type="range" min="0" max="100" value="0" title="Drag to set replay start (flat only)" />
       <button id="btnPickStart" title="Click chart to set replay start (flat only)"><span class="material-symbols-outlined">my_location</span></button>
@@ -199,6 +196,6 @@
   </footer>
 
 </div>
-<script src="src/app.js?v=34"></script>
+<script src="src/app.js?v=35"></script>
 </body>
 </html>

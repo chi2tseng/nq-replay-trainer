@@ -1417,13 +1417,13 @@ function syncIdxFromBase() {
 }
 
 // ---------- reveal / replay ----------
-function hardReveal() { candle.setData(bars.slice(0, idx + 1).map(cd)); vol.setData(bars.slice(0, idx + 1).map(vd)); refreshMarkers(); drawLines(); renderLegend(null); oscHardReveal(); if (tickMode) resetForming(); }
+function hardReveal() { candle.setData(bars.slice(0, idx + 1).map(cd)); vol.setData(bars.slice(0, idx + 1).map(vd)); refreshMarkers(); drawLines(); renderLegend(null); oscHardReveal(); resetForming(); }
 function stepFwd() {
   if (idx >= bars.length - 1) { pause(); return; }
   idx++; candle.update(cd(bars[idx])); vol.update(vd(bars[idx]));
   for (let i = bars[idx].subStart; i <= bars[idx].subEnd; i++) { processSub(baseBars[i]); }
   baseIdx = bars[idx].subEnd;
-  if (tickMode) { resetForming(); simMs = tickMs[baseIdx] || 0; }
+  resetForming();
   renderLive(); renderLegend(null); oscStepFwd();
 }
 function stepBack() {
@@ -1431,19 +1431,13 @@ function stepBack() {
   if (idx <= 0) return;
   idx--; baseIdx = bars[idx].subEnd; hardReveal(); renderLive();
 }
+let playBudget = 0;   // accumulated display-bars to reveal — keeps the play rate steady on ANY base resolution (1m / 5s / tick)
 function play() {
   if (playing) return pause();
-  const sv = $('speedSelect').value, rt = tickMode || sv.indexOf('rt:') === 0;   // realtime-paced (forms candle from sub-bars) vs fixed bars/sec
-  if (rt) {
-    if (baseIdx >= baseBars.length - 1) return;
-    playing = true; $('btnPlay').textContent = 'pause';
-    resetForming(); simMs = baseMs(baseIdx);
-    timer = setInterval(playRtFrame, TICK_FRAME_MS);
-  } else {
-    if (idx >= bars.length - 1) return;
-    playing = true; $('btnPlay').textContent = 'pause';
-    timer = setInterval(stepFwd, 1000 / Number(sv));
-  }
+  if (baseIdx >= baseBars.length - 1) return;
+  playing = true; $('btnPlay').textContent = 'pause';
+  playBudget = 0; resetForming();
+  timer = setInterval(playFrame, TICK_FRAME_MS);
 }
 function pause() { playing = false; $('btnPlay').textContent = 'play_arrow'; clearInterval(timer); timer = null; }
 
@@ -1452,12 +1446,10 @@ function pause() { playing = false; $('btnPlay').textContent = 'play_arrow'; cle
 // each print is a sub-bar → fills are tick-accurate, and during PLAY the current candle
 // forms live print-by-print, paced in real time (speed = realtime ×).
 const TICK_FRAME_MS = 50;
-function setSpeedOptions(t) {
-  if (t === speedUITick) return; speedUITick = t;
-  const opts = t ? [[1, '1× realtime'], [2, '2×'], [5, '5×'], [10, '10×'], [30, '30×'], [60, '60×'], [120, '120×']]
-                 : [[1, '1 bar/s'], [2, '2 bar/s'], [4, '4 bar/s'], [8, '8 bar/s'], [20, '20 bar/s'], ['rt:1', 'Realtime 1×'], ['rt:10', 'Realtime 10×'], ['rt:30', 'Realtime 30×'], ['rt:120', 'Realtime 120×']];
-  const def = t ? 10 : 2;
-  $('speedSelect').innerHTML = opts.map(([v, l]) => `<option value="${v}" ${v === def ? 'selected' : ''}>${l}</option>`).join('');
+function setSpeedOptions() {   // one unified set — playback always forms smoothly at N display-bars/sec on every timeframe
+  if (speedUITick) return; speedUITick = true;
+  const opts = [[0.5, '0.5 bar/s'], [1, '1 bar/s'], [2, '2 bar/s'], [5, '5 bar/s'], [10, '10 bar/s'], [30, '30 bar/s']];
+  $('speedSelect').innerHTML = opts.map(([v, l]) => `<option value="${v}" ${v === 1 ? 'selected' : ''}>${l}</option>`).join('');
 }
 async function enterTickMode(ds) {
   if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; if ($('symbol')) $('symbol').textContent = INSTR.symbol; if ($('entryPrice')) $('entryPrice').step = String(TICK); }
@@ -1490,7 +1482,7 @@ async function loadTickDay(day) {
   if (chartType && chartType !== 'candles') { const _t = chartType; chartType = '__'; setChartType(_t); }
   if (!wired) { wire(); wired = true; }
   renderAll();
-  toast(`Tick replay · ${day} · ${n.toLocaleString()} prints (speed = realtime ×)`);
+  toast(`Tick replay · ${day} · ${n.toLocaleString()} prints`);
   return true;
 }
 function resetForming() {
@@ -1506,12 +1498,16 @@ function revealTick(i) {
   const p = b.close; if (p > fH) fH = p; if (p < fL) fL = p; fC = p; fV += b.volume;
   processSub(b);
 }
-function baseMs(i) { return tickMode ? tickMs[i] : baseBars[i].time * 1000; }   // absolute ms of base bar i (tick OR normal sub-bar)
-function playRtFrame() {   // realtime-paced reveal: advance a sim clock, reveal due base bars, form the current candle from them
-  const sv = $('speedSelect').value, mult = sv.indexOf('rt:') === 0 ? (+sv.slice(3) || 1) : (Number(sv) || 1);
-  simMs += mult * TICK_FRAME_MS;
+function playFrame() {   // steady display-bars/sec reveal; each base sub-bar = 1/S of a display bar, so the candle forms smoothly on any base (1m=whole bars, 5s/tick=live forming)
+  const rate = Number($('speedSelect').value) || 1;          // display bars per second
+  playBudget += rate * (TICK_FRAME_MS / 1000);
   let n = 0;
-  while (baseIdx < baseBars.length - 1 && baseMs(baseIdx + 1) <= simMs) { baseIdx++; revealTick(baseIdx); if (++n > 250000) break; }
+  while (baseIdx < baseBars.length - 1) {
+    const b = bars[Math.min(idx, bars.length - 1)];
+    const cost = 1 / Math.max(1, b.subEnd - b.subStart + 1);  // one sub-bar of the current display bar
+    if (playBudget < cost) break;
+    playBudget -= cost; baseIdx++; revealTick(baseIdx); if (++n > 500000) break;
+  }
   if (n) { commitForming(); renderLive(); renderLegend(null); }
   if (baseIdx >= baseBars.length - 1) pause();
 }
@@ -1850,11 +1846,7 @@ function wire() {
   wireCalendar();
   $('tfSelect').onchange = (e) => setTf(+e.target.value);
   $('dataSelect').onchange = async (e) => { if (locked()) { $('dataSelect').value = dataIdx; return toast("Can't switch dataset while in a position / working order"); } const i = +e.target.value; const ok = await loadDataset(DATASETS[i]); if (ok) dataIdx = i; else $('dataSelect').value = dataIdx; };
-  $('speedSelect').onchange = () => {
-    const sv = $('speedSelect').value;
-    if (sv.indexOf('rt:') === 0 && !tickMode && BASE_TF >= 1) { const m = +sv.slice(3) || 1; toast(`At ${m}× realtime a 1-min bar takes ${Math.round(60 / m)}s — switch to NQ Tick / 5s / 15s for live movement, or use a bars/s speed`); }
-    if (playing) { pause(); play(); }
-  };
+  $('speedSelect').onchange = () => { if (playing) { pause(); play(); } };
   $('startSlider').oninput = (e) => setStart(+e.target.value);
   $('btnPickStart').onclick = () => { if (locked()) { return toast("Can't set start while in a position / working order"); } setTool('start'); };
   $('btnFit').onclick = fitChart;
