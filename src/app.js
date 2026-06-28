@@ -65,12 +65,19 @@ let lines = [];              // active price-line handles
 
 if (loadJSON('rt_atm_v', 0) < 2) { try { localStorage.removeItem('rt_atm'); } catch (e) {} saveJSON('rt_atm_v', 2); }   // one-time: adopt structural-stop 1:1 default bracket
 let atm = normalizeAtms(loadJSON('rt_atm', defaultAtms()));
+if (loadJSON('rt_atm_v', 0) < 3) {   // merge new struct presets into an existing saved set (don't clobber user-made ATMs)
+  const d = defaultAtms();
+  ['Struct SL · 1:2', 'Struct SL · Custom R'].forEach(k => { if (!atm[k]) atm[k] = d[k]; });
+  saveJSON('rt_atm', atm); saveJSON('rt_atm_v', 3);
+}
 let activeAtm = Object.keys(atm)[0];
 let riskOn = loadJSON('rt_risk_on', false), riskUsd = loadJSON('rt_risk_usd', 200);   // fixed-$ position sizing: contracts derived from $risk ÷ stop
 
 function defaultAtms() {
   return {
     'Struct SL · 1:1':    { struct: true, rr: 1, sl: 0, targets: [], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },   // stop at current bar's high(short)/low(long) ±1tick; target = 1× risk
+    'Struct SL · 1:2':    { struct: true, rr: 2, sl: 0, targets: [], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },   // structural stop; target = 2× risk
+    'Struct SL · Custom R': { struct: true, rr: 1.5, sl: 0, targets: [], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } }, // structural stop; dial the R multiple with the Target-R input
     '40pt / 40pt':        { sl: 160, targets: [{ ticks: 160, qty: 1 }], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },   // 160 ticks = 40 pt on NQ/ES (0.25 tick)
     'Flat 10/20':         { sl: 10, targets: [{ ticks: 20, qty: 1 }], be: { on: false, trig: 12, off: 1 }, trail: { on: false, trig: 16, dist: 8 } },
     'Scalp 8/8 +BE':      { sl: 8,  targets: [{ ticks: 8, qty: 1 }],  be: { on: true,  trig: 6,  off: 1 }, trail: { on: false, trig: 8,  dist: 5 } },
@@ -1726,7 +1733,7 @@ function exitQty(q, px, t, type) {
   const netTicks = long ? tcount(px, position.entry) : tcount(position.entry, px);
   const pnl = netTicks * INSTR.tickValue * q;
   const risk = (position.slTicks || 0) * INSTR.tickValue * q;
-  trades.push({ entryTime: position.entryTime, exitTime: t, side: position.side, qty: q, entry: position.entry, exit: px, ticks: netTicks, pnl, R: risk > 0 ? pnl / risk : null, atm: position.atm, exitType: type, chart: captureTradeChart(position.entryTime, t) });
+  trades.push({ entryTime: position.entryTime, exitTime: t, side: position.side, qty: q, entry: position.entry, exit: px, ticks: netTicks, pnl, R: risk > 0 ? pnl / risk : null, atm: position.atm, exitType: type, tf: (typeof tf === 'number' ? tf : BASE_TF), sym: INSTR.symbol, chart: captureTradeChart(position.entryTime, t) });
   addMarker(t, long ? 'aboveBar' : 'belowBar', pnl >= 0 ? '#26a69a' : '#ef5350', long ? 'arrowDown' : 'arrowUp', usd(pnl));
   saveJSON('rt_trades', trades);
   position.qty -= q;
@@ -1797,19 +1804,22 @@ function renderTrades() {
 
 // ---------- Tradervue-style P&L calendar + per-trade entry/exit chart ----------
 let pnlCalY = 0, pnlCalM = 0;
-function captureTradeChart(entryT, exitT) {   // ~50 OHLC candles around the trade window, stored on the trade for the journal mini-chart
+function captureTradeChart(entryT, exitT) {   // OHLC candles around the trade, bucketed at the ACTIVE timeframe you were trading, with generous context
   if (!baseBars.length) return null;
-  const find = ts => { let lo = 0, hi = baseBars.length - 1, a = 0; while (lo <= hi) { const m = (lo + hi) >> 1; if (baseBars[m].time <= ts) { a = m; lo = m + 1; } else hi = m - 1; } return a; };
-  const ei = find(entryT), xi = Math.min(find(exitT), baseIdx, baseBars.length - 1);
-  const wpad = Math.max(15, Math.round(Math.max(1, xi - ei) * 0.8));   // context in base bars on each side (≥15) so even a fast trade shows a real chart
-  const lo = Math.max(0, ei - wpad), hi = Math.min(xi + wpad, baseIdx, baseBars.length - 1);
-  if (hi <= lo) return null;
-  const span = Math.max(1, Math.round((baseBars[hi].time - baseBars[lo].time) / 50)), out = [];
-  let cur = null;
-  for (let i = lo; i <= hi; i++) { const b = baseBars[i], bk = Math.floor(b.time / span) * span;
+  const lastT = baseBars[Math.min(baseIdx, baseBars.length - 1)].time;
+  const tfSec = Math.max(1, Math.round((typeof tf === 'number' ? tf : BASE_TF) * 60));   // 1 candle = 1 bar of the timeframe in view
+  const dur = Math.max(tfSec, exitT - entryT);
+  const pad = Math.max(25 * tfSec, Math.round(dur * 0.8));   // ≥25 timeframe-bars of context each side so the screenshot isn't cramped
+  const loT = entryT - pad, hiT = Math.min(exitT + pad, lastT);   // never reveal past the played edge
+  let span = tfSec; while ((hiT - loT) / span > 200) span *= 2;   // keep the candle count sane on very long trades
+  const out = []; let cur = null;
+  for (let i = 0; i < baseBars.length; i++) {
+    const b = baseBars[i]; if (b.time < loT) continue; if (b.time > hiT) break;
+    const bk = Math.floor(b.time / span) * span;
     if (!cur || cur.t !== bk) { cur = { t: bk, o: b.open, h: b.high, l: b.low, c: b.close }; out.push(cur); }
-    else { cur.h = Math.max(cur.h, b.high); cur.l = Math.min(cur.l, b.low); cur.c = b.close; } }
-  return out;
+    else { cur.h = Math.max(cur.h, b.high); cur.l = Math.min(cur.l, b.low); cur.c = b.close; }
+  }
+  return out.length ? out : null;
 }
 function pnlByDay() { const m = {}; trades.forEach(t => { const k = tradingDayKey(t.entryTime); const e = m[k] || (m[k] = { net: 0, n: 0 }); e.net += t.pnl; e.n++; }); return m; }
 function renderPnlCalendar() {
@@ -1836,23 +1846,65 @@ function liveTradeBars(t) {   // fallback when a trade has no stored snapshot: r
   if (!baseBars.length || t.entryTime < baseBars[0].time || t.exitTime > baseBars[Math.min(baseIdx, baseBars.length - 1)].time) return null;
   return captureTradeChart(t.entryTime, t.exitTime);
 }
-function tradeMarker(ctx, x, y, up, col) { const s = 5, yy = y + (up ? 10 : -10); ctx.fillStyle = col; ctx.beginPath(); if (up) { ctx.moveTo(x, yy - s); ctx.lineTo(x - s, yy + s); ctx.lineTo(x + s, yy + s); } else { ctx.moveTo(x, yy + s); ctx.lineTo(x - s, yy - s); ctx.lineTo(x + s, yy - s); } ctx.closePath(); ctx.fill(); }
+function tfLab(v) { v = (typeof v === 'number') ? v : BASE_TF; return v < 1 ? Math.round(v * 60) + 's' : v + 'm'; }
+function synthBars(t) {   // minimal entry→exit path when no candle snapshot exists, so the screenshot is never blank
+  const o = t.entry, c = t.exit, hi = Math.max(o, c), lo = Math.min(o, c), mt = (t.entryTime + t.exitTime) / 2;
+  return [{ t: t.entryTime, o, h: o, l: o, c: o }, { t: mt, o, h: hi, l: lo, c: (o + c) / 2 }, { t: t.exitTime, o: c, h: c, l: c, c }];
+}
+function tradeMarker(ctx, x, y, up, col) { const s = 7, yy = y + (up ? 13 : -13); ctx.fillStyle = col; ctx.strokeStyle = '#0b0e16'; ctx.lineWidth = 1.5; ctx.beginPath(); if (up) { ctx.moveTo(x, yy - s); ctx.lineTo(x - s, yy + s); ctx.lineTo(x + s, yy + s); } else { ctx.moveTo(x, yy + s); ctx.lineTo(x - s, yy - s); ctx.lineTo(x + s, yy - s); } ctx.closePath(); ctx.fill(); ctx.stroke(); }
+function priceTag(ctx, xRight, y, text, col) {   // price label pinned to the right gutter on its level line
+  ctx.font = '700 11px ui-monospace,monospace'; const w = ctx.measureText(text).width + 12, h = 16, x = xRight - w, yt = Math.max(1, Math.min(y - h / 2, 242));
+  rrect(ctx, x, yt, w, h, 3); ctx.fillStyle = col; ctx.fill(); ctx.fillStyle = '#fff'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.fillText(text, x + 6, yt + h / 2);
+}
 function drawTradeChart(c, t) {
-  const ctx = c.getContext('2d'), W = c.width, H = c.height; ctx.clearRect(0, 0, W, H);
-  const bars = (t.chart && t.chart.length) ? t.chart : liveTradeBars(t);
-  if (!bars || !bars.length) { ctx.fillStyle = '#787b86'; ctx.font = '11px sans-serif'; ctx.fillText('chart unavailable (different dataset)', 8, H / 2); return; }
-  const lo = Math.min(...bars.map(b => b.l), t.entry, t.exit), hi = Math.max(...bars.map(b => b.h), t.entry, t.exit), rng = (hi - lo) || 1, padY = 10;
-  const y = p => padY + (hi - p) / rng * (H - 2 * padY), n = bars.length, bw = Math.max(1, (W - 8) / n * 0.7), x = i => 4 + (i + 0.5) * (W - 8) / n;
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const cssW = (c.clientWidth && c.clientWidth > 40) ? c.clientWidth : 680, cssH = 260;   // match the element so candles never squish
+  c.width = Math.round(cssW * dpr); c.height = Math.round(cssH * dpr);
+  const ctx = c.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const W = cssW, H = cssH; ctx.clearRect(0, 0, W, H);
+  let bars = (t.chart && t.chart.length) ? t.chart : liveTradeBars(t), synth = false;
+  if (!bars || !bars.length) { bars = synthBars(t); synth = true; }
+  const L = 6, RG = 70, TH = 22, BH = 16, padY = 8, top = TH, bot = H - BH, plotW = W - L - RG;   // margins: left / right-gutter / header / bottom
+  const lo = Math.min(...bars.map(b => b.l), t.entry, t.exit), hi = Math.max(...bars.map(b => b.h), t.entry, t.exit), rng = (hi - lo) || 1;
+  const y = p => top + padY + (hi - p) / rng * (bot - top - 2 * padY);
+  const n = bars.length, slot = plotW / n, bw = Math.max(1.5, slot * 0.62), x = i => L + (i + 0.5) * slot;
+  const xAt = ts => { let i = bars.findIndex(b => b.t >= ts); if (i < 0) i = n - 1; return x(Math.max(0, i)); };
+  const long = t.side === 'long', eX = xAt(t.entryTime), xX = xAt(t.exitTime), eY = y(t.entry), xY = y(t.exit);
+  // header band — symbol · timeframe · side (left), P&L · ticks · R (right)
+  const head = `${t.sym || INSTR.symbol} · ${tfLab(t.tf)}`;
+  ctx.fillStyle = '#0f1320'; ctx.fillRect(0, 0, W, TH);
+  ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.font = '700 12px sans-serif'; ctx.fillStyle = '#d1d4dc'; ctx.fillText(head, L + 2, TH / 2);
+  ctx.fillStyle = long ? '#26a69a' : '#ef5350'; ctx.fillText(`  ${long ? 'LONG' : 'SHORT'} ${t.qty}`, L + 2 + ctx.measureText(head).width, TH / 2);
+  if (W > 360) {   // P&L · ticks · R on the right — skip on a narrow canvas so it never collides with the symbol
+    ctx.textAlign = 'right'; ctx.fillStyle = t.pnl >= 0 ? '#26a69a' : '#ef5350'; ctx.font = '700 12px ui-monospace,monospace';
+    ctx.fillText(`${usd(t.pnl)} · ${t.ticks >= 0 ? '+' : ''}${t.ticks}t · ${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + 'R'}`, W - 6, TH / 2);
+    ctx.textAlign = 'left';
+  }
+  // shade the trade span (entry x → exit x)
+  const sx = Math.min(eX, xX), sw = Math.max(2, Math.abs(xX - eX));
+  ctx.fillStyle = t.pnl >= 0 ? 'rgba(38,166,154,.09)' : 'rgba(239,83,80,.09)'; ctx.fillRect(sx, top, sw, bot - top);
+  // candles
   bars.forEach((b, i) => { const up = b.c >= b.o; ctx.strokeStyle = ctx.fillStyle = up ? '#26a69a' : '#ef5350'; const cx = x(i);
-    ctx.beginPath(); ctx.moveTo(cx, y(b.h)); ctx.lineTo(cx, y(b.l)); ctx.stroke(); const yo = y(b.o), yc = y(b.c); ctx.fillRect(cx - bw / 2, Math.min(yo, yc), bw, Math.max(1, Math.abs(yo - yc))); });
-  const xAt = ts => { let i = bars.findIndex(b => b.t >= ts); if (i < 0) i = bars.length - 1; return x(Math.max(0, i)); };
-  const long = t.side === 'long', eY = y(t.entry), xY = y(t.exit);
-  ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
-  ctx.strokeStyle = '#2962ff'; ctx.beginPath(); ctx.moveTo(0, eY); ctx.lineTo(W, eY); ctx.stroke();
-  ctx.strokeStyle = t.pnl >= 0 ? '#26a69a' : '#ef5350'; ctx.beginPath(); ctx.moveTo(0, xY); ctx.lineTo(W, xY); ctx.stroke();
+    ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(cx, y(b.h)); ctx.lineTo(cx, y(b.l)); ctx.stroke();
+    const yo = y(b.o), yc = y(b.c); ctx.fillRect(cx - bw / 2, Math.min(yo, yc), bw, Math.max(1, Math.abs(yo - yc))); });
+  // entry / exit level lines across the plot
+  ctx.setLineDash([4, 3]); ctx.lineWidth = 1.2;
+  ctx.strokeStyle = '#2962ff'; ctx.beginPath(); ctx.moveTo(L, eY); ctx.lineTo(W - RG, eY); ctx.stroke();
+  ctx.strokeStyle = t.pnl >= 0 ? '#26a69a' : '#ef5350'; ctx.beginPath(); ctx.moveTo(L, xY); ctx.lineTo(W - RG, xY); ctx.stroke();
   ctx.setLineDash([]);
-  tradeMarker(ctx, xAt(t.entryTime), eY, long, '#2962ff');                                   // entry: ▲ for long below, ▼ for short above
-  tradeMarker(ctx, xAt(t.exitTime), xY, !long, t.pnl >= 0 ? '#26a69a' : '#ef5350');           // exit
+  // big entry/exit markers + price tags in the gutter
+  tradeMarker(ctx, eX, eY, long, '#2962ff');
+  tradeMarker(ctx, xX, xY, !long, t.pnl >= 0 ? '#26a69a' : '#ef5350');
+  priceTag(ctx, W - 3, eY, f2(t.entry), '#2962ff');
+  priceTag(ctx, W - 3, xY, f2(t.exit), t.pnl >= 0 ? '#26a69a' : '#ef5350');
+  // entry/exit times along the bottom (time-only; gated on width — the full date is in the card row + modal header)
+  if (W > 300) {
+    const tmShort = ts => tFmt(ts).replace(/^\d\d\/\d\d\s*/, '');
+    ctx.font = '10px ui-monospace,monospace'; ctx.fillStyle = '#787b86'; ctx.textBaseline = 'bottom';
+    ctx.textAlign = 'left'; ctx.fillText('In ' + tmShort(t.entryTime), L + 2, H - 2);
+    ctx.textAlign = 'right'; ctx.fillText('Out ' + tmShort(t.exitTime), W - RG - 2, H - 2); ctx.textAlign = 'left';
+  }
+  if (synth) { ctx.font = '10px sans-serif'; ctx.fillStyle = '#5d6573'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('no bar snapshot — entry/exit only', W / 2, TH + 12); ctx.textAlign = 'left'; }
 }
 function openDayDetail(key) {
   const el = $('dayDetail'); if (!el) return;
@@ -1863,10 +1915,10 @@ function openDayDetail(key) {
     + ts.map((t, i) => { const long = t.side === 'long';
       return `<div class="dd-trade"><div class="dd-tinfo"><div class="dd-trow">#${i + 1} <span class="${long ? 'long-tag' : 'short-tag'}">${long ? 'LONG' : 'SHORT'} ${t.qty}</span> <b class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</b> · ${t.ticks >= 0 ? '+' : ''}${t.ticks}t · ${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + 'R'}</div>`
         + `<div class="dd-sub">${tFmt(t.entryTime)} → ${tFmt(t.exitTime)} · ${f2(t.entry)} → ${f2(t.exit)} · ${t.atm} · ${t.exitType}</div></div>`
-        + `<canvas class="dd-chart" data-ti="${i}" width="340" height="120"></canvas></div>`; }).join('')
+        + `<canvas class="dd-chart" data-ti="${i}"></canvas></div>`; }).join('')
     + `</div></div>`;
   el.classList.add('open');
-  el.querySelectorAll('.dd-chart').forEach(c => drawTradeChart(c, ts[+c.dataset.ti]));
+  requestAnimationFrame(() => el.querySelectorAll('.dd-chart').forEach(c => drawTradeChart(c, ts[+c.dataset.ti])));   // draw after layout so canvas clientWidth is real
   $('ddClose').onclick = closeDayDetail;
 }
 function closeDayDetail() { const el = $('dayDetail'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } }
@@ -1958,7 +2010,12 @@ function drawEquity() {
 }
 
 // ---------- ATM editor ----------
-function buildAtmSelect() { $('atmSelect').innerHTML = Object.keys(atm).map(k => `<option ${k === activeAtm ? 'selected' : ''}>${k}</option>`).join(''); loadAtmIntoEditor(activeAtm); }
+function buildAtmSelect() { $('atmSelect').innerHTML = Object.keys(atm).map(k => `<option ${k === activeAtm ? 'selected' : ''}>${k}</option>`).join(''); loadAtmIntoEditor(activeAtm); syncRrField(); }
+function syncRrField() {   // show the Target-R dial only for structural ATMs; it drives the active preset's reward multiple (rr)
+  const f = $('rrField'); if (!f) return; const a = atm[activeAtm] || {};
+  if (a.struct) { f.style.display = ''; $('rrInput').value = a.rr || 1; } else f.style.display = 'none';
+}
+function setRr(v) { const a = atm[activeAtm]; if (!a || !a.struct) return; a.rr = Math.max(0.25, Math.round(v * 4) / 4); $('rrInput').value = a.rr; saveJSON('rt_atm', atm); renderRiskReadout(); }
 function loadAtmIntoEditor(name) {
   const a = atm[name]; if (!a) return; const t = a.targets || [];
   $('atmName').value = name; $('atmSL').value = a.sl;
@@ -2058,7 +2115,10 @@ function wire() {
   $('entryPrice').addEventListener('input', renderRiskReadout);
   renderRiskReadout();
 
-  $('atmSelect').onchange = (e) => { activeAtm = e.target.value; loadAtmIntoEditor(activeAtm); renderRiskReadout(); };
+  $('atmSelect').onchange = (e) => { activeAtm = e.target.value; loadAtmIntoEditor(activeAtm); syncRrField(); renderRiskReadout(); };
+  $('rrInput').oninput = (e) => setRr(parseFloat(e.target.value) || 1);
+  $('rrMinus').onclick = () => setRr((+$('rrInput').value || 1) - 0.25);
+  $('rrPlus').onclick = () => setRr((+$('rrInput').value || 1) + 0.25);
   $('btnAtmSave').onclick = saveAtm;
   $('btnAtmDel').onclick = delAtm;
 

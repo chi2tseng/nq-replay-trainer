@@ -385,19 +385,19 @@ td.neg{color:var(--red)}
 /* day-detail modal (each trade's entry/exit chart) */
 .day-detail{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:flex-start;justify-content:center;z-index:200;padding:36px 16px;overflow:auto}
 .day-detail.open{display:flex}
-.dd-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;width:min(780px,100%);max-height:calc(100vh - 72px);display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,.5)}
+.dd-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;width:min(960px,100%);max-height:calc(100vh - 72px);display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,.5)}
 .dd-h{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--line);font-size:13px}
 .dd-date{font-weight:800;font-size:15px}
 .dd-h .pos{color:var(--green)} .dd-h .neg{color:var(--red)}
 .dd-x{width:30px;height:30px;display:flex;align-items:center;justify-content:center;background:transparent;border:none;color:var(--dim);cursor:pointer;border-radius:6px}
 .dd-x:hover{background:var(--panel2);color:var(--txt)}
 .dd-list{overflow:auto;padding:10px 14px;display:flex;flex-direction:column;gap:10px}
-.dd-trade{display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
-.dd-tinfo{flex:1;min-width:160px}
-.dd-trow{font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.dd-trade{display:flex;flex-direction:column;gap:8px;align-items:stretch;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.dd-tinfo{width:100%}
+.dd-trow{font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .dd-trow .pos{color:var(--green)} .dd-trow .neg{color:var(--red)}
 .dd-sub{font-size:11px;color:var(--dim);margin-top:3px;font-variant-numeric:tabular-nums}
-.dd-chart{width:340px;max-width:100%;height:120px;flex:none;background:#131722;border:1px solid var(--line);border-radius:6px}
+.dd-chart{display:block;width:100%;height:260px;background:#131722;border:1px solid var(--line);border-radius:6px}
 
 /* shared pnl helpers (used outside #posBox too) */
 .pnl-pos{color:var(--green)}
@@ -652,6 +652,7 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 .ord-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:8px 0; }
 .ord-field{ display:flex; flex-direction:column; gap:4px; min-width:0; }
 .ord-field > label{ font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.4px; }
+.rr-hint{ color:var(--accent,#fcd535); text-transform:none; letter-spacing:0; font-weight:600; }
 .ord-field select{ width:100%; }
 .stepper{ display:flex; align-items:stretch; border:1px solid var(--line); border-radius:7px; overflow:hidden; background:var(--panel2); }
 .stepper button{ width:28px; border:none; border-radius:0; background:transparent; color:var(--txt); font-size:16px; padding:0; flex:none; }
