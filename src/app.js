@@ -2100,12 +2100,12 @@ function tradeTrend(t) {   // price-action / 走勢 stats from the captured wind
   return { mfe: tk(Math.max(0, mfe)), mae: tk(Math.max(0, mae)), post: tk(post), pre: tk(pre), hi: f2(Math.max(...bars.map(b => b.h))), lo: f2(Math.min(...bars.map(b => b.l))) };
 }
 function dlCsv(name, text) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = name; a.click(); }
-function exportCsv() {
-  // 1) trade summary — incl. price-trend / 走勢 columns (excursion, pre-entry trend, post-exit follow-through, window hi/lo)
+function exportCsv() {   // ONE file, two sections: [TRADES] summary (+price-trend cols) then [BARS] per-trade candles incl. the 5 after exit
+  if (!trades.length) return toast('No trades to export');
+  // section 1 — trade summary (incl. price-trend / 走勢 columns: excursion, pre-entry trend, post-exit follow-through, window hi/lo)
   const head = 'idx,side,qty,entryTime,exitTime,entry,exit,ticks,pnl,R,atm,exitType,tf,sym,bars,mfeTicks,maeTicks,preTrendTicks,postExitTicks,windowHigh,windowLow';
   const rows = trades.map((t, i) => { const tr = tradeTrend(t); return [i + 1, t.side, t.qty, tFmt(t.entryTime), tFmt(t.exitTime), t.entry, t.exit, t.ticks, t.pnl, t.R == null ? '' : t.R.toFixed(3), t.atm, t.exitType, t.tf != null ? t.tf : '', t.sym || INSTR.symbol, tradeBars(t).length, tr.mfe, tr.mae, tr.pre, tr.post, tr.hi, tr.lo].join(','); });
-  dlCsv('replay_trades.csv', head + '\n' + rows.join('\n'));
-  // 2) per-trade chart bars (long format) — reconstructed candles incl. the 5 bars after exit; seg = before|in|after
+  // section 2 — per-trade chart bars (long format), reconstructed candles; seg = before|in|after
   const bhead = 'trade_idx,seg,bar_epoch,bar_time,open,high,low,close';
   const brows = [];
   trades.forEach((t, i) => {
@@ -2114,8 +2114,9 @@ function exportCsv() {
     const eb = Math.floor(t.entryTime / span) * span, xb = Math.floor(t.exitTime / span) * span;
     bars.forEach(b => { const seg = b.t < eb ? 'before' : (b.t > xb ? 'after' : 'in'); brows.push([i + 1, seg, b.t, tFmt(b.t), b.o, b.h, b.l, b.c].join(',')); });
   });
-  dlCsv('replay_trade_bars.csv', bhead + '\n' + brows.join('\n'));
-  toast(`Exported ${trades.length} trades + ${brows.length} chart bars`);
+  const out = ['# TRADES', head, ...rows, '', '# BARS (per-trade candles · seg=before|in|after · incl. 5 bars after exit)', bhead, ...brows].join('\n');
+  dlCsv('replay_trades.csv', out);
+  toast(`Exported ${trades.length} trades + ${brows.length} bars (1 file)`);
 }
 function resetAll() { if (!confirm('Clear all trade records?')) return; trades = []; saveJSON('rt_trades', trades); position = null; entryOrder = null; orders = []; markers = []; refreshMarkers(); drawLines(); renderAll(); }
 function deleteTrade(i) {   // remove a single trade record (does not touch any live position)
