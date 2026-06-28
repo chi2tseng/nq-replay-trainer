@@ -1795,6 +1795,54 @@ function renderTrades() {
     + (td.key ? `      ·  Today (${td.key}): ${usd(td.pnl)} · ${td.n} trade${td.n === 1 ? '' : 's'}` : '');
 }
 
+// ---------- Tradervue-style session overview ----------
+function sessionStats() {   // per trading-day breakdown, most-recent first
+  const byDay = {};
+  trades.forEach(t => { const k = tradingDayKey(t.entryTime); (byDay[k] ??= []).push(t); });
+  return Object.entries(byDay).map(([day, ts]) => {
+    const net = ts.reduce((s, t) => s + t.pnl, 0), w = ts.filter(t => t.pnl > 0), l = ts.filter(t => t.pnl < 0);
+    const gw = w.reduce((s, t) => s + t.pnl, 0), gl = Math.abs(l.reduce((s, t) => s + t.pnl, 0));
+    const r = ts.filter(t => t.R != null).reduce((s, t) => s + t.R, 0);
+    return { day, n: ts.length, w: w.length, l: l.length, winRate: (w.length + l.length) ? w.length / (w.length + l.length) * 100 : 0,
+             net, pf: gl ? gw / gl : (gw ? Infinity : 0), best: Math.max(0, ...ts.map(t => t.pnl)), worst: Math.min(0, ...ts.map(t => t.pnl)), r };
+  }).sort((a, b) => a.day < b.day ? 1 : -1);
+}
+function tradervueStats() {
+  const w = trades.filter(t => t.pnl > 0), l = trades.filter(t => t.pnl < 0), sc = trades.filter(t => t.pnl === 0), n = trades.length;
+  const net = trades.reduce((s, t) => s + t.pnl, 0), gw = w.reduce((s, t) => s + t.pnl, 0), gl = Math.abs(l.reduce((s, t) => s + t.pnl, 0));
+  const avgWin = w.length ? gw / w.length : 0, avgLoss = l.length ? -gl / l.length : 0;
+  const rs = trades.filter(t => t.R != null).map(t => t.R), totalR = rs.reduce((a, b) => a + b, 0);
+  let mcw = 0, mcl = 0, cw = 0, cl = 0;
+  [...trades].sort((a, b) => a.exitTime - b.exitTime).forEach(t => { if (t.pnl > 0) { cw++; cl = 0; mcw = Math.max(mcw, cw); } else if (t.pnl < 0) { cl++; cw = 0; mcl = Math.max(mcl, cl); } else { cw = 0; cl = 0; } });
+  const days = sessionStats(), D = days.length;
+  return { n, w: w.length, l: l.length, sc: sc.length, net, pf: gl ? gw / gl : (gw ? Infinity : 0),
+    winRate: (w.length + l.length) ? w.length / (w.length + l.length) * 100 : 0, avgTrade: n ? net / n : 0, avgWin, avgLoss,
+    wlRatio: avgLoss ? Math.abs(avgWin / avgLoss) : 0, largestWin: Math.max(0, ...trades.map(t => t.pnl)), largestLoss: Math.min(0, ...trades.map(t => t.pnl)),
+    totalR, avgR: rs.length ? totalR / rs.length : 0, mcw, mcl, D, winDays: days.filter(d => d.net > 0).length, avgDaily: D ? net / D : 0,
+    bestDay: D ? Math.max(...days.map(d => d.net)) : 0, worstDay: D ? Math.min(...days.map(d => d.net)) : 0 };
+}
+function renderTvStats() {
+  const el = $('tvStats'); if (!el) return;
+  if (!trades.length) { el.innerHTML = '<div class="tv-empty">No trades yet</div>'; return; }
+  const s = tradervueStats(), sg = v => (v >= 0 ? 'pos' : 'neg');
+  const row = (k, v, c = '') => `<div class="tv-row"><span class="tv-k">${k}</span><span class="tv-v ${c}">${v}</span></div>`;
+  el.innerHTML =
+    row('Total P&L', usd(s.net), sg(s.net)) + row('Total trades', s.n) + row('Winners', s.w, 'pos') + row('Losers', s.l, 'neg') +
+    row('Scratches', s.sc) + row('Win rate', s.winRate.toFixed(1) + '%') + row('Profit factor', s.pf === Infinity ? '∞' : s.pf.toFixed(2)) +
+    row('Avg trade', usd(s.avgTrade), sg(s.avgTrade)) + row('Avg win', usd(s.avgWin), 'pos') + row('Avg loss', usd(s.avgLoss), 'neg') +
+    row('Win / loss ratio', s.wlRatio.toFixed(2)) + row('Largest win', usd(s.largestWin), 'pos') + row('Largest loss', usd(s.largestLoss), 'neg') +
+    row('Max consec W / L', s.mcw + ' / ' + s.mcl) + row('Total R', (s.totalR >= 0 ? '+' : '') + s.totalR.toFixed(2), sg(s.totalR)) +
+    row('Avg R', (s.avgR >= 0 ? '+' : '') + s.avgR.toFixed(2)) + row('Days traded', s.D ? `${s.D} (${s.winDays}W)` : '0') +
+    row('Avg daily P&L', usd(s.avgDaily), sg(s.avgDaily)) + row('Best day', usd(s.bestDay), 'pos') + row('Worst day', usd(s.worstDay), 'neg');
+}
+function renderSessionTable() {
+  const el = $('sessionTable'); if (!el) return;
+  const days = sessionStats();
+  if (!days.length) { el.innerHTML = '<div class="tv-empty">No sessions yet — take some trades</div>'; return; }
+  el.innerHTML = `<table class="tv-table"><thead><tr><th>Date</th><th>Trades</th><th>W</th><th>L</th><th>Win%</th><th>PF</th><th>R</th><th>Net P&L</th><th>Best</th><th>Worst</th></tr></thead><tbody>` +
+    days.map(d => `<tr><td class="tv-date">${d.day}</td><td>${d.n}</td><td class="pos">${d.w}</td><td class="neg">${d.l}</td><td>${d.winRate.toFixed(0)}%</td><td>${d.pf === Infinity ? '∞' : d.pf.toFixed(2)}</td><td class="${d.r >= 0 ? 'pos' : 'neg'}">${(d.r >= 0 ? '+' : '') + d.r.toFixed(1)}</td><td class="tv-net ${d.net >= 0 ? 'pos' : 'neg'}">${usd(d.net)}</td><td class="pos">${d.best ? usd(d.best) : '–'}</td><td class="neg">${d.worst ? usd(d.worst) : '–'}</td></tr>`).join('') +
+    `</tbody></table>`;
+}
 function renderDash() {
   const n = trades.length;
   const wins = trades.filter(t => t.pnl > 0), losses = trades.filter(t => t.pnl < 0);
@@ -1819,6 +1867,7 @@ function renderDash() {
   $('todayPnl').innerHTML = `<span class="tp-label">Today</span><span class="tp-date">${td.key || '—'}</span>`
     + `<span class="tp-val ${td.pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${usd(td.pnl)}</span>`
     + `<span class="tp-sub">${td.n ? `${td.n} trade${td.n === 1 ? '' : 's'} · ${td.w}W ${td.l}L` : 'no trades yet'}</span>`;
+  renderTvStats(); renderSessionTable();
   drawEquity();
   $('panelDash').title = `Max Drawdown ${usd(dd)}`;
 }
