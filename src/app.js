@@ -1426,11 +1426,18 @@ function stepBack() {
   idx--; baseIdx = bars[idx].subEnd; hardReveal(); renderLive();
 }
 function play() {
-  if (tickMode) return playTick();
   if (playing) return pause();
-  if (idx >= bars.length - 1) return;
-  playing = true; $('btnPlay').textContent = 'pause';
-  timer = setInterval(stepFwd, 1000 / Number($('speedSelect').value));
+  const sv = $('speedSelect').value, rt = tickMode || sv.indexOf('rt:') === 0;   // realtime-paced (forms candle from sub-bars) vs fixed bars/sec
+  if (rt) {
+    if (baseIdx >= baseBars.length - 1) return;
+    playing = true; $('btnPlay').textContent = 'pause';
+    resetForming(); simMs = baseMs(baseIdx);
+    timer = setInterval(playRtFrame, TICK_FRAME_MS);
+  } else {
+    if (idx >= bars.length - 1) return;
+    playing = true; $('btnPlay').textContent = 'pause';
+    timer = setInterval(stepFwd, 1000 / Number(sv));
+  }
 }
 function pause() { playing = false; $('btnPlay').textContent = 'play_arrow'; clearInterval(timer); timer = null; }
 
@@ -1442,7 +1449,7 @@ const TICK_FRAME_MS = 50;
 function setSpeedOptions(t) {
   if (t === speedUITick) return; speedUITick = t;
   const opts = t ? [[1, '1× realtime'], [2, '2×'], [5, '5×'], [10, '10×'], [30, '30×'], [60, '60×'], [120, '120×']]
-                 : [[1, '1 bar/s'], [2, '2 bar/s'], [4, '4 bar/s'], [8, '8 bar/s'], [20, '20 bar/s']];
+                 : [[1, '1 bar/s'], [2, '2 bar/s'], [4, '4 bar/s'], [8, '8 bar/s'], [20, '20 bar/s'], ['rt:1', 'Realtime 1×'], ['rt:10', 'Realtime 10×'], ['rt:30', 'Realtime 30×'], ['rt:120', 'Realtime 120×']];
   const def = t ? 10 : 2;
   $('speedSelect').innerHTML = opts.map(([v, l]) => `<option value="${v}" ${v === def ? 'selected' : ''}>${l}</option>`).join('');
 }
@@ -1493,20 +1500,14 @@ function revealTick(i) {
   const p = b.close; if (p > fH) fH = p; if (p < fL) fL = p; fC = p; fV += b.volume;
   processSub(b);
 }
-function playTickFrame() {
-  const mult = Number($('speedSelect').value) || 1;
+function baseMs(i) { return tickMode ? tickMs[i] : baseBars[i].time * 1000; }   // absolute ms of base bar i (tick OR normal sub-bar)
+function playRtFrame() {   // realtime-paced reveal: advance a sim clock, reveal due base bars, form the current candle from them
+  const sv = $('speedSelect').value, mult = sv.indexOf('rt:') === 0 ? (+sv.slice(3) || 1) : (Number(sv) || 1);
   simMs += mult * TICK_FRAME_MS;
   let n = 0;
-  while (baseIdx < baseBars.length - 1 && tickMs[baseIdx + 1] <= simMs) { baseIdx++; revealTick(baseIdx); if (++n > 250000) break; }
+  while (baseIdx < baseBars.length - 1 && baseMs(baseIdx + 1) <= simMs) { baseIdx++; revealTick(baseIdx); if (++n > 250000) break; }
   if (n) { commitForming(); renderLive(); renderLegend(null); }
   if (baseIdx >= baseBars.length - 1) pause();
-}
-function playTick() {
-  if (playing) return pause();
-  if (baseIdx >= baseBars.length - 1) return;
-  playing = true; $('btnPlay').textContent = 'pause';
-  resetForming(); simMs = tickMs[baseIdx] || 0;
-  timer = setInterval(playTickFrame, TICK_FRAME_MS);
 }
 function rthOpenIdx(s) { for (let i = s.start; i <= s.end; i++) { const m = etMinutes(baseBars[i].time); if (m >= 570 && m < 960) return i; } return s.start; }  // first bar in 09:30–15:59 ET = US cash open (skips the 18:00 ET Globex open)
 function gotoSession(i) {
