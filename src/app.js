@@ -919,7 +919,14 @@ function handleDrawClick(t, time, price) {
   drawings.push({ type: t, p1: pendingPt, p2: { t: time, p: price }, color: t === 'box' ? '#2962ff' : t === 'fib' ? '#fcd535' : '#d1d4dc' });
   pendingPt = null; selDrawing = drawings[drawings.length - 1]; saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw();
 }
-function clearDrawings() { drawings = []; pendingPt = null; saveJSON('rt_drawings', drawings); repaintOverlays(); toast('Drawings cleared'); }
+function clearDrawings() {   // wipe everything drawn with the toolbar: lines / rays / h-lines / boxes / fib / measure / R:R AND the up/down/long/short arrow markers
+  const n = drawings.length + annotations.length;
+  if (!n) return toast('No drawings to clear');
+  if (!confirm(`Clear all ${n} drawing${n === 1 ? '' : 's'} (lines, shapes, arrows) from the chart?`)) return;
+  drawings = []; pendingPt = null; selDrawing = null; annotations = [];
+  saveJSON('rt_drawings', drawings); saveJSON('rt_annotations', annotations);
+  repaintOverlays(); refreshMarkers(); toast(`Cleared ${n} drawing${n === 1 ? '' : 's'}`);
+}
 // ---- Fibonacci retracement (drawing type 'fib', 2-point) ----
 const FIB_LEVELS = [
   { lv: 0, c: '#787b86' }, { lv: 0.236, c: '#ef5350' }, { lv: 0.382, c: '#ff9f0a' }, { lv: 0.5, c: '#fcd535' },
