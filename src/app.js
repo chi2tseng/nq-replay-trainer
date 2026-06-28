@@ -1617,6 +1617,19 @@ function openPosition(side, px, t, atmName, mult, bracket) {
 function flatten() { if (position) exitQty(position.qty, curPx(), curBaseT(), 'manual'); else cancelEntry(); }
 function reverse() { if (!position) return; const s = position.side; exitQty(position.qty, curPx(), curBaseT(), 'reverse'); onEntryButtonDirect(s === 'long' ? 'short' : 'long'); }
 function onEntryButtonDirect(side) { openPosition(side, curPx(), curBaseT(), activeAtm, resolveQty(side, 'market')); }
+function placeBreakout(side) {   // Buy/Sell Stop: stop-entry at the current bar high +1t (buy) / low -1t (sell), structural stop at the opposite extreme, 2R target
+  if (position) return toast('Already in a position — flatten first');
+  if (!baseBars.length) return;
+  const long = side === 'long', ext = curBarExtreme();
+  const price = rnd(long ? ext.hi + TICK : ext.lo - TICK);
+  const stopPx = rnd(long ? ext.lo - TICK : ext.hi + TICK);
+  const slTicks = Math.max(1, Math.round(Math.abs(price - stopPx) / TICK));
+  const mult = (riskOn && sizeForRisk(slTicks)) ? sizeForRisk(slTicks) : Math.max(1, parseInt($('qty').value, 10) || 1);
+  entryOrder = { side, kind: 'stop', price, atm: activeAtm, mult, slTicks, tgts: [{ ticks: slTicks * 2, qty: 1 }] };   // 2R: target = 2× the structural-stop risk
+  const inp = $('entryPrice'); if (inp) inp.value = f2(price);
+  toast(`${long ? 'Buy' : 'Sell'} Stop @ ${f2(price)} · stop ${f2(stopPx)} · 2R (${slTicks}t risk)`);
+  drawLines(); renderLive();
+}
 
 // ---------- per-(1-min) bar processing ----------
 function processSub(b) {
@@ -1877,6 +1890,8 @@ function wire() {
   $('entryType').onchange = () => { $('entryPriceRow').style.display = $('entryType').value === 'market' ? 'none' : ''; if ($('entryType').value !== 'market' && !$('entryPrice').value) $('entryPrice').value = f2(curPx()); renderRiskReadout(); };
   $('btnBuy').onclick = () => onEntryButton('long');
   $('btnSell').onclick = () => onEntryButton('short');
+  $('btnBuyStop').onclick = () => placeBreakout('long');
+  $('btnSellStop').onclick = () => placeBreakout('short');
   $('btnFlatten').onclick = flatten;
   $('btnReverse').onclick = reverse;
   $('btnCancelEntry').onclick = cancelEntry;

@@ -621,6 +621,13 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 .bs.buy:hover{ background:#0fd98a; }
 .bs.sell{ background:var(--red); color:#ffffff; }
 .bs.sell:hover{ background:#ff5468; }
+.stop-row{ margin-top:6px; }
+.bs-stop{ flex:1; display:flex; align-items:center; justify-content:center; gap:5px; padding:7px 4px; border-radius:7px; cursor:pointer; background:var(--panel2); border:1px solid var(--line); font-weight:700; font-size:12px; transition:background .12s; }
+.bs-stop .material-symbols-outlined{ font-size:16px; }
+.bs-stop.buy{ color:var(--green); border-color:#2f6f63; }
+.bs-stop.buy:hover{ background:rgba(38,166,154,.14); }
+.bs-stop.sell{ color:var(--red); border-color:#7a3a3f; }
+.bs-stop.sell:hover{ background:rgba(239,83,80,.14); }
 .ico-btn.wide{ width:100%; margin-top:8px; }
 /* working-order rows get a cancel × */
 .ord{ gap:6px; }
