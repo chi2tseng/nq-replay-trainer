@@ -622,12 +622,13 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 .bs.sell{ background:var(--red); color:#ffffff; }
 .bs.sell:hover{ background:#ff5468; }
 .stop-row{ margin-top:6px; }
-.bs-stop{ flex:1; display:flex; align-items:center; justify-content:center; gap:5px; padding:7px 4px; border-radius:7px; cursor:pointer; background:var(--panel2); border:1px solid var(--line); font-weight:700; font-size:12px; transition:background .12s; }
-.bs-stop .material-symbols-outlined{ font-size:16px; }
-.bs-stop.buy{ color:var(--green); border-color:#2f6f63; }
-.bs-stop.buy:hover{ background:rgba(38,166,154,.14); }
-.bs-stop.sell{ color:var(--red); border-color:#7a3a3f; }
-.bs-stop.sell:hover{ background:rgba(239,83,80,.14); }
+/* prefixed with button.* so they outrank button.buy/.sell (otherwise the solid green/red wins → invisible) */
+button.bs-stop{ flex:1; display:flex; align-items:center; justify-content:center; gap:5px; padding:7px 4px; border-radius:7px; cursor:pointer; font-weight:700; font-size:12px; transition:background .12s, border-color .12s; }
+button.bs-stop .material-symbols-outlined{ font-size:16px; }
+button.bs-stop.buy{ background:var(--panel2); color:var(--green); border:1px solid #3a6f64; }
+button.bs-stop.buy:hover:not(:disabled){ background:#23323c; border-color:var(--green); }
+button.bs-stop.sell{ background:var(--panel2); color:var(--red); border:1px solid #7a3a3f; }
+button.bs-stop.sell:hover:not(:disabled){ background:#33262a; border-color:var(--red); }
 .ico-btn.wide{ width:100%; margin-top:8px; }
 /* working-order rows get a cancel × */
 .ord{ gap:6px; }
