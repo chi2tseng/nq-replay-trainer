@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>NQ Replay Trainer</title>
-<link rel="stylesheet" href="src/styles.css?v=38" />
+<link rel="stylesheet" href="src/styles.css?v=39" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,400..600,0..1,0&display=block">
@@ -195,7 +195,8 @@
 
     <div id="panelDash" class="panel hidden">
       <div id="todayPnl" class="todaypnl flat"></div>
-      <div id="statCards" class="statcards"></div>
+      <div class="dashbox dashbox-mt"><div class="dashbox-h">P&amp;L calendar — click a day to see its trades</div><div id="pnlCalendar"></div></div>
+      <div id="statCards" class="statcards" style="margin-top:10px"></div>
       <div class="dashgrid">
         <div class="dashbox"><div class="dashbox-h">Cumulative P&amp;L</div><canvas id="equity" width="600" height="180"></canvas></div>
         <div class="dashbox"><div class="dashbox-h">Statistics</div><div id="tvStats"></div></div>
@@ -206,6 +207,7 @@
   </footer>
 
 </div>
-<script src="src/app.js?v=38"></script>
+<div id="dayDetail" class="day-detail"></div>
+<script src="src/app.js?v=39"></script>
 </body>
 </html>

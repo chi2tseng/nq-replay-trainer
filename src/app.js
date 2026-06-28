@@ -1726,7 +1726,7 @@ function exitQty(q, px, t, type) {
   const netTicks = long ? tcount(px, position.entry) : tcount(position.entry, px);
   const pnl = netTicks * INSTR.tickValue * q;
   const risk = (position.slTicks || 0) * INSTR.tickValue * q;
-  trades.push({ entryTime: position.entryTime, exitTime: t, side: position.side, qty: q, entry: position.entry, exit: px, ticks: netTicks, pnl, R: risk > 0 ? pnl / risk : null, atm: position.atm, exitType: type });
+  trades.push({ entryTime: position.entryTime, exitTime: t, side: position.side, qty: q, entry: position.entry, exit: px, ticks: netTicks, pnl, R: risk > 0 ? pnl / risk : null, atm: position.atm, exitType: type, chart: captureTradeChart(position.entryTime, t) });
   addMarker(t, long ? 'aboveBar' : 'belowBar', pnl >= 0 ? '#26a69a' : '#ef5350', long ? 'arrowDown' : 'arrowUp', usd(pnl));
   saveJSON('rt_trades', trades);
   position.qty -= q;
@@ -1795,6 +1795,81 @@ function renderTrades() {
     + (td.key ? `      ·  Today (${td.key}): ${usd(td.pnl)} · ${td.n} trade${td.n === 1 ? '' : 's'}` : '');
 }
 
+// ---------- Tradervue-style P&L calendar + per-trade entry/exit chart ----------
+let pnlCalY = 0, pnlCalM = 0;
+function captureTradeChart(entryT, exitT) {   // ~50 OHLC candles around the trade window, stored on the trade for the journal mini-chart
+  if (!baseBars.length) return null;
+  const find = ts => { let lo = 0, hi = baseBars.length - 1, a = 0; while (lo <= hi) { const m = (lo + hi) >> 1; if (baseBars[m].time <= ts) { a = m; lo = m + 1; } else hi = m - 1; } return a; };
+  const ei = find(entryT), xi = Math.min(find(exitT), baseIdx, baseBars.length - 1);
+  const wpad = Math.max(15, Math.round(Math.max(1, xi - ei) * 0.8));   // context in base bars on each side (≥15) so even a fast trade shows a real chart
+  const lo = Math.max(0, ei - wpad), hi = Math.min(xi + wpad, baseIdx, baseBars.length - 1);
+  if (hi <= lo) return null;
+  const span = Math.max(1, Math.round((baseBars[hi].time - baseBars[lo].time) / 50)), out = [];
+  let cur = null;
+  for (let i = lo; i <= hi; i++) { const b = baseBars[i], bk = Math.floor(b.time / span) * span;
+    if (!cur || cur.t !== bk) { cur = { t: bk, o: b.open, h: b.high, l: b.low, c: b.close }; out.push(cur); }
+    else { cur.h = Math.max(cur.h, b.high); cur.l = Math.min(cur.l, b.low); cur.c = b.close; } }
+  return out;
+}
+function pnlByDay() { const m = {}; trades.forEach(t => { const k = tradingDayKey(t.entryTime); const e = m[k] || (m[k] = { net: 0, n: 0 }); e.net += t.pnl; e.n++; }); return m; }
+function renderPnlCalendar() {
+  const el = $('pnlCalendar'); if (!el) return;
+  const byDay = pnlByDay(), keys = Object.keys(byDay).sort();
+  if (!pnlCalY) { const last = keys[keys.length - 1]; if (last) { const p = last.split('-'); pnlCalY = +p[0]; pnlCalM = +p[1] - 1; } else { pnlCalY = (sessions[currentSessionIdx()] ? +sessions[currentSessionIdx()].key.split('-')[0] : 2026); pnlCalM = (sessions[currentSessionIdx()] ? +sessions[currentSessionIdx()].key.split('-')[1] - 1 : 5); } }
+  const startWd = new Date(Date.UTC(pnlCalY, pnlCalM, 1)).getUTCDay(), days = new Date(Date.UTC(pnlCalY, pnlCalM + 1, 0)).getUTCDate();
+  let monthNet = 0, monthDays = 0, cells = '';
+  for (let i = 0; i < startWd; i++) cells += '<div class="pc-day empty"></div>';
+  for (let d = 1; d <= days; d++) {
+    const key = `${pnlCalY}-${pad(pnlCalM + 1)}-${pad(d)}`, e = byDay[key];
+    if (e) { monthNet += e.net; monthDays++; }
+    cells += `<div class="pc-day ${e ? (e.net >= 0 ? 'win' : 'loss') : ''}" ${e ? `data-day="${key}"` : ''}>`
+      + `<div class="pc-d">${d}</div>` + (e ? `<div class="pc-pnl">${usd(e.net)}</div><div class="pc-n">${e.n} trade${e.n === 1 ? '' : 's'}</div>` : '') + `</div>`;
+  }
+  el.innerHTML =
+    `<div class="pc-h"><button class="pc-nav" data-mo="-1"><span class="material-symbols-outlined">chevron_left</span></button>`
+    + `<span class="pc-title">${CAL_MONTHS[pnlCalM]} ${pnlCalY} &nbsp;<b class="${monthNet >= 0 ? 'pos' : 'neg'}">${usd(monthNet)}</b> · ${monthDays}d</span>`
+    + `<button class="pc-nav" data-mo="1"><span class="material-symbols-outlined">chevron_right</span></button></div>`
+    + `<div class="pc-wdrow">${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(w => `<span>${w}</span>`).join('')}</div>`
+    + `<div class="pc-grid">${cells}</div>`;
+}
+function liveTradeBars(t) {   // fallback when a trade has no stored snapshot: rebuild from the current dataset if it covers the trade
+  if (!baseBars.length || t.entryTime < baseBars[0].time || t.exitTime > baseBars[Math.min(baseIdx, baseBars.length - 1)].time) return null;
+  return captureTradeChart(t.entryTime, t.exitTime);
+}
+function tradeMarker(ctx, x, y, up, col) { const s = 5, yy = y + (up ? 10 : -10); ctx.fillStyle = col; ctx.beginPath(); if (up) { ctx.moveTo(x, yy - s); ctx.lineTo(x - s, yy + s); ctx.lineTo(x + s, yy + s); } else { ctx.moveTo(x, yy + s); ctx.lineTo(x - s, yy - s); ctx.lineTo(x + s, yy - s); } ctx.closePath(); ctx.fill(); }
+function drawTradeChart(c, t) {
+  const ctx = c.getContext('2d'), W = c.width, H = c.height; ctx.clearRect(0, 0, W, H);
+  const bars = (t.chart && t.chart.length) ? t.chart : liveTradeBars(t);
+  if (!bars || !bars.length) { ctx.fillStyle = '#787b86'; ctx.font = '11px sans-serif'; ctx.fillText('chart unavailable (different dataset)', 8, H / 2); return; }
+  const lo = Math.min(...bars.map(b => b.l), t.entry, t.exit), hi = Math.max(...bars.map(b => b.h), t.entry, t.exit), rng = (hi - lo) || 1, padY = 10;
+  const y = p => padY + (hi - p) / rng * (H - 2 * padY), n = bars.length, bw = Math.max(1, (W - 8) / n * 0.7), x = i => 4 + (i + 0.5) * (W - 8) / n;
+  bars.forEach((b, i) => { const up = b.c >= b.o; ctx.strokeStyle = ctx.fillStyle = up ? '#26a69a' : '#ef5350'; const cx = x(i);
+    ctx.beginPath(); ctx.moveTo(cx, y(b.h)); ctx.lineTo(cx, y(b.l)); ctx.stroke(); const yo = y(b.o), yc = y(b.c); ctx.fillRect(cx - bw / 2, Math.min(yo, yc), bw, Math.max(1, Math.abs(yo - yc))); });
+  const xAt = ts => { let i = bars.findIndex(b => b.t >= ts); if (i < 0) i = bars.length - 1; return x(Math.max(0, i)); };
+  const long = t.side === 'long', eY = y(t.entry), xY = y(t.exit);
+  ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
+  ctx.strokeStyle = '#2962ff'; ctx.beginPath(); ctx.moveTo(0, eY); ctx.lineTo(W, eY); ctx.stroke();
+  ctx.strokeStyle = t.pnl >= 0 ? '#26a69a' : '#ef5350'; ctx.beginPath(); ctx.moveTo(0, xY); ctx.lineTo(W, xY); ctx.stroke();
+  ctx.setLineDash([]);
+  tradeMarker(ctx, xAt(t.entryTime), eY, long, '#2962ff');                                   // entry: ▲ for long below, ▼ for short above
+  tradeMarker(ctx, xAt(t.exitTime), xY, !long, t.pnl >= 0 ? '#26a69a' : '#ef5350');           // exit
+}
+function openDayDetail(key) {
+  const el = $('dayDetail'); if (!el) return;
+  const ts = trades.filter(t => tradingDayKey(t.entryTime) === key).sort((a, b) => a.entryTime - b.entryTime);
+  const net = ts.reduce((s, t) => s + t.pnl, 0), w = ts.filter(t => t.pnl > 0).length, l = ts.filter(t => t.pnl < 0).length;
+  el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">${key}</span> &nbsp;<b class="${net >= 0 ? 'pos' : 'neg'}">${usd(net)}</b> · ${ts.length} trades · ${w}W ${l}L</div>`
+    + `<button class="dd-x" id="ddClose"><span class="material-symbols-outlined">close</span></button></div><div class="dd-list">`
+    + ts.map((t, i) => { const long = t.side === 'long';
+      return `<div class="dd-trade"><div class="dd-tinfo"><div class="dd-trow">#${i + 1} <span class="${long ? 'long-tag' : 'short-tag'}">${long ? 'LONG' : 'SHORT'} ${t.qty}</span> <b class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</b> · ${t.ticks >= 0 ? '+' : ''}${t.ticks}t · ${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + 'R'}</div>`
+        + `<div class="dd-sub">${tFmt(t.entryTime)} → ${tFmt(t.exitTime)} · ${f2(t.entry)} → ${f2(t.exit)} · ${t.atm} · ${t.exitType}</div></div>`
+        + `<canvas class="dd-chart" data-ti="${i}" width="340" height="120"></canvas></div>`; }).join('')
+    + `</div></div>`;
+  el.classList.add('open');
+  el.querySelectorAll('.dd-chart').forEach(c => drawTradeChart(c, ts[+c.dataset.ti]));
+  $('ddClose').onclick = closeDayDetail;
+}
+function closeDayDetail() { const el = $('dayDetail'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } }
 // ---------- Tradervue-style session overview ----------
 function sessionStats() {   // per trading-day breakdown, most-recent first
   const byDay = {};
@@ -1867,7 +1942,7 @@ function renderDash() {
   $('todayPnl').innerHTML = `<span class="tp-label">Today</span><span class="tp-date">${td.key || '—'}</span>`
     + `<span class="tp-val ${td.pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${usd(td.pnl)}</span>`
     + `<span class="tp-sub">${td.n ? `${td.n} trade${td.n === 1 ? '' : 's'} · ${td.w}W ${td.l}L` : 'no trades yet'}</span>`;
-  renderTvStats(); renderSessionTable();
+  renderPnlCalendar(); renderTvStats(); renderSessionTable();
   drawEquity();
   $('panelDash').title = `Max Drawdown ${usd(dd)}`;
 }
@@ -1989,6 +2064,12 @@ function wire() {
 
   $('tabTrades').onclick = () => switchTab(true);
   $('tabDash').onclick = () => switchTab(false);
+  $('pnlCalendar').addEventListener('click', (e) => {
+    const nav = e.target.closest('.pc-nav'); if (nav) { pnlCalM += +nav.dataset.mo; if (pnlCalM < 0) { pnlCalM = 11; pnlCalY--; } if (pnlCalM > 11) { pnlCalM = 0; pnlCalY++; } renderPnlCalendar(); return; }
+    const day = e.target.closest('.pc-day[data-day]'); if (day) openDayDetail(day.dataset.day);
+  });
+  $('dayDetail').addEventListener('click', (e) => { if (e.target === $('dayDetail')) closeDayDetail(); });   // click backdrop to close
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('dayDetail') && $('dayDetail').classList.contains('open')) closeDayDetail(); });
   $('btnExportCsv').onclick = exportCsv;
   $('btnReset').onclick = resetAll;
 

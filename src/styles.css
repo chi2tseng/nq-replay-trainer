@@ -362,6 +362,42 @@ td.neg{color:var(--red)}
 .tv-table td.neg{color:var(--red)}
 .tv-table td.tv-net{font-weight:800}
 #sessionTable{max-height:260px}
+/* P&L calendar (Tradervue-style) */
+#pnlCalendar{user-select:none}
+.pc-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.pc-title{font-size:13px;color:var(--txt);font-weight:700}
+.pc-title .pos{color:var(--green)} .pc-title .neg{color:var(--red)}
+.pc-nav{width:26px;height:26px;display:flex;align-items:center;justify-content:center;background:var(--panel);border:1px solid var(--line);border-radius:6px;color:var(--txt);cursor:pointer}
+.pc-nav:hover{background:#2f3340}
+.pc-wdrow{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:4px}
+.pc-wdrow span{text-align:center;font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.3px}
+.pc-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.pc-day{min-height:56px;border-radius:6px;border:1px solid var(--line);background:#1a1e27;padding:4px 6px;display:flex;flex-direction:column}
+.pc-day.empty{background:transparent;border:none}
+.pc-day .pc-d{font-size:11px;color:var(--dim);align-self:flex-end}
+.pc-day .pc-pnl{font-size:13px;font-weight:800;font-variant-numeric:tabular-nums;margin-top:auto}
+.pc-day .pc-n{font-size:10px;color:var(--dim)}
+.pc-day.win{background:rgba(38,166,154,.16);border-color:rgba(38,166,154,.5);cursor:pointer}
+.pc-day.win .pc-pnl{color:var(--green)}
+.pc-day.loss{background:rgba(239,83,80,.16);border-color:rgba(239,83,80,.5);cursor:pointer}
+.pc-day.loss .pc-pnl{color:var(--red)}
+.pc-day.win:hover,.pc-day.loss:hover{filter:brightness(1.3)}
+/* day-detail modal (each trade's entry/exit chart) */
+.day-detail{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:flex-start;justify-content:center;z-index:200;padding:36px 16px;overflow:auto}
+.day-detail.open{display:flex}
+.dd-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;width:min(780px,100%);max-height:calc(100vh - 72px);display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,.5)}
+.dd-h{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--line);font-size:13px}
+.dd-date{font-weight:800;font-size:15px}
+.dd-h .pos{color:var(--green)} .dd-h .neg{color:var(--red)}
+.dd-x{width:30px;height:30px;display:flex;align-items:center;justify-content:center;background:transparent;border:none;color:var(--dim);cursor:pointer;border-radius:6px}
+.dd-x:hover{background:var(--panel2);color:var(--txt)}
+.dd-list{overflow:auto;padding:10px 14px;display:flex;flex-direction:column;gap:10px}
+.dd-trade{display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.dd-tinfo{flex:1;min-width:160px}
+.dd-trow{font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.dd-trow .pos{color:var(--green)} .dd-trow .neg{color:var(--red)}
+.dd-sub{font-size:11px;color:var(--dim);margin-top:3px;font-variant-numeric:tabular-nums}
+.dd-chart{width:340px;max-width:100%;height:120px;flex:none;background:#131722;border:1px solid var(--line);border-radius:6px}
 
 /* shared pnl helpers (used outside #posBox too) */
 .pnl-pos{color:var(--green)}
