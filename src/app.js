@@ -814,7 +814,77 @@ const drawingsPrimitive = {
   }],
 };
 if (candle.attachPrimitive) candle.attachPrimitive(drawingsPrimitive);
-function repaintOverlays() { if (ripsterPrimitive._req) ripsterPrimitive._req(); if (drawingsPrimitive._req) drawingsPrimitive._req(); indicatorRepaint(); }
+
+// ---------- Tradovate-style order bracket: full-width lines + draggable tags w/ live $ + cancel ✕ ----------
+let orderHits = [];   // tag cancel hit-boxes captured each paint: {spec, x, y, w, h}
+function orderLines() {   // single source for drawing AND dragging (entry / stop / targets)
+  const out = [];
+  if (entryOrder) {
+    const long = entryOrder.side === 'long', q = entryOrder.mult || 1;
+    out.push({ price: entryOrder.price, color: '#2962ff', label: `${long ? 'BUY' : 'SELL'} ${entryOrder.kind === 'limit' ? 'LMT' : 'STP'}`, qty: q, cancel: 'entry',
+               drag: { get: () => entryOrder.price, set: p => entryOrder.price = p } });
+    if (entryOrder.struct) {   // structural preview (computed from the current bar; not independently draggable)
+      const ext = curBarExtreme(), sp = rnd(long ? ext.lo - TICK : ext.hi + TICK), risk = Math.abs(entryOrder.price - sp);
+      out.push({ price: sp, color: '#ef5350', label: 'STOP', qty: q, ref: entryOrder.price });
+      out.push({ price: rnd(long ? entryOrder.price + risk : entryOrder.price - risk), color: '#26a69a', label: 'TGT', qty: q, ref: entryOrder.price });
+    } else {
+      if (entryOrder.slTicks > 0) out.push({ price: rnd(long ? entryOrder.price - entryOrder.slTicks * TICK : entryOrder.price + entryOrder.slTicks * TICK), color: '#ef5350', label: 'STOP', qty: q, ref: entryOrder.price,
+        drag: { get: () => rnd(long ? entryOrder.price - entryOrder.slTicks * TICK : entryOrder.price + entryOrder.slTicks * TICK), set: p => { entryOrder.slTicks = Math.max(1, Math.round(Math.abs(entryOrder.price - p) / TICK)); } } });
+      (entryOrder.tgts || []).forEach((tg, i) => { if (tg.ticks > 0) out.push({ price: rnd(long ? entryOrder.price + tg.ticks * TICK : entryOrder.price - tg.ticks * TICK), color: '#26a69a', label: 'TGT' + (entryOrder.tgts.length > 1 ? (i + 1) : ''), qty: tg.qty, ref: entryOrder.price,
+        drag: { get: () => rnd(long ? entryOrder.price + tg.ticks * TICK : entryOrder.price - tg.ticks * TICK), set: p => { tg.ticks = Math.max(1, Math.round(Math.abs(p - entryOrder.price) / TICK)); } } }); });
+    }
+  }
+  if (position) {
+    const long = position.side === 'long';
+    const uT = long ? tcount(curPx(), position.entry) : tcount(position.entry, curPx());
+    out.push({ price: position.entry, color: '#2962ff', label: `${long ? 'LONG' : 'SHORT'} ${position.qty}`, pnl: uT * INSTR.tickValue * position.qty, posEntry: true });
+    orders.forEach((o, i) => out.push(o.type === 'stop'
+      ? { price: o.price, color: '#ef5350', label: 'STOP', qty: o.qty, ref: position.entry, cancel: i, drag: { get: () => o.price, set: p => o.price = p } }
+      : { price: o.price, color: '#26a69a', label: 'TGT', qty: o.qty, ref: position.entry, cancel: i, drag: { get: () => o.price, set: p => o.price = p } }));
+  }
+  return out;
+}
+function rrect(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+function drawOrderBrackets(ctx, W) {
+  orderHits = []; const ols = orderLines(); if (!ols.length) return;
+  const FONT = '-apple-system,Segoe UI,Roboto,sans-serif', h = 17, PAD = 7, GAP = 9, XW = 17;
+  ctx.save(); ctx.textBaseline = 'middle';
+  for (const o of ols) {
+    const y = candle.priceToCoordinate(o.price); if (y == null) continue;
+    const yr = Math.round(y);
+    const segs = [o.label + (o.qty ? '  ×' + o.qty : '')];
+    if (o.ref != null) { const d = Math.abs(tcount(o.price, o.ref)) * INSTR.tickValue * (o.qty || 1); segs.push((o.color === '#ef5350' ? '−$' : '+$') + d.toFixed(0)); }
+    else if (o.pnl != null) segs.push((o.pnl >= 0 ? '+$' : '−$') + Math.abs(o.pnl).toFixed(0));
+    segs.push(f2(o.price));
+    ctx.font = '600 11px ' + FONT;
+    const wseg = segs.map(s => ctx.measureText(s).width);
+    const hasX = o.cancel != null;
+    const tw = PAD + wseg.reduce((a, b) => a + b, 0) + GAP * (segs.length - 1) + (hasX ? GAP - 2 + XW : PAD);
+    const right = W - 3, left = right - tw, top = yr - (h >> 1);
+    ctx.strokeStyle = o.color; ctx.lineWidth = 1; ctx.setLineDash(o.posEntry || o.cancel === 'entry' ? [2, 3] : [6, 3]);
+    ctx.beginPath(); ctx.moveTo(0, yr + 0.5); ctx.lineTo(left - 2, yr + 0.5); ctx.stroke(); ctx.setLineDash([]);
+    rrect(ctx, left, top, tw, h, 3); ctx.fillStyle = o.color; ctx.globalAlpha = 0.96; ctx.fill(); ctx.globalAlpha = 1;
+    let cx = left + PAD; const cy = top + h / 2 + 0.5;
+    segs.forEach((s, i) => { ctx.fillStyle = '#fff'; ctx.font = (i === segs.length - 1 ? '700 11px ' : '600 11px ') + FONT; ctx.fillText(s, cx, cy); cx += wseg[i] + GAP; });
+    if (hasX) { const bx = right - XW;
+      ctx.strokeStyle = 'rgba(255,255,255,.45)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(bx, top + 3); ctx.lineTo(bx, top + h - 3); ctx.stroke();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.4; const m = 5; ctx.beginPath(); ctx.moveTo(bx + m, top + m); ctx.lineTo(bx + XW - m, top + h - m); ctx.moveTo(bx + XW - m, top + m); ctx.lineTo(bx + m, top + h - m); ctx.stroke();
+      orderHits.push({ spec: o.cancel, x: bx, y: top, w: XW, h }); }
+  }
+  ctx.restore();
+}
+const orderPrimitive = {
+  attached(p) { this._req = p.requestUpdate; },
+  updateAllViews() {},
+  paneViews: () => [{ zOrder: () => 'top', renderer: () => ({ draw: (target) => {
+    try { target.useMediaCoordinateSpace((scope) => drawOrderBrackets(scope.context, scope.mediaSize.width)); window.__ord = { n: ((window.__ord || {}).n || 0) + 1, ok: true }; }
+    catch (e) { window.__ord = { err: String(e) }; }
+  } }) }],
+};
+if (candle.attachPrimitive) candle.attachPrimitive(orderPrimitive);
+function orderRepaint() { if (orderPrimitive._req) orderPrimitive._req(); }
+function orderCancelAt(x, y) { for (const hb of orderHits) { if (x >= hb.x && x <= hb.x + hb.w && y >= hb.y && y <= hb.y + hb.h) return hb.spec; } return null; }
+function repaintOverlays() { if (ripsterPrimitive._req) ripsterPrimitive._req(); if (drawingsPrimitive._req) drawingsPrimitive._req(); indicatorRepaint(); orderRepaint(); }
 function handleDrawClick(t, time, price) {
   price = magnetPrice(time, price);   // magnet on -> snap to nearest OHLC; off -> rnd(price)
   if (t === 'hl') { drawings.push({ type: 'hl', p1: { t: time, p: price }, color: '#d1d4dc' }); selDrawing = drawings[drawings.length - 1]; saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return; }
@@ -959,17 +1029,7 @@ function placeAnnotation(t, baseTime) { const a = ANN[t]; if (!a) return; annota
 function clearAnnotations() { annotations = []; saveJSON('rt_annotations', annotations); refreshMarkers(); toast('Markers cleared'); }
 function updateToolUI() { Object.values(TOOLBTN).forEach(id => { const b = $(id); if (b) b.classList.remove('active'); }); const b = $(TOOLBTN[tool]); if (b) b.classList.add('active'); const cur = $('toolCursor'); if (cur) cur.classList.toggle('active', !tool); $('chart').style.cursor = tool ? 'crosshair' : ''; }
 function setTool(t) { tool = (tool === t) ? '' : t; pendingPt = null; repaintOverlays(); updateToolUI(); }
-function draggableLines() {
-  const a = [];
-  if (entryOrder) {
-    const long = entryOrder.side === 'long';
-    a.push({ get: () => entryOrder.price, set: p => entryOrder.price = p });   // dragging entry moves the whole bracket (ticks fixed)
-    if (entryOrder.slTicks > 0) a.push({ get: () => rnd(long ? entryOrder.price - entryOrder.slTicks * TICK : entryOrder.price + entryOrder.slTicks * TICK), set: p => { entryOrder.slTicks = Math.max(1, Math.round(Math.abs(entryOrder.price - p) / TICK)); } });
-    (entryOrder.tgts || []).forEach(tg => { if (tg.ticks > 0) a.push({ get: () => rnd(long ? entryOrder.price + tg.ticks * TICK : entryOrder.price - tg.ticks * TICK), set: p => { tg.ticks = Math.max(1, Math.round(Math.abs(p - entryOrder.price) / TICK)); } }); });
-  }
-  if (position) orders.forEach(o => { if (o.type === 'stop' || o.type === 'target') a.push({ get: () => o.price, set: p => o.price = p }); });
-  return a;
-}
+function draggableLines() { return orderLines().filter(o => o.drag).map(o => o.drag); }   // derived from the rendered order set (entry / stop / targets)
 function nearestLine(y) { let best = null, bd = 7; for (const L of draggableLines()) { const ly = candle.priceToCoordinate(L.get()); if (ly == null) continue; const d = Math.abs(ly - y); if (d < bd) { bd = d; best = L; } } return best; }
 // ---- drawing endpoint editing: hit-test + drag the anchors of placed drawings ----
 // Each handle exposes apply(time, price) that writes back into the drawing's p1/p2 in place.
@@ -1078,6 +1138,7 @@ chart.subscribeClick(param => {
 $('chart').addEventListener('mousedown', e => {
   if (e.button !== 0 || tool) return;             // left-button only; while a tool is armed, clicks place points
   const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
+  const _ocx = orderCancelAt(x, y); if (_ocx != null) { cancelOrder(_ocx); e.preventDefault(); return; }   // ✕ on an order tag → cancel that order
   const h = nearestHandle(x, y);                  // 1) drawing anchor (endpoint) — most specific; also selects it
   if (h) { dragH = h; selDrawing = h.d; chart.applyOptions({ handleScroll: false, handleScale: false }); repaintOverlays(); e.preventDefault(); return; }
   const hd = drawingAt(x, y);                     // 2) drawing body — select + move the whole drawing
@@ -1114,6 +1175,7 @@ $('chart').addEventListener('mousemove', e => {
   if (tool) { $('chart').style.cursor = 'crosshair'; return; }
   const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
   if (nearestHandle(x, y) || drawingAt(x, y)) { $('chart').style.cursor = 'move'; return; }   // hovering a drawing/anchor
+  if (orderCancelAt(x, y) != null) { $('chart').style.cursor = 'pointer'; return; }            // hovering an order ✕
   $('chart').style.cursor = (locked() && nearestLine(y)) ? 'ns-resize' : '';
 });
 
@@ -1232,6 +1294,7 @@ function setChartType(type) {
     candle.attachPrimitive(ripsterPrimitive);
     candle.attachPrimitive(indicatorPrimitive);
     candle.attachPrimitive(drawingsPrimitive);
+    candle.attachPrimitive(orderPrimitive);
   }
 
   // 5) re-apply markers (entries/exits/annotations) and order/position price lines
@@ -1627,27 +1690,7 @@ function exitQty(q, px, t, type) {
 // ---------- chart drawing ----------
 function clearLines() { lines.forEach(l => candle.removePriceLine(l)); lines = []; }
 function pl(price, color, style, title) { return candle.createPriceLine({ price, color, lineWidth: 1, lineStyle: style, axisLabelVisible: true, title }); }
-function drawLines() {
-  clearLines();
-  if (entryOrder) {
-    lines.push(pl(entryOrder.price, '#2962ff', LightweightCharts.LineStyle.Dotted, entryOrder.kind === 'limit' ? 'LMT' : 'STP'));
-    // preview the ATM bracket that auto-attaches on fill (draggable to adjust before fill)
-    const long = entryOrder.side === 'long';
-    if (entryOrder.struct) {   // structural stop preview from the current bar; target = 1× risk
-      const ext = curBarExtreme(); const sp = rnd(long ? ext.lo - TICK : ext.hi + TICK); const risk = Math.abs(entryOrder.price - sp);
-      lines.push(pl(sp, '#ef5350', LightweightCharts.LineStyle.Dashed, '↳STP'));
-      lines.push(pl(rnd(long ? entryOrder.price + risk : entryOrder.price - risk), '#26a69a', LightweightCharts.LineStyle.Dashed, '↳T1'));
-    } else {
-      if (entryOrder.slTicks > 0) lines.push(pl(rnd(long ? entryOrder.price - entryOrder.slTicks * TICK : entryOrder.price + entryOrder.slTicks * TICK), '#ef5350', LightweightCharts.LineStyle.Dashed, '↳STP'));
-      (entryOrder.tgts || []).forEach((tg, i) => { if (tg.ticks > 0) lines.push(pl(rnd(long ? entryOrder.price + tg.ticks * TICK : entryOrder.price - tg.ticks * TICK), '#26a69a', LightweightCharts.LineStyle.Dashed, '↳T' + (i + 1))); });
-    }
-  }
-  if (position) {
-    lines.push(pl(position.entry, '#787b86', LightweightCharts.LineStyle.Dotted, 'ENTRY'));
-    const stop = orders.find(o => o.type === 'stop'); if (stop) lines.push(pl(stop.price, '#ef5350', LightweightCharts.LineStyle.Dashed, 'STOP'));
-    orders.filter(o => o.type === 'target').forEach((tg, i) => lines.push(pl(tg.price, '#26a69a', LightweightCharts.LineStyle.Dashed, 'T' + (i + 1))));
-  }
-}
+function drawLines() { clearLines(); orderRepaint(); }   // order bracket now rendered by orderPrimitive (Tradovate tags + lines)
 function addMarker(baseTime, position_, color, shape, text) { markers.push({ baseTime, position: position_, color, shape, text }); refreshMarkers(); }
 function refreshMarkers() { candle.setMarkers(markers.concat(annotations).map(m => ({ time: mBucket(m.baseTime), position: m.position, color: m.color, shape: m.shape, text: m.text })).sort((a, b) => a.time - b.time)); }
 
