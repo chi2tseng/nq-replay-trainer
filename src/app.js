@@ -1040,7 +1040,24 @@ const ANN = {
 };
 const TOOLBTN = { start: 'btnPickStart', au: 'annUp', ad: 'annDown', long: 'annLong', short: 'annShort', hl: 'drwHL', tl: 'drwTL', ray: 'drwRay', box: 'drwBox', fib: 'drwFib', measure: 'drwMeasure', rr: 'drwRR' };
 function placeAnnotation(t, baseTime) { const a = ANN[t]; if (!a) return; annotations.push({ baseTime, ...a }); saveJSON('rt_annotations', annotations); refreshMarkers(); }
-function clearAnnotations() { annotations = []; saveJSON('rt_annotations', annotations); refreshMarkers(); toast('Markers cleared'); }
+function clearAnnotations() { annotations = []; markers = []; saveJSON('rt_annotations', annotations); refreshMarkers(); toast('Markers cleared'); }   // clears placed arrows AND in-session trade entry/exit arrows
+// click directly on a placed arrow (annotation OR trade marker) to delete just that one — TradingView-style
+function markerXY(m) {
+  const t = mBucket(m.baseTime), x = chart.timeScale().timeToCoordinate(t); if (x == null) return null;
+  let b = null; for (let k = Math.min(idx, bars.length - 1); k >= 0; k--) { if (bars[k].time <= t) { b = bars[k]; break; } }
+  if (!b) b = bars[Math.min(idx, bars.length - 1)]; if (!b) return null;
+  const yEdge = candle.priceToCoordinate(m.position === 'belowBar' ? b.low : b.high); if (yEdge == null) return null;
+  return { x, y: yEdge + (m.position === 'belowBar' ? 14 : -14) };
+}
+function markerAt(px, py) {
+  const all = annotations.map((a, i) => ({ a, i, src: 'ann' })).concat(markers.map((a, i) => ({ a, i, src: 'mk' })));
+  for (let j = all.length - 1; j >= 0; j--) { const p = markerXY(all[j].a); if (p && Math.abs(p.x - px) <= 13 && Math.abs(p.y - py) <= 16) return all[j]; }
+  return null;
+}
+function removeMarker(hit) {
+  if (hit.src === 'ann') { annotations.splice(hit.i, 1); saveJSON('rt_annotations', annotations); } else markers.splice(hit.i, 1);
+  refreshMarkers(); toast('Arrow removed');
+}
 function updateToolUI() { Object.values(TOOLBTN).forEach(id => { const b = $(id); if (b) b.classList.remove('active'); }); const b = $(TOOLBTN[tool]); if (b) b.classList.add('active'); const cur = $('toolCursor'); if (cur) cur.classList.toggle('active', !tool); $('chart').style.cursor = tool ? 'crosshair' : ''; }
 function setTool(t) { tool = (tool === t) ? '' : t; pendingPt = null; repaintOverlays(); updateToolUI(); }
 function draggableLines() { return orderLines().filter(o => o.drag).map(o => o.drag); }   // derived from the rendered order set (entry / stop / targets)
@@ -1153,6 +1170,7 @@ $('chart').addEventListener('mousedown', e => {
   if (e.button !== 0 || tool) return;             // left-button only; while a tool is armed, clicks place points
   const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
   const _ocx = orderCancelAt(x, y); if (_ocx != null) { cancelOrder(_ocx); e.preventDefault(); return; }   // ✕ on an order tag → cancel that order
+  const _mk = markerAt(x, y); if (_mk) { removeMarker(_mk); e.preventDefault(); return; }   // click an arrow marker → delete just that one
   const h = nearestHandle(x, y);                  // 1) drawing anchor (endpoint) — most specific; also selects it
   if (h) { dragH = h; selDrawing = h.d; chart.applyOptions({ handleScroll: false, handleScale: false }); repaintOverlays(); e.preventDefault(); return; }
   const hd = drawingAt(x, y);                     // 2) drawing body — select + move the whole drawing
