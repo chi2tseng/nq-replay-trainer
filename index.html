@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>NQ Replay Trainer</title>
-<link rel="stylesheet" href="src/styles.css?v=54" />
+<link rel="stylesheet" href="src/styles.css?v=55" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,400..600,0..1,0&display=block">
@@ -77,7 +77,8 @@
     </div>
 
     <div class="grp right">
-      <button id="btnAlert" class="tb-btn alert-btn" title="Remind me when the replay reaches a time (ET) — beeps & pauses. Click to set/clear."><span class="material-symbols-outlined">alarm</span><span id="alertLbl"></span></button>
+      <button id="btnHideTradesTop" class="tb-btn hidetrades-btn" title="Show / hide the trade entry &amp; exit arrows on the chart"><span class="material-symbols-outlined">visibility</span></button>
+      <button id="btnAlert" class="tb-btn alert-btn" title="Mark a time on the chart with a vertical line (ET). Click to set / clear."><span class="material-symbols-outlined">alarm</span><span id="alertLbl"></span></button>
       <span id="clock" class="mono">--:--</span>
       <span id="clockPrice" class="mono">--</span>
     </div>
@@ -182,7 +183,7 @@
       <button id="tabTrades" class="tab active ico-btn"><span class="material-symbols-outlined">receipt_long</span>Trades</button>
       <button id="tabDash" class="tab ico-btn"><span class="material-symbols-outlined">dashboard</span>Dashboard</button>
       <span class="spacer"></span>
-      <button id="btnHideTrades" class="mini ico-btn" title="Show / hide the trade entry &amp; exit arrows on the chart"><span class="material-symbols-outlined">visibility</span><span class="htxt">Hide</span></button>
+      <button id="btnHideTrades" class="mini ico-btn hidetrades-btn" title="Show / hide the trade entry &amp; exit arrows on the chart"><span class="material-symbols-outlined">visibility</span><span class="htxt">Hide trades</span></button>
       <button id="btnSaveLog" class="mini ico-btn" title="Save the current trades as a named log"><span class="material-symbols-outlined">save</span>Save log</button>
       <button id="btnLogs" class="mini ico-btn" title="Open saved trade logs"><span class="material-symbols-outlined">folder_open</span>Logs</button>
       <button id="btnExportCsv" class="mini ico-btn"><span class="material-symbols-outlined">download</span>Export CSV</button>
@@ -218,6 +219,6 @@
 </div>
 <div id="dayDetail" class="day-detail"></div>
 <div id="logModal" class="day-detail"></div>
-<script src="src/app.js?v=54"></script>
+<script src="src/app.js?v=55"></script>
 </body>
 </html>

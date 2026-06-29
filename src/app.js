@@ -1439,6 +1439,7 @@ function setChartType(type) {
     candle.attachPrimitive(indicatorPrimitive);
     candle.attachPrimitive(drawingsPrimitive);
     candle.attachPrimitive(orderPrimitive);
+    candle.attachPrimitive(alertLinePrimitive);
   }
 
   // 5) re-apply markers (entries/exits/annotations) and order/position price lines
@@ -1606,18 +1607,37 @@ function alertCheck() {   // call on forward advance: fire once when the reveale
   if (prevAlertMin != null && prevAlertMin < alertMin && cur >= alertMin) fireAlert();
   prevAlertMin = cur;
 }
-function beep() {
-  try {
-    const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return;
-    const ac = new Ctx();
-    [0, 0.18].forEach(dt => { const o = ac.createOscillator(), g = ac.createGain(); o.type = 'sine'; o.frequency.value = 880; o.connect(g); g.connect(ac.destination);
-      const t0 = ac.currentTime + dt; g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.3, t0 + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.15); o.start(t0); o.stop(t0 + 0.17); });
-    setTimeout(() => { try { ac.close(); } catch (e) {} }, 800);
-  } catch (e) {}
+// the alert time is marked by a vertical LINE on the chart (no sound) — drawn at the current session's bar that reaches it
+let alertBarTime = null, alertBarKey = null;
+function updateAlertBar() {   // the bar where the session's clock first CROSSES the target time upward (the session opens 18:00 ET, so a plain >= match hits the evening)
+  const s = sessions[currentSessionIdx()], key = (s ? s.key : '') + ':' + alertMin;
+  if (key === alertBarKey) return;
+  alertBarKey = key; alertBarTime = null;
+  if (alertMin != null && s) for (let i = s.start + 1; i <= s.end; i++) { if (etMinutes(baseBars[i - 1].time) < alertMin && etMinutes(baseBars[i].time) >= alertMin) { alertBarTime = baseBars[i].time; break; } }
+  alertLineRepaint();
 }
-function fireAlert() {
-  pause(); beep();
-  toast(`⏰ ${fmtMin(alertMin)} ET reached — reminder`);
+const ALERT_LINE = '#f0b90b';
+const alertLinePrimitive = {
+  attached(p) { this._req = p.requestUpdate; },
+  updateAllViews() {},
+  paneViews: () => [{ zOrder: () => 'top', renderer: () => ({ draw: (target) => {
+    if (alertMin == null || alertBarTime == null) return;
+    try { target.useMediaCoordinateSpace((scope) => {
+      const ctx = scope.context, ts = chart.timeScale(), H = (scope.mediaSize && scope.mediaSize.height) || 9999;
+      const x = ts.timeToCoordinate(alertBarTime); if (x == null) return;   // null until that bar is revealed
+      ctx.save(); ctx.strokeStyle = ALERT_LINE; ctx.globalAlpha = 0.85; ctx.lineWidth = 1.2; ctx.setLineDash([5, 4]);
+      ctx.beginPath(); ctx.moveTo(x, 16); ctx.lineTo(x, H); ctx.stroke(); ctx.setLineDash([]);
+      ctx.globalAlpha = 1; ctx.font = '700 10px ui-monospace,monospace'; const txt = fmtMin(alertMin), tw = ctx.measureText(txt).width + 8;
+      rrect(ctx, x - tw / 2, 2, tw, 14, 3); ctx.fillStyle = ALERT_LINE; ctx.fill();
+      ctx.fillStyle = '#000'; ctx.textBaseline = 'middle'; ctx.textAlign = 'center'; ctx.fillText(txt, x, 9);
+      ctx.restore();
+    }); } catch (e) { window.__aline = { err: String(e) }; }
+  } }) }],
+};
+if (candle.attachPrimitive) candle.attachPrimitive(alertLinePrimitive);
+function alertLineRepaint() { if (alertLinePrimitive._req) alertLinePrimitive._req(); }
+function fireAlert() {   // crossing the time: a quiet visual nudge (no sound, no pause) — the line is already on the chart
+  toast(`⏰ ${fmtMin(alertMin)} ET`);
   const c = $('clock'); if (c) { c.classList.remove('alert-flash'); void c.offsetWidth; c.classList.add('alert-flash'); setTimeout(() => c.classList.remove('alert-flash'), 1800); }
 }
 function renderAlertLbl() { const b = $('btnAlert'), l = $('alertLbl'); if (!b || !l) return; l.textContent = alertMin == null ? '' : fmtMin(alertMin); b.classList.toggle('on', alertMin != null); }
@@ -1627,8 +1647,8 @@ function setAlertTime() {
   const s = inp.trim();
   if (!s) alertMin = null;
   else { const m = s.match(/^(\d{1,2}):(\d{2})$/); if (!m) return toast('Use HH:MM, e.g. 11:30'); const h = +m[1], mi = +m[2]; if (h > 23 || mi > 59) return toast('Invalid time'); alertMin = h * 60 + mi; }
-  saveJSON('rt_alert_min', alertMin); setAlertBaseline(); renderAlertLbl();
-  toast(alertMin == null ? 'Reminder off' : `Reminder set: ${fmtMin(alertMin)} ET`);
+  saveJSON('rt_alert_min', alertMin); setAlertBaseline(); renderAlertLbl(); alertBarKey = null; updateAlertBar();
+  toast(alertMin == null ? 'Time line off' : `Time line set: ${fmtMin(alertMin)} ET`);
 }
 
 // ===================== Tradovate-style per-day TICK replay =====================
@@ -1932,7 +1952,14 @@ function pl(price, color, style, title) { return candle.createPriceLine({ price,
 function drawLines() { clearLines(); orderRepaint(); }   // order bracket now rendered by orderPrimitive (Tradovate tags + lines)
 function addMarker(baseTime, position_, color, shape, text) { markers.push({ baseTime, position: position_, color, shape, text }); refreshMarkers(); }
 function refreshMarkers() { const ms = (showTrades ? markers : []).concat(annotations); candle.setMarkers(ms.map(m => ({ time: mBucket(m.baseTime), position: m.position, color: m.color, shape: m.shape, text: m.text })).sort((a, b) => a.time - b.time)); }
-function setShowTrades(on) { showTrades = on; saveJSON('rt_show_trades', showTrades); refreshMarkers(); const b = $('btnHideTrades'); if (b) { b.classList.toggle('off', !on); b.querySelector('.material-symbols-outlined').textContent = on ? 'visibility' : 'visibility_off'; const t = b.querySelector('.htxt'); if (t) t.textContent = on ? 'Hide' : 'Show'; } }
+function setShowTrades(on) {
+  showTrades = on; saveJSON('rt_show_trades', showTrades); refreshMarkers();
+  document.querySelectorAll('.hidetrades-btn').forEach(b => {   // sync every hide-trades button (top toolbar + trades panel)
+    b.classList.toggle('off', !on);
+    const ic = b.querySelector('.material-symbols-outlined'); if (ic) ic.textContent = on ? 'visibility' : 'visibility_off';
+    const t = b.querySelector('.htxt'); if (t) t.textContent = on ? 'Hide trades' : 'Show trades';
+  });
+}
 
 // ---------- rendering ----------
 function renderAll() { renderLive(); renderTrades(); renderDash(); }
@@ -1940,6 +1967,7 @@ function renderLive() {
   $('clock').textContent = baseBars.length ? tFmt(curBaseT()) : '--:--';
   $('clockPrice').textContent = baseBars.length ? f2(curPx()) : '--';
   maybeUpdateVP();   // recompute the prior-day volume profile when the trading day changes
+  updateAlertBar();  // keep the alert-time vertical line anchored to the current session
   if (!playing) $('startSlider').value = baseIdx;
 
   const box = $('posBox');
@@ -2496,7 +2524,9 @@ function wire() {
   $('btnLogs').onclick = openLogs;
   $('btnExportCsv').onclick = exportCsv;
   $('btnReset').onclick = resetAll;
-  $('btnHideTrades').onclick = () => setShowTrades(!showTrades); setShowTrades(showTrades);
+  $('btnHideTrades').onclick = () => setShowTrades(!showTrades);
+  $('btnHideTradesTop').onclick = () => setShowTrades(!showTrades);
+  setShowTrades(showTrades);
   $('tradesTable').addEventListener('click', (e) => { const b = e.target.closest('.trade-del'); if (b) deleteTrade(+b.dataset.ti); });
 
   document.addEventListener('keydown', (e) => {

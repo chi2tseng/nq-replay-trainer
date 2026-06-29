@@ -284,7 +284,7 @@ button.active:hover:not(:disabled){background:var(--brand-hi);border-color:var(-
 }
 
 .mini{padding:4px 10px;font-size:12px}
-#btnHideTrades.off{color:var(--dim);opacity:.7}
+.hidetrades-btn.off{color:var(--dim);opacity:.7}
 .mini.danger{
   background:transparent;border-color:#5a2a33;color:var(--red);
 }
