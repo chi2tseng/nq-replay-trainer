@@ -64,6 +64,7 @@ let position = null;         // {side,qty,entry,entryTime,atm,slTicks,maxFav,beD
 let orders = [];             // working: {type:'stop'|'target', price, qty, ticks?}
 let entryOrder = null;       // pending entry: {side, kind:'limit'|'stop', price, atm, mult}
 let trades = loadJSON('rt_trades', []);
+let showTrades = loadJSON('rt_show_trades', true);   // show entry/exit trade arrows on the chart
 let tradeLogs = loadJSON('rt_trade_logs', []);   // named saved trade logs: [{id,name,ts,trades:[...]}]
 let alertMin = loadJSON('rt_alert_min', 690);    // remind me when the replay crosses this ET time (minutes since midnight; 690 = 11:30). null = off
 let prevAlertMin = null;                          // previous revealed bar's ET minutes — used to detect the upward cross
@@ -1930,7 +1931,8 @@ function clearLines() { lines.forEach(l => candle.removePriceLine(l)); lines = [
 function pl(price, color, style, title) { return candle.createPriceLine({ price, color, lineWidth: 1, lineStyle: style, axisLabelVisible: true, title }); }
 function drawLines() { clearLines(); orderRepaint(); }   // order bracket now rendered by orderPrimitive (Tradovate tags + lines)
 function addMarker(baseTime, position_, color, shape, text) { markers.push({ baseTime, position: position_, color, shape, text }); refreshMarkers(); }
-function refreshMarkers() { candle.setMarkers(markers.concat(annotations).map(m => ({ time: mBucket(m.baseTime), position: m.position, color: m.color, shape: m.shape, text: m.text })).sort((a, b) => a.time - b.time)); }
+function refreshMarkers() { const ms = (showTrades ? markers : []).concat(annotations); candle.setMarkers(ms.map(m => ({ time: mBucket(m.baseTime), position: m.position, color: m.color, shape: m.shape, text: m.text })).sort((a, b) => a.time - b.time)); }
+function setShowTrades(on) { showTrades = on; saveJSON('rt_show_trades', showTrades); refreshMarkers(); const b = $('btnHideTrades'); if (b) { b.classList.toggle('off', !on); b.querySelector('.material-symbols-outlined').textContent = on ? 'visibility' : 'visibility_off'; const t = b.querySelector('.htxt'); if (t) t.textContent = on ? 'Hide' : 'Show'; } }
 
 // ---------- rendering ----------
 function renderAll() { renderLive(); renderTrades(); renderDash(); }
@@ -2494,6 +2496,7 @@ function wire() {
   $('btnLogs').onclick = openLogs;
   $('btnExportCsv').onclick = exportCsv;
   $('btnReset').onclick = resetAll;
+  $('btnHideTrades').onclick = () => setShowTrades(!showTrades); setShowTrades(showTrades);
   $('tradesTable').addEventListener('click', (e) => { const b = e.target.closest('.trade-del'); if (b) deleteTrade(+b.dataset.ti); });
 
   document.addEventListener('keydown', (e) => {
