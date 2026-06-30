@@ -3,6 +3,7 @@ data/duka/
 data/duka_test/
 
 node_modules/
+__pycache__/
 *.log
 *.output
 .DS_Store

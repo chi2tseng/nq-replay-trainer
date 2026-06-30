@@ -2320,8 +2320,8 @@ function tradeBars(t) {   // the journal candle snapshot for a trade — stored 
   if (t.chart && t.chart.length) return t.chart;
   const lb = liveTradeBars(t); return lb && lb.length ? lb : [];
 }
-function tradeTrend(t) {   // price-action / 走勢 stats from the captured window: excursion + trend before entry + follow-through after exit (ticks)
-  const bars = tradeBars(t); if (!bars.length) return { mfe: '', mae: '', post: '', pre: '', hi: '', lo: '' };
+function tradeTrend(t, _bars) {   // price-action / 走勢 stats from the export window: excursion + trend before entry + follow-through after exit (ticks)
+  const bars = (_bars && _bars.length) ? _bars : tradeBars(t); if (!bars.length) return { mfe: '', mae: '', post: '', pre: '', hi: '', lo: '' };
   const tick = (t.sym === INSTR.symbol ? INSTR.tickSize : (INSTR.tickSize || 0.25)) || 0.25, long = t.side === 'long';
   const span = bars.length > 1 ? (bars[1].t - bars[0].t) : Math.max(1, Math.round((t.tf != null ? t.tf : BASE_TF) * 60));
   const eb = Math.floor(t.entryTime / span) * span, xb = Math.floor(t.exitTime / span) * span;
@@ -2351,21 +2351,40 @@ function tradeLevels(t) {   // planned stop + take-profit price/distance — sto
   };
 }
 function dlCsv(name, text) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = name; a.click(); }
-function exportCsv() {   // ONE file, two sections: [TRADES] summary (+stop/TP +price-trend cols) then [BARS] per-trade candles incl. the 5 after exit
+const EXPORT_PAD_BARS = 80;   // K-bars kept BEFORE the entry and AFTER the exit in the CSV export window
+function exportBars(t, pad) {   // reconstruct `pad` candles before entry + the in-trade candles + `pad` candles after exit, at the trade's own timeframe, from the full dataset
+  pad = pad || EXPORT_PAD_BARS;
+  const sameSym = !t.sym || t.sym === INSTR.symbol;
+  if (!(baseBars.length && sameSym && t.entryTime >= baseBars[0].time && t.exitTime <= baseBars[baseBars.length - 1].time))
+    return tradeBars(t);   // trade isn't covered by the loaded dataset -> fall back to the stored snapshot
+  const tfSec = Math.max(1, Math.round((t.tf != null ? t.tf : BASE_TF) * 60));
+  const cand = []; let cur = null;                       // bucket the whole dataset to the trade's timeframe
+  for (let i = 0; i < baseBars.length; i++) {
+    const b = baseBars[i], bk = Math.floor(b.time / tfSec) * tfSec;
+    if (!cur || cur.t !== bk) { cur = { t: bk, o: b.open, h: b.high, l: b.low, c: b.close }; cand.push(cur); }
+    else { cur.h = Math.max(cur.h, b.high); cur.l = Math.min(cur.l, b.low); cur.c = b.close; }
+  }
+  const eBk = Math.floor(t.entryTime / tfSec) * tfSec, xBk = Math.floor(t.exitTime / tfSec) * tfSec;
+  let ei = cand.findIndex(c => c.t >= eBk); if (ei < 0) ei = 0;
+  let xi = cand.findIndex(c => c.t >= xBk); if (xi < 0) xi = cand.length - 1;
+  return cand.slice(Math.max(0, ei - pad), Math.min(cand.length - 1, xi + pad) + 1);   // `pad` bars each side of the trade
+}
+function exportCsv() {   // ONE file, two sections: [TRADES] summary (+stop/TP +price-trend cols) then [BARS] per-trade candles (80 before entry + 80 after exit)
   if (!trades.length) return toast('No trades to export');
-  // section 1 — trade summary (stop/take-profit levels + price-trend / 走勢 columns)
+  const xbars = trades.map(t => exportBars(t));   // 80-before-entry … 80-after-exit window per trade, reconstructed from the dataset
+  // section 1 — trade summary (stop/take-profit levels + price-trend / 走勢 columns over the export window)
   const head = 'idx,side,qty,entryTime,exitTime,entry,exit,stopPrice,stopTicks,tpPrice,tpTicks,ticks,pnl,R,atm,exitType,tf,sym,bars,mfeTicks,maeTicks,preTrendTicks,postExitTicks,windowHigh,windowLow';
-  const rows = trades.map((t, i) => { const tr = tradeTrend(t), lv = tradeLevels(t); return [i + 1, t.side, t.qty, tFmt(t.entryTime), tFmt(t.exitTime), t.entry, t.exit, lv.stopPrice, lv.stopTicks, lv.tpPrice, lv.tpTicks, t.ticks, t.pnl, t.R == null ? '' : t.R.toFixed(3), t.atm, t.exitType, t.tf != null ? t.tf : '', t.sym || INSTR.symbol, tradeBars(t).length, tr.mfe, tr.mae, tr.pre, tr.post, tr.hi, tr.lo].join(','); });
-  // section 2 — per-trade chart bars (long format), reconstructed candles; seg = before|in|after
+  const rows = trades.map((t, i) => { const tr = tradeTrend(t, xbars[i]), lv = tradeLevels(t); return [i + 1, t.side, t.qty, tFmt(t.entryTime), tFmt(t.exitTime), t.entry, t.exit, lv.stopPrice, lv.stopTicks, lv.tpPrice, lv.tpTicks, t.ticks, t.pnl, t.R == null ? '' : t.R.toFixed(3), t.atm, t.exitType, t.tf != null ? t.tf : '', t.sym || INSTR.symbol, xbars[i].length, tr.mfe, tr.mae, tr.pre, tr.post, tr.hi, tr.lo].join(','); });
+  // section 2 — per-trade chart bars (long format): 80 before entry + in-trade + 80 after exit; seg = before|in|after
   const bhead = 'trade_idx,seg,bar_epoch,bar_time,open,high,low,close';
   const brows = [];
   trades.forEach((t, i) => {
-    const bars = tradeBars(t); if (!bars.length) return;
+    const bars = xbars[i]; if (!bars.length) return;
     const span = bars.length > 1 ? (bars[1].t - bars[0].t) : Math.max(1, Math.round((t.tf != null ? t.tf : BASE_TF) * 60));
     const eb = Math.floor(t.entryTime / span) * span, xb = Math.floor(t.exitTime / span) * span;
     bars.forEach(b => { const seg = b.t < eb ? 'before' : (b.t > xb ? 'after' : 'in'); brows.push([i + 1, seg, b.t, tFmt(b.t), b.o, b.h, b.l, b.c].join(',')); });
   });
-  const out = ['# TRADES', head, ...rows, '', '# BARS (per-trade candles · seg=before|in|after · incl. 5 bars after exit)', bhead, ...brows].join('\n');
+  const out = ['# TRADES', head, ...rows, '', '# BARS (per-trade candles · seg=before|in|after · 80 bars before entry + 80 bars after exit)', bhead, ...brows].join('\n');
   dlCsv('replay_trades.csv', out);
   toast(`Exported ${trades.length} trades + ${brows.length} bars (1 file)`);
 }
