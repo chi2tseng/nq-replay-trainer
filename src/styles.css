@@ -737,3 +737,12 @@ button.bs-stop.sell:hover:not(:disabled){ background:#33262a; border-color:var(-
 .cal-day.has:hover{ background:var(--panel2); border-color:var(--line); }
 .cal-day.sel{ background:var(--brand); color:var(--on-brand); font-weight:700; border-color:var(--brand); }
 .cal-day:disabled{ color:#3a3f4a; cursor:default; background:transparent; border-color:transparent; }
+/* ---- data loading overlay (shown while a dataset is fetched + parsed) ---- */
+#loadingOverlay{ position:fixed; inset:0; z-index:9999; display:none; align-items:center; justify-content:center;
+  background:rgba(19,23,34,.72); backdrop-filter:blur(2px); }
+#loadingOverlay .ld-box{ display:flex; align-items:center; gap:12px; padding:16px 22px; border-radius:10px;
+  background:var(--panel); border:1px solid var(--line); box-shadow:0 8px 30px rgba(0,0,0,.45); }
+#loadingOverlay .ld-txt{ color:var(--txt); font-size:14px; font-weight:600; letter-spacing:.2px; }
+#loadingOverlay .ld-spin{ width:20px; height:20px; border-radius:50%; border:2.5px solid var(--panel2);
+  border-top-color:#f0b90b; animation:ld-spin .7s linear infinite; }
+@keyframes ld-spin{ to{ transform:rotate(360deg); } }

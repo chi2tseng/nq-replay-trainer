@@ -1464,13 +1464,25 @@ async function init() { buildDataSelect(); initLayout(); await loadDataset(DATAS
 function detectBaseTf(b) { let mn = Infinity; for (let i = 1; i < Math.min(b.length, 800); i++) { const dl = b[i].time - b[i - 1].time; if (dl > 0 && dl < mn) mn = dl; } return mn === Infinity ? 1 : Math.max(1 / 60, mn / 60); }  // floor 1s so 15s/30s bases detect correctly
 function buildTfOptions() { const bs = Math.round(BASE_TF * 60); TF_OPTIONS = [BASE_TF, ...STD_TF.filter(m => m > BASE_TF && Math.round(m * 60) % bs === 0)]; }   // only clean multiples of the base (so 20s never shows on a 15s base, etc.)
 
+function showLoading(on, msg) {
+  let el = document.getElementById('loadingOverlay');
+  if (on) {
+    if (!el) { el = document.createElement('div'); el.id = 'loadingOverlay'; el.innerHTML = '<div class="ld-box"><div class="ld-spin"></div><span class="ld-txt"></span></div>'; document.body.appendChild(el); }
+    el.querySelector('.ld-txt').textContent = msg || 'Loading…'; el.style.display = 'flex';
+  } else if (el) { el.style.display = 'none'; }
+}
+
 async function loadDataset(ds) {
   if (ds && ds.tick) return enterTickMode(ds);          // Tradovate-style per-day tick replay
   tickMode = false; setSpeedOptions(false);
   const url = typeof ds === 'string' ? ds : ds.url;   // tolerate a bare url too
   let data;
-  try { const r = await fetch(url + (url.includes('?') ? '&' : '?') + 'v=' + Date.now()); if (!r.ok) throw 0; data = await r.json(); } // cache-bust so regenerated data files always load fresh
-  catch (e) { toast('This dataset is not ready yet'); return false; }
+  showLoading(true, 'Loading market data…');
+  // Cache-bust once per DAY, not per load: reloads within the same day hit the browser/CDN
+  // cache (no re-download of ~5.6 MB, no re-parse of 360k bars); the daily data refresh is
+  // still picked up the next day. Date.now() here defeated caching entirely on every load.
+  try { const r = await fetch(url + (url.includes('?') ? '&' : '?') + 'v=' + new Date().toISOString().slice(0, 10)); if (!r.ok) throw 0; data = await r.json(); }
+  catch (e) { showLoading(false); toast('This dataset is not ready yet'); return false; }
   pause(); position = null; entryOrder = null; orders = []; markers = []; tool = ''; pendingPt = null;
   if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; }   // switch active contract spec (tick grid + $/tick + symbol)
   if ($('symbol')) $('symbol').textContent = INSTR.symbol;
@@ -1492,6 +1504,7 @@ async function loadDataset(ds) {
   requestAnimationFrame(sizeChart); setTimeout(sizeChart, 300); setTimeout(sizeChart, 1200);
   if (!wired) { wire(); wired = true; }
   renderAll();
+  showLoading(false);
   return true;
 }
 
