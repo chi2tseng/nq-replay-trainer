@@ -803,7 +803,7 @@ const VP_FILL = 'rgba(38,166,154,0.16)', VP_FILL_VA = 'rgba(38,166,154,0.42)', V
 const VPT_FILL = 'rgba(240,185,11,0.12)', VPT_FILL_VA = 'rgba(240,185,11,0.34)', VPT_POC = '#f0b90b', VPT_VA = '#f0b90b';
 const VP_BINS = 80;
 function buildProfile(idxs) {   // volume-by-price over the given base-bar indices → bins + POC + 70% value area
-  if (idxs.length < 2) return null;
+  if (!idxs.length) return null;   // a single bar is enough (hi>lo guard below) — today's profile shows from the very first RTH bar
   let lo = Infinity, hi = -Infinity;
   for (const i of idxs) { const b = baseBars[i]; if (b.low < lo) lo = b.low; if (b.high > hi) hi = b.high; }
   if (!(hi > lo)) return null;
@@ -867,7 +867,7 @@ function drawVPProfile(ctx, ts, paneW, prof, col, dashed, labelLeft) {   // hist
   drawLine(prof.poc, col.poc, 1.6, col.tag + 'POC');
 }
 const vpPrimitive = {
-  attached(p) { this._req = p.requestUpdate; },
+  attached(p) { this._req = () => p.requestUpdate(); },   // wrap: keep p as receiver so the repaint request can't lose its binding
   updateAllViews() {},
   paneViews: () => [{ zOrder: () => 'bottom', renderer: () => ({ draw: (target) => {
     if ((!vpOn || !vpData) && (!vpTodayOn || !vpTodayData)) return;
