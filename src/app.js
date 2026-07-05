@@ -1650,7 +1650,7 @@ const alertLinePrimitive = {
 if (candle.attachPrimitive) candle.attachPrimitive(alertLinePrimitive);
 function alertLineRepaint() { if (alertLinePrimitive._req) alertLinePrimitive._req(); }
 function fireAlert() {   // crossing the time: a quiet visual nudge (no sound, no pause) — the line is already on the chart
-  toast(`⏰ ${fmtMin(alertMin)} ET`);
+  toast(`Time alert · ${fmtMin(alertMin)} ET`);
   const c = $('clock'); if (c) { c.classList.remove('alert-flash'); void c.offsetWidth; c.classList.add('alert-flash'); setTimeout(() => c.classList.remove('alert-flash'), 1800); }
 }
 function renderAlertLbl() { const b = $('btnAlert'), l = $('alertLbl'); if (!b || !l) return; l.textContent = alertMin == null ? '' : fmtMin(alertMin); b.classList.toggle('on', alertMin != null); }
@@ -2510,6 +2510,7 @@ function wire() {
   // Indicators dropdown (top toolbar) + oscillator pane close button
   $('btnIndicators').onclick = (e) => { e.stopPropagation(); $('indPopover').classList.toggle('open'); $('btnIndicators').classList.toggle('active'); };
   document.addEventListener('mousedown', (e) => { const p = $('indPopover'), b = $('btnIndicators'); if (p && p.classList.contains('open') && !p.contains(e.target) && !b.contains(e.target)) { p.classList.remove('open'); b.classList.remove('active'); } });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { const p = $('indPopover'), b = $('btnIndicators'); if (p && p.classList.contains('open')) { p.classList.remove('open'); if (b) b.classList.remove('active'); } } });
   $('oscClose').onclick = () => { setOscMode('off'); const s = $('oscSelect'); if (s) s.value = 'off'; };
 
   $('entryType').onchange = () => { $('entryPriceRow').style.display = $('entryType').value === 'market' ? 'none' : ''; if ($('entryType').value !== 'market' && !$('entryPrice').value) $('entryPrice').value = f2(curPx()); renderRiskReadout(); };

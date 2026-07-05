@@ -12,7 +12,7 @@
   --hover:#2a2e39;       /* hover surface                */
   /* text */
   --txt:#d1d4dc;         /* body text                    */
-  --dim:#787b86;         /* muted / labels               */
+  --dim:#9aa0ad;         /* muted / labels — ≥4.5:1 on every surface (was #787b86 @3.2:1) */
   /* brand + semantic — TV blue accent */
   --brand:#2962ff;       /* TradingView blue (primary)   */
   --brand-hi:#1e53e5;    /* blue pressed/active          */
@@ -60,6 +60,7 @@ select,input{
 }
 select:hover,input:hover{border-color:#363a45}
 select:focus,input:focus{outline:none;border-color:var(--brand);background:#2a2e39}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
 input[type=number]{width:72px}
 input[type=checkbox]{
   accent-color:var(--brand);
@@ -316,7 +317,7 @@ td.pos{color:var(--green)}
 td.neg{color:var(--red)}
 .long-tag{color:var(--green);font-weight:700}
 .short-tag{color:var(--red);font-weight:700}
-.trade-del{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:none;border-radius:5px;background:transparent;color:var(--dim);cursor:pointer;opacity:.55}
+.trade-del{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;padding:0;border:none;border-radius:5px;background:transparent;color:var(--dim);cursor:pointer;opacity:.55}
 .trade-del:hover{background:rgba(239,83,80,.16);color:var(--red);opacity:1}
 .trade-del .material-symbols-outlined{font-size:16px}
 
@@ -660,7 +661,7 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 /* ===================== Oscillator pane close button ===================== */
 #oscClose.osc-x{
   display:inline-flex; align-items:center; justify-content:center;
-  width:22px; height:22px; padding:0; line-height:1;
+  width:26px; height:26px; padding:0; line-height:1;
   background:#1e222dcc; border:1px solid var(--line); border-radius:5px; color:var(--dim);
 }
 #oscClose.osc-x:hover{ background:#2a1418; border-color:#7a3640; color:var(--red); }
@@ -714,7 +715,7 @@ button.bs-stop.sell:hover:not(:disabled){ background:#33262a; border-color:var(-
 /* working-order rows get a cancel × */
 .ord{ gap:6px; }
 .ord-r{ display:flex; align-items:center; gap:6px; }
-.ord-x{ display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; padding:0; background:transparent; border:1px solid transparent; border-radius:4px; color:var(--dim); flex:none; }
+.ord-x{ display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; padding:0; background:transparent; border:1px solid transparent; border-radius:4px; color:var(--dim); flex:none; }
 .ord-x:hover{ background:#2a1418; border-color:#7a3640; color:var(--red); }
 .ord-x .material-symbols-outlined{ font-size:15px; }
 
@@ -731,12 +732,12 @@ button.bs-stop.sell:hover:not(:disabled){ background:#33262a; border-color:var(-
 .cal-nav .material-symbols-outlined{ font-size:18px; }
 .cal-wdrow,.cal-grid{ display:grid; grid-template-columns:repeat(7,1fr); gap:2px; }
 .cal-wd{ text-align:center; font-size:10px; color:var(--dim); padding:2px 0; }
-.cal-day{ height:28px; padding:0; display:inline-flex; align-items:center; justify-content:center; font-size:12px; border:1px solid transparent; border-radius:6px; background:transparent; color:#3a3f4a; cursor:default; font-family:inherit; }
+.cal-day{ height:28px; padding:0; display:inline-flex; align-items:center; justify-content:center; font-size:12px; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--dim); opacity:.55; cursor:default; font-family:inherit; }
 .cal-day.empty{ visibility:hidden; }
-.cal-day.has{ color:var(--txt); cursor:pointer; }
+.cal-day.has{ color:var(--txt); cursor:pointer; opacity:1; }
 .cal-day.has:hover{ background:var(--panel2); border-color:var(--line); }
 .cal-day.sel{ background:var(--brand); color:var(--on-brand); font-weight:700; border-color:var(--brand); }
-.cal-day:disabled{ color:#3a3f4a; cursor:default; background:transparent; border-color:transparent; }
+.cal-day:disabled{ color:var(--dim); cursor:default; background:transparent; border-color:transparent; }
 /* ---- data loading overlay (shown while a dataset is fetched + parsed) ---- */
 #loadingOverlay{ position:fixed; inset:0; z-index:9999; display:none; align-items:center; justify-content:center;
   background:rgba(19,23,34,.72); backdrop-filter:blur(2px); }
