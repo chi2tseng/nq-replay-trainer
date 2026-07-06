@@ -40,12 +40,13 @@ const tradingDayKey = (ts) => etFmt.format(new Date((ts + 6 * 3600) * 1000)); //
 function etMinutes(ts) { const p = etHM.formatToParts(new Date(ts * 1000)); let h = 0, m = 0; for (const x of p) { if (x.type === 'hour') h = +x.value; else if (x.type === 'minute') m = +x.value; } return h * 60 + m; } // minutes since midnight ET (DST-correct)
 // ET formatters for the LWC time axis (tick labels) + crosshair label — timestamps are UTC epoch s
 const _TM = (window.LightweightCharts && LightweightCharts.TickMarkType) || { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 };
-function etTickFmt(ts, type) { const o = etP(ts); if (type === _TM.Year || type === _TM.Month || type === _TM.DayOfMonth) return `${o.month}/${o.day}`; if (type === _TM.TimeWithSeconds) return `${o.hour}:${o.minute}:${o.second}`; return `${o.hour}:${o.minute}`; }
-const etCrosshairFmt = (ts) => { const o = etP(ts); return `${o.month}/${o.day} ${o.hour}:${o.minute} ET`; };
+function etTickFmt(ts, type) { const o = etP(ts); if (type === _TM.Year || type === _TM.Month || type === _TM.DayOfMonth) return rndMode ? '·' : `${o.month}/${o.day}`; if (type === _TM.TimeWithSeconds) return `${o.hour}:${o.minute}:${o.second}`; return `${o.hour}:${o.minute}`; }   // random mode hides date-level labels (blind practice)
+const etCrosshairFmt = (ts) => { const o = etP(ts); return rndMode ? `${o.hour}:${o.minute} ET` : `${o.month}/${o.day} ${o.hour}:${o.minute} ET`; };
 const loadJSON = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const saveJSON = (k, v) => localStorage.setItem(k, JSON.stringify(v));
 
 // ---------- state ----------
+let rndMode = false, rndCurKey = null, rndStartCount = 0, rndRounds = [], rndPrevMin = null, rndSettled = false;   // random-date practice mode
 let baseBars = [];           // raw 1-min bars
 let bars = [];               // current-timeframe bars (each carries subStart/subEnd into baseBars)
 let tf = 1;                  // timeframe in minutes
@@ -1584,7 +1585,7 @@ function maybeReWindow() {                            // trim once the series ha
   feedWindow(true); refreshMarkers(); oscHardReveal();
   return true;
 }
-function hardReveal() { feedWindow(false); refreshMarkers(); drawLines(); renderLegend(null); oscHardReveal(); resetForming(); setAlertBaseline(); }
+function hardReveal() { feedWindow(false); refreshMarkers(); drawLines(); renderLegend(null); oscHardReveal(); resetForming(); setAlertBaseline(); rndPrevMin = null; }   // rndPrevMin reset: a jump must re-seed the settle-crossing baseline
 function stepFwd() {
   if (idx >= bars.length - 1) { pause(); return; }
   idx++;
@@ -1593,7 +1594,7 @@ function stepFwd() {
   for (let i = bars[idx].subStart; i <= bars[idx].subEnd; i++) { processSub(baseBars[i]); }
   baseIdx = bars[idx].subEnd;
   resetForming();
-  renderLive(); renderLegend(null); alertCheck();
+  renderLive(); renderLegend(null); alertCheck(); settleCheck();
 }
 function stepBack() {
   if (locked()) return toast("Can't step back while in a position / working order");
@@ -1734,7 +1735,7 @@ function playFrame() {   // steady display-bars/sec reveal; each base sub-bar = 
     if (playBudget < cost) break;
     playBudget -= cost; baseIdx++; revealTick(baseIdx); if (++n > 500000) break;
   }
-  if (n) { maybeReWindow(); commitForming(); renderLive(); renderLegend(null); alertCheck(); }
+  if (n) { maybeReWindow(); commitForming(); renderLive(); renderLegend(null); alertCheck(); settleCheck(); }
   if (baseIdx >= baseBars.length - 1) pause();
 }
 function baseMs(i) { return tickMode ? tickMs[i] : baseBars[i].time * 1000; }   // absolute ms of base bar i (tick OR normal sub-bar)
@@ -1743,7 +1744,7 @@ function playRtFrame() {   // Realtime: advance a sim clock at mult × real mark
   simMs += mult * TICK_FRAME_MS;
   let n = 0;
   while (baseIdx < baseBars.length - 1 && baseMs(baseIdx + 1) <= simMs) { baseIdx++; revealTick(baseIdx); if (++n > 500000) break; }
-  if (n) { maybeReWindow(); commitForming(); renderLive(); renderLegend(null); alertCheck(); }
+  if (n) { maybeReWindow(); commitForming(); renderLive(); renderLegend(null); alertCheck(); settleCheck(); }
   if (baseIdx >= baseBars.length - 1) pause();
 }
 function rthOpenIdx(s) { for (let i = s.start; i <= s.end; i++) { const m = etMinutes(baseBars[i].time); if (m >= 570 && m < 960) return i; } return s.start; }  // first bar in 09:30–15:59 ET = US cash open (skips the 18:00 ET Globex open)
@@ -1784,6 +1785,97 @@ function setTf(m) {
 function curPx() { return baseBars[baseIdx].close; }
 function curBaseT() { return baseBars[baseIdx].time; }
 function locked() { return !!position || !!entryOrder; }
+
+// ---------- Random-date practice mode: blind random day → trade → auto-settle at 16:00 ET → settlement dashboard ----------
+function rndEligible() {   // full trading days only: a real RTH open AND data through the 16:00 settle
+  const out = [];
+  for (let i = 0; i < sessions.length; i++) {
+    const s = sessions[i], om = etMinutes(baseBars[rthOpenIdx(s)].time);
+    if (om < 570 || om >= 960) continue;                        // holiday / evening-only stub: no real 09:30 open
+    const em = etMinutes(baseBars[s.end].time);
+    if (em >= 570 && em < 960) continue;                        // data ends mid-RTH → can't reach the settle
+    out.push(i);
+  }
+  return out;
+}
+function rndJump() {   // pick a random eligible day (≠ the one just played) and open it at 09:30 ET
+  const el = rndEligible().filter(i => sessions[i].key !== rndCurKey);
+  if (!el.length) { toast('Not enough full days in this dataset'); return false; }
+  const i = el[Math.floor(Math.random() * el.length)], s = sessions[i];
+  rndCurKey = s.key; rndStartCount = trades.length; rndSettled = false;
+  pause(); baseIdx = rthOpenIdx(s); syncIdxFromBase(); hardReveal(); fitRecent(150); renderAll();
+  const sel = $('sessionSelect'); if (sel) sel.value = String(i);
+  return true;
+}
+function setRndUi(on) {   // blind the date + freeze day-jump controls while a round is live
+  ['dateBtn', 'btnPrevDay', 'btnNextDay', 'btnPickStart'].forEach(id => { const b = $(id); if (b) b.disabled = on; });
+  const sl = $('startSlider'); if (sl) sl.disabled = on;
+  const b = $('btnRandom'); if (b) b.classList.toggle('active', on);
+  try { chart.timeScale().applyOptions({}); } catch (e) {}      // refresh axis labels under the new formatter mode
+  renderAll();
+}
+function enterRnd() {
+  if (rndMode) {   // toggle: reopen the settlement screen if one is pending, else exit
+    if (rndSettled && $('settleModal') && !$('settleModal').classList.contains('open')) return openSettle();
+    if (!confirm('Exit random date mode?')) return;
+    return exitRnd();
+  }
+  if (locked()) return toast('Flatten & cancel orders before random mode');
+  rndMode = true; rndRounds = [];
+  if (!rndJump()) { rndMode = false; return; }
+  setRndUi(true);
+  toast('Random day — trade it; settles at 16:00 ET');
+}
+function exitRnd() { rndMode = false; rndCurKey = null; closeSettle(); setRndUi(false); }
+function rndRoundStats() {
+  const ts = trades.slice(rndStartCount);
+  const net = ts.reduce((s, t) => s + t.pnl, 0), w = ts.filter(t => t.pnl > 0).length, l = ts.filter(t => t.pnl < 0).length;
+  const rs = ts.filter(t => t.R != null);
+  return { key: rndCurKey, ts, net, w, l, n: ts.length, ticks: ts.reduce((s, t) => s + t.ticks, 0),
+    avgR: rs.length ? rs.reduce((s, t) => s + t.R, 0) / rs.length : null,
+    best: ts.length ? Math.max(...ts.map(t => t.pnl)) : 0, worst: ts.length ? Math.min(...ts.map(t => t.pnl)) : 0 };
+}
+function settleCheck() {   // on forward advance: settle once when the round's day crosses 16:00 ET (or data runs out)
+  if (!rndMode || rndSettled) return;
+  const si = currentSessionIdx(); if (si < 0 || sessions[si].key !== rndCurKey) return;
+  const cur = etMinutes(curBaseT());
+  if ((rndPrevMin != null && rndPrevMin < 960 && cur >= 960) || baseIdx >= sessions[si].end) { settleRound(); return; }
+  rndPrevMin = cur;
+}
+function settleRound() {
+  rndSettled = true; pause();
+  if (position) flatten(); else if (entryOrder) cancelEntry();  // daily settlement: everything flat at 16:00
+  rndRounds.push(rndRoundStats());
+  openSettle();
+}
+function openSettle() {   // settlement dashboard: this day's stats + running totals + per-trade charts
+  const el = $('settleModal'); if (!el) return;
+  const r = rndRounds[rndRounds.length - 1]; if (!r) return;
+  const tot = rndRounds.reduce((s, x) => s + x.net, 0), totN = rndRounds.reduce((s, x) => s + x.n, 0);
+  const cell = (k, v, cls) => `<div class="st-cell"><div class="st-k">${k}</div><div class="st-v ${cls || ''}">${v}</div></div>`;
+  el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">Settled · ${r.key}</span> &nbsp;<b class="${r.net >= 0 ? 'pos' : 'neg'}">${usd(r.net)}</b> · ${r.n} trade${r.n === 1 ? '' : 's'}</div>`
+    + `<button class="dd-x" id="stClose" title="Close — stay on this day"><span class="material-symbols-outlined">close</span></button></div>`
+    + `<div class="st-grid">`
+    + cell('Net P&L', usd(r.net), r.net >= 0 ? 'pos' : 'neg')
+    + cell('Trades · W-L', `${r.n} · ${r.w}W ${r.l}L`)
+    + cell('Win rate', r.n ? Math.round(100 * r.w / r.n) + '%' : '–')
+    + cell('Ticks', (r.ticks >= 0 ? '+' : '') + r.ticks)
+    + cell('Avg R', r.avgR == null ? '–' : (r.avgR >= 0 ? '+' : '') + r.avgR.toFixed(2))
+    + cell('Best / Worst', `${usd(r.best)} · ${usd(r.worst)}`)
+    + `</div>`
+    + `<div class="st-run">Run so far: ${rndRounds.length} day${rndRounds.length === 1 ? '' : 's'} · ${totN} trades · <b class="${tot >= 0 ? 'pos' : 'neg'}">${usd(tot)}</b></div>`
+    + (r.ts.length ? `<div class="dd-list">` + r.ts.map((t, i) => { const long = t.side === 'long';
+        return `<div class="dd-trade"><div class="dd-tinfo"><div class="dd-trow">#${i + 1} <span class="${long ? 'long-tag' : 'short-tag'}">${long ? 'LONG' : 'SHORT'} ${t.qty}</span> <b class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</b> · ${t.ticks >= 0 ? '+' : ''}${t.ticks}t · ${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + 'R'}</div>`
+          + `<div class="dd-sub">${tFmt(t.entryTime)} → ${tFmt(t.exitTime)} · ${f2(t.entry)} → ${f2(t.exit)} · ${t.atm} · ${t.exitType}</div></div>`
+          + `<canvas class="dd-chart" data-ti="${i}" title="Scroll to zoom · drag to pan · double-click to reset"></canvas></div>`; }).join('') + `</div>` : `<div class="st-run">No trades this day.</div>`)
+    + `<div class="st-actions"><button id="stNext" class="primary"><span class="material-symbols-outlined">shuffle</span>Next random day</button><button id="stExit">Exit random mode</button></div></div>`;
+  el.classList.add('open');
+  requestAnimationFrame(() => el.querySelectorAll('.dd-chart').forEach(c => mountTradeChart(c, r.ts[+c.dataset.ti])));
+  $('stNext').onclick = () => { closeSettle(); rndJump(); };
+  $('stExit').onclick = () => { const n = rndRounds.length, t = rndRounds.reduce((s, x) => s + x.net, 0); exitRnd(); toast(`Random run over · ${n} day${n === 1 ? '' : 's'} · ${usd(t)}`); };
+  $('stClose').onclick = closeSettle;
+}
+function closeSettle() { const el = $('settleModal'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } }
 
 function onEntryButton(side) {
   if (position) { if (position.side !== side) return flatten('reverse'); return toast('Already in a position — FLATTEN first'); }
@@ -1977,7 +2069,7 @@ function setShowTrades(on) {
 // ---------- rendering ----------
 function renderAll() { renderLive(); renderTrades(); renderDash(); }
 function renderLive() {
-  $('clock').textContent = baseBars.length ? tFmt(curBaseT()) : '--:--';
+  $('clock').textContent = baseBars.length ? (rndMode ? tFmt(curBaseT()).replace(/^\d\d\/\d\d\s*/, '') : tFmt(curBaseT())) : '--:--';   // random mode: time only, date blinded
   $('clockPrice').textContent = baseBars.length ? f2(curPx()) : '--';
   maybeUpdateVP();   // recompute the prior-day volume profile when the trading day changes
   updateAlertBar();  // keep the alert-time vertical line anchored to the current session
@@ -2002,9 +2094,11 @@ function renderLive() {
   $('ordersBox').innerHTML = ord.join('');
 
   const lock = locked();
-  $('startSlider').disabled = lock; $('btnStepBack').disabled = lock; $('sessionSelect').disabled = lock; $('tfSelect').disabled = lock; $('dataSelect').disabled = lock;
-  const _db = $('dateBtn'); if (_db) _db.disabled = lock;
-  const _dl = $('dateLabel'); if (_dl) { const _s = sessions[currentSessionIdx()]; _dl.textContent = _s ? _s.key : '—'; }
+  $('startSlider').disabled = lock || rndMode; $('btnStepBack').disabled = lock; $('sessionSelect').disabled = lock; $('tfSelect').disabled = lock; $('dataSelect').disabled = lock;
+  const _db = $('dateBtn'); if (_db) _db.disabled = lock || rndMode;   // random mode keeps day-jump + scrub blinded
+  const _pn = $('btnPrevDay'), _nn = $('btnNextDay'), _ps = $('btnPickStart');
+  if (_pn) _pn.disabled = rndMode; if (_nn) _nn.disabled = rndMode; if (_ps) _ps.disabled = rndMode;
+  const _dl = $('dateLabel'); if (_dl) { const _s = sessions[currentSessionIdx()]; _dl.textContent = rndMode ? '· · ·' : (_s ? _s.key : '—'); }
   $('entryPriceRow').style.display = $('entryType').value === 'market' ? 'none' : '';
   renderRiskReadout();
 }
@@ -2473,11 +2567,13 @@ function wire() {
   $('sessionSelect').onchange = (e) => gotoSession(+e.target.value);
   wireCalendar();
   $('tfSelect').onchange = (e) => setTf(+e.target.value);
-  $('dataSelect').onchange = async (e) => { if (locked()) { $('dataSelect').value = dataIdx; return toast("Can't switch dataset while in a position / working order"); } const i = +e.target.value; const ok = await loadDataset(DATASETS[i]); if (ok) dataIdx = i; else $('dataSelect').value = dataIdx; };
+  $('dataSelect').onchange = async (e) => { if (locked()) { $('dataSelect').value = dataIdx; return toast("Can't switch dataset while in a position / working order"); } const i = +e.target.value; const ok = await loadDataset(DATASETS[i]); if (ok) { if (rndMode) exitRnd(); dataIdx = i; } else $('dataSelect').value = dataIdx; };
   $('speedSelect').onchange = () => { if (playing) { pause(); play(); } };
   $('startSlider').oninput = (e) => setStart(+e.target.value);
   $('btnPickStart').onclick = () => { if (locked()) { return toast("Can't set start while in a position / working order"); } setTool('start'); };
   $('btnFit').onclick = fitChart;
+  $('btnRandom').onclick = enterRnd;
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('settleModal') && $('settleModal').classList.contains('open')) closeSettle(); });
   $('btnAlert').onclick = setAlertTime; renderAlertLbl();
   $('annUp').onclick = () => setTool('au');
   $('annDown').onclick = () => setTool('ad');

@@ -747,3 +747,15 @@ button.bs-stop.sell:hover:not(:disabled){ background:#33262a; border-color:var(-
 #loadingOverlay .ld-spin{ width:20px; height:20px; border-radius:50%; border:2.5px solid var(--panel2);
   border-top-color:#f0b90b; animation:ld-spin .7s linear infinite; }
 @keyframes ld-spin{ to{ transform:rotate(360deg); } }
+
+/* ===================== Random-date mode: settlement dashboard ===================== */
+#btnRandom.active{ border-color:var(--brand); color:var(--brand); }
+.st-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:10px 0 4px; }
+.st-cell{ background:var(--panel2); border-radius:6px; padding:8px 10px; }
+.st-k{ font-size:11px; color:var(--dim); }
+.st-v{ font-size:16px; font-weight:700; font-family:var(--mono); font-variant-numeric:tabular-nums; margin-top:2px; }
+.st-run{ font-size:12px; color:var(--dim); margin:4px 0 8px; }
+.st-actions{ display:flex; gap:8px; margin-top:12px; }
+.st-actions button{ display:inline-flex; align-items:center; gap:6px; }
+.st-actions .primary{ background:var(--brand); border-color:var(--brand); color:var(--on-brand); }
+.st-actions .primary:hover:not(:disabled){ background:var(--brand-hi); }

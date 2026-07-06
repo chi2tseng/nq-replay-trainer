@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>NQ Replay Trainer</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0e16'/%3E%3Cline x1='11' y1='5' x2='11' y2='27' stroke='%2316c784' stroke-width='2'/%3E%3Crect x='8' y='12' width='6' height='11' rx='1' fill='%2316c784'/%3E%3Cline x1='21' y1='6' x2='21' y2='28' stroke='%23ea3943' stroke-width='2'/%3E%3Crect x='18' y='10' width='6' height='9' rx='1' fill='%23ea3943'/%3E%3C/svg%3E" />
-<link rel="stylesheet" href="src/styles.css?v=59" />
+<link rel="stylesheet" href="src/styles.css?v=60" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,400..600,0..1,0&display=block">
@@ -75,6 +75,7 @@
       <input id="startSlider" type="range" min="0" max="100" value="0" title="Drag to set replay start (flat only)" />
       <button id="btnPickStart" title="Click chart to set replay start (flat only)"><span class="material-symbols-outlined">my_location</span></button>
       <button id="btnFit" title="Fit — auto-zoom revealed bars (key 0)"><span class="material-symbols-outlined">fit_screen</span></button>
+      <button id="btnRandom" title="Random date mode — blind random day, auto-settles at 16:00 ET with a settlement dashboard"><span class="material-symbols-outlined">shuffle</span></button>
     </div>
 
     <div class="grp right">
@@ -220,6 +221,7 @@
 </div>
 <div id="dayDetail" class="day-detail"></div>
 <div id="logModal" class="day-detail"></div>
-<script src="src/app.js?v=59"></script>
+<div id="settleModal" class="day-detail"></div>
+<script src="src/app.js?v=60"></script>
 </body>
 </html>
