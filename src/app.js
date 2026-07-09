@@ -47,6 +47,7 @@ const saveJSON = (k, v) => localStorage.setItem(k, JSON.stringify(v));
 
 // ---------- state ----------
 let rndMode = false, rndCurKey = null, rndStartCount = 0, rndRounds = [], rndPrevMin = null, rndSettled = false;   // random-date practice mode
+let rndSavedTrades = null, rndSavedMarkers = null;   // real trades/markers parked while the random-mode sandbox runs
 let baseBars = [];           // raw 1-min bars
 let bars = [];               // current-timeframe bars (each carries subStart/subEnd into baseBars)
 let tf = 1;                  // timeframe in minutes
@@ -65,6 +66,7 @@ let position = null;         // {side,qty,entry,entryTime,atm,slTicks,maxFav,beD
 let orders = [];             // working: {type:'stop'|'target', price, qty, ticks?}
 let entryOrder = null;       // pending entry: {side, kind:'limit'|'stop', price, atm, mult}
 let trades = loadJSON('rt_trades', []);
+(() => { const bk = loadJSON('rt_trades_prerandom', null); if (bk) { trades = bk; saveJSON('rt_trades', trades); localStorage.removeItem('rt_trades_prerandom'); } })();   // recover real trades if a random-mode session was interrupted mid-round
 let showTrades = loadJSON('rt_show_trades', true);   // show entry/exit trade arrows on the chart
 let tradeLogs = loadJSON('rt_trade_logs', []);   // named saved trade logs: [{id,name,ts,trades:[...]}]
 let alertMin = loadJSON('rt_alert_min', 690);    // remind me when the replay crosses this ET time (minutes since midnight; 690 = 11:30). null = off
@@ -1786,14 +1788,15 @@ function curPx() { return baseBars[baseIdx].close; }
 function curBaseT() { return baseBars[baseIdx].time; }
 function locked() { return !!position || !!entryOrder; }
 
-// ---------- Random-date practice mode: blind random day → trade → auto-settle at 16:00 ET → settlement dashboard ----------
-function rndEligible() {   // full trading days only: a real RTH open AND data through the 16:00 settle
+// ---------- Random-date GAME mode: one round = one blind random day, 09:30→12:30 ET (or hit End) → settlement dashboard ----------
+const RND_OPEN = 570, RND_CLOSE = 750;   // round window: 09:30 → 12:30 ET (minutes since ET midnight)
+function rndEligible() {   // full trading days only: a real RTH open AND data through the 12:30 close
   const out = [];
   for (let i = 0; i < sessions.length; i++) {
     const s = sessions[i], om = etMinutes(baseBars[rthOpenIdx(s)].time);
     if (om < 570 || om >= 960) continue;                        // holiday / evening-only stub: no real 09:30 open
     const em = etMinutes(baseBars[s.end].time);
-    if (em >= 570 && em < 960) continue;                        // data ends mid-RTH → can't reach the settle
+    if (em >= RND_OPEN && em < RND_CLOSE) continue;             // data ends inside the round window → can't reach 12:30
     out.push(i);
   }
   return out;
@@ -1811,22 +1814,59 @@ function setRndUi(on) {   // blind the date + freeze day-jump controls while a r
   ['dateBtn', 'btnPrevDay', 'btnNextDay', 'btnPickStart'].forEach(id => { const b = $(id); if (b) b.disabled = on; });
   const sl = $('startSlider'); if (sl) sl.disabled = on;
   const b = $('btnRandom'); if (b) b.classList.toggle('active', on);
+  const sn = $('btnSettleNow'); if (sn) sn.style.display = on ? '' : 'none';
+  const hud = $('rndHud'); if (hud) hud.style.display = on ? '' : 'none';
   try { chart.timeScale().applyOptions({}); } catch (e) {}      // refresh axis labels under the new formatter mode
   renderAll();
 }
 function enterRnd() {
   if (rndMode) {   // toggle: reopen the settlement screen if one is pending, else exit
     if (rndSettled && $('settleModal') && !$('settleModal').classList.contains('open')) return openSettle();
-    if (!confirm('Exit random date mode?')) return;
-    return exitRnd();
+    return exitRnd();   // exitRnd handles its own save prompt
   }
   if (locked()) return toast('Flatten & cancel orders before random mode');
+  rndSavedTrades = trades; rndSavedMarkers = markers;          // park the real trade record — the sandbox runs on a clean slate
+  saveJSON('rt_trades_prerandom', rndSavedTrades);             // crash-safety: recover real trades if this session is interrupted
+  trades = []; markers = [];                                   // sandbox: journal / dashboard / CSV now show ONLY this random run
   rndMode = true; rndRounds = [];
-  if (!rndJump()) { rndMode = false; return; }
+  if (!rndJump()) { trades = rndSavedTrades; markers = rndSavedMarkers; rndSavedTrades = rndSavedMarkers = null; localStorage.removeItem('rt_trades_prerandom'); rndMode = false; return; }
   setRndUi(true);
-  toast('Random day — trade it; settles at 16:00 ET');
+  toast('Round 1 — trade the day; settles at 12:30 ET or when you hit End');
 }
-function exitRnd() { rndMode = false; rndCurKey = null; closeSettle(); setRndUi(false); }
+function exitRnd() {
+  if (rndMode && trades.length && confirm(`Save this random run (${trades.length} trade${trades.length === 1 ? '' : 's'}) as a log before exiting?`)) {
+    const net = trades.reduce((s, t) => s + t.pnl, 0);
+    tradeLogs.push({ id: 'log' + Date.now(), name: `Random · ${trades.length} trade${trades.length === 1 ? '' : 's'} · ${INSTR.symbol}`, ts: Math.floor(Date.now() / 1000), n: trades.length, net, trades: JSON.parse(JSON.stringify(trades)) });
+    saveJSON('rt_trade_logs', tradeLogs);
+  }
+  rndMode = false; rndCurKey = null; rndSettled = false;
+  trades = rndSavedTrades || []; markers = rndSavedMarkers || [];   // restore the real trade record untouched
+  saveJSON('rt_trades', trades); localStorage.removeItem('rt_trades_prerandom');
+  rndSavedTrades = rndSavedMarkers = null;
+  closeSettle(); refreshMarkers(); setRndUi(false);
+}
+function settleNow() { if (rndMode && !rndSettled) settleRound(); }   // manual "End round": close out now without playing to 12:30
+function rndLivePnl() {   // this round's running P&L = realized (closed trades) + open position mark-to-market
+  const real = trades.slice(rndStartCount).reduce((s, t) => s + t.pnl, 0);
+  let open = 0;
+  if (position) { const long = position.side === 'long', ut = long ? tcount(curPx(), position.entry) : tcount(position.entry, curPx()); open = ut * INSTR.tickValue * position.qty; }
+  return { real, open, total: real + open };
+}
+function rndStreak() { let n = 0; for (let i = rndRounds.length - 1; i >= 0; i--) { if (rndRounds[i].net > 0) n++; else break; } return n; }   // consecutive winning rounds, most-recent back
+function updateRndHud() {   // live game HUD over the chart: round #, running P&L, close countdown, streak
+  const el = $('rndHud'); if (!el) return;
+  if (!rndMode || rndSettled) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  const p = rndLivePnl(), cur = etMinutes(curBaseT());
+  const prog = Math.max(0, Math.min(1, (cur - RND_OPEN) / (RND_CLOSE - RND_OPEN))), left = Math.max(0, RND_CLOSE - cur), streak = rndStreak();
+  el.querySelector('.rh-round').textContent = 'ROUND ' + (rndRounds.length + 1);
+  const pe = el.querySelector('.rh-pnl'); pe.textContent = usd(p.total); pe.className = 'rh-pnl ' + (p.total > 0 ? 'pos' : p.total < 0 ? 'neg' : '');
+  el.querySelector('.rh-sub').textContent = `real ${usd(p.real)} · open ${usd(p.open)}`;
+  el.querySelector('.rh-fill').style.width = (prog * 100).toFixed(1) + '%';
+  el.querySelector('.rh-left').textContent = left >= 60 ? `${Math.floor(left / 60)}h ${left % 60}m left` : `${left}m left`;
+  const ss = el.querySelector('.rh-streak'); ss.style.display = streak >= 2 ? '' : 'none';
+  if (streak >= 2) ss.innerHTML = `<span class="material-symbols-outlined">local_fire_department</span>${streak}`;
+}
 function rndRoundStats() {
   const ts = trades.slice(rndStartCount);
   const net = ts.reduce((s, t) => s + t.pnl, 0), w = ts.filter(t => t.pnl > 0).length, l = ts.filter(t => t.pnl < 0).length;
@@ -1835,17 +1875,16 @@ function rndRoundStats() {
     avgR: rs.length ? rs.reduce((s, t) => s + t.R, 0) / rs.length : null,
     best: ts.length ? Math.max(...ts.map(t => t.pnl)) : 0, worst: ts.length ? Math.min(...ts.map(t => t.pnl)) : 0 };
 }
-function settleCheck() {   // on forward advance: settle once when the round's day crosses 16:00 ET (or data runs out)
+function settleCheck() {   // settle once the round's day has REACHED 12:30 ET — state-based, so it fires no matter how you got there (fast play, tf switch, step-back-then-forward)
   if (!rndMode || rndSettled) return;
   const si = currentSessionIdx(); if (si < 0 || sessions[si].key !== rndCurKey) return;
-  const cur = etMinutes(curBaseT());
-  if ((rndPrevMin != null && rndPrevMin < 960 && cur >= 960) || baseIdx >= sessions[si].end) { settleRound(); return; }
-  rndPrevMin = cur;
+  if (etMinutes(curBaseT()) >= RND_CLOSE || baseIdx >= sessions[si].end) settleRound();
 }
 function settleRound() {
   rndSettled = true; pause();
-  if (position) flatten(); else if (entryOrder) cancelEntry();  // daily settlement: everything flat at 16:00
+  if (position) flatten(); else if (entryOrder) cancelEntry();  // round over: flatten everything at the close
   rndRounds.push(rndRoundStats());
+  updateRndHud();   // rndSettled is now true → HUD hides itself
   openSettle();
 }
 function openSettle() {   // settlement dashboard: this day's stats + running totals + per-trade charts
@@ -1853,8 +1892,16 @@ function openSettle() {   // settlement dashboard: this day's stats + running to
   const r = rndRounds[rndRounds.length - 1]; if (!r) return;
   const tot = rndRounds.reduce((s, x) => s + x.net, 0), totN = rndRounds.reduce((s, x) => s + x.n, 0);
   const cell = (k, v, cls) => `<div class="st-cell"><div class="st-k">${k}</div><div class="st-v ${cls || ''}">${v}</div></div>`;
-  el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">Settled · ${r.key}</span> &nbsp;<b class="${r.net >= 0 ? 'pos' : 'neg'}">${usd(r.net)}</b> · ${r.n} trade${r.n === 1 ? '' : 's'}</div>`
+  const wins = rndRounds.filter(x => x.net > 0).length, wr = rndRounds.length ? Math.round(100 * wins / rndRounds.length) : 0;
+  const best = Math.max(...rndRounds.map(x => x.net)), streak = rndStreak();
+  const verdict = r.net > 0 ? 'win' : r.net < 0 ? 'loss' : 'flat', vlabel = r.net > 0 ? 'WIN' : r.net < 0 ? 'LOSS' : 'FLAT';
+  el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">Round ${rndRounds.length} · ${r.key}</span></div>`
     + `<button class="dd-x" id="stClose" title="Close — stay on this day"><span class="material-symbols-outlined">close</span></button></div>`
+    + `<div class="st-over"><span class="st-badge ${verdict}">${vlabel}</span>`
+    + `<div class="st-big ${r.net >= 0 ? 'pos' : 'neg'}">${usd(r.net)}</div>`
+    + `<div class="st-tally"><span>Rounds <b>${rndRounds.length}</b></span><span>Win rate <b>${wr}%</b></span><span>Best <b>${usd(best)}</b></span>`
+    + (streak >= 2 ? `<span>Streak <b>${streak}W</b></span>` : '')
+    + `<span>Total <b class="${tot >= 0 ? 'pos' : 'neg'}">${usd(tot)}</b></span></div></div>`
     + `<div class="st-grid">`
     + cell('Net P&L', usd(r.net), r.net >= 0 ? 'pos' : 'neg')
     + cell('Trades · W-L', `${r.n} · ${r.w}W ${r.l}L`)
@@ -1863,16 +1910,15 @@ function openSettle() {   // settlement dashboard: this day's stats + running to
     + cell('Avg R', r.avgR == null ? '–' : (r.avgR >= 0 ? '+' : '') + r.avgR.toFixed(2))
     + cell('Best / Worst', `${usd(r.best)} · ${usd(r.worst)}`)
     + `</div>`
-    + `<div class="st-run">Run so far: ${rndRounds.length} day${rndRounds.length === 1 ? '' : 's'} · ${totN} trades · <b class="${tot >= 0 ? 'pos' : 'neg'}">${usd(tot)}</b></div>`
     + (r.ts.length ? `<div class="dd-list">` + r.ts.map((t, i) => { const long = t.side === 'long';
         return `<div class="dd-trade"><div class="dd-tinfo"><div class="dd-trow">#${i + 1} <span class="${long ? 'long-tag' : 'short-tag'}">${long ? 'LONG' : 'SHORT'} ${t.qty}</span> <b class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</b> · ${t.ticks >= 0 ? '+' : ''}${t.ticks}t · ${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + 'R'}</div>`
           + `<div class="dd-sub">${tFmt(t.entryTime)} → ${tFmt(t.exitTime)} · ${f2(t.entry)} → ${f2(t.exit)} · ${t.atm} · ${t.exitType}</div></div>`
-          + `<canvas class="dd-chart" data-ti="${i}" title="Scroll to zoom · drag to pan · double-click to reset"></canvas></div>`; }).join('') + `</div>` : `<div class="st-run">No trades this day.</div>`)
-    + `<div class="st-actions"><button id="stNext" class="primary"><span class="material-symbols-outlined">shuffle</span>Next random day</button><button id="stExit">Exit random mode</button></div></div>`;
+          + `<canvas class="dd-chart" data-ti="${i}" title="Scroll to zoom · drag to pan · double-click to reset"></canvas></div>`; }).join('') + `</div>` : `<div class="st-run">No trades this round.</div>`)
+    + `<div class="st-actions"><button id="stNext" class="primary"><span class="material-symbols-outlined">shuffle</span>Next round</button><button id="stExit">End session</button></div></div>`;
   el.classList.add('open');
   requestAnimationFrame(() => el.querySelectorAll('.dd-chart').forEach(c => mountTradeChart(c, r.ts[+c.dataset.ti])));
   $('stNext').onclick = () => { closeSettle(); rndJump(); };
-  $('stExit').onclick = () => { const n = rndRounds.length, t = rndRounds.reduce((s, x) => s + x.net, 0); exitRnd(); toast(`Random run over · ${n} day${n === 1 ? '' : 's'} · ${usd(t)}`); };
+  $('stExit').onclick = () => { const n = rndRounds.length, t = rndRounds.reduce((s, x) => s + x.net, 0); exitRnd(); toast(`Session over · ${n} round${n === 1 ? '' : 's'} · ${usd(t)}`); };
   $('stClose').onclick = closeSettle;
 }
 function closeSettle() { const el = $('settleModal'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } }
@@ -2073,6 +2119,7 @@ function renderLive() {
   $('clockPrice').textContent = baseBars.length ? f2(curPx()) : '--';
   maybeUpdateVP();   // recompute the prior-day volume profile when the trading day changes
   updateAlertBar();  // keep the alert-time vertical line anchored to the current session
+  updateRndHud();    // game HUD: round #, live P&L, 12:30 countdown
   if (!playing) $('startSlider').value = baseIdx;
 
   const box = $('posBox');
@@ -2573,6 +2620,8 @@ function wire() {
   $('btnPickStart').onclick = () => { if (locked()) { return toast("Can't set start while in a position / working order"); } setTool('start'); };
   $('btnFit').onclick = fitChart;
   $('btnRandom').onclick = enterRnd;
+  $('btnSettleNow').onclick = settleNow;
+  { const rh = $('rhEnd'); if (rh) rh.onclick = settleNow; }
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('settleModal') && $('settleModal').classList.contains('open')) closeSettle(); });
   $('btnAlert').onclick = setAlertTime; renderAlertLbl();
   $('annUp').onclick = () => setTool('au');

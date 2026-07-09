@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>NQ Replay Trainer</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0e16'/%3E%3Cline x1='11' y1='5' x2='11' y2='27' stroke='%2316c784' stroke-width='2'/%3E%3Crect x='8' y='12' width='6' height='11' rx='1' fill='%2316c784'/%3E%3Cline x1='21' y1='6' x2='21' y2='28' stroke='%23ea3943' stroke-width='2'/%3E%3Crect x='18' y='10' width='6' height='9' rx='1' fill='%23ea3943'/%3E%3C/svg%3E" />
-<link rel="stylesheet" href="src/styles.css?v=60" />
+<link rel="stylesheet" href="src/styles.css?v=62" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,400..600,0..1,0&display=block">
@@ -75,7 +75,8 @@
       <input id="startSlider" type="range" min="0" max="100" value="0" title="Drag to set replay start (flat only)" />
       <button id="btnPickStart" title="Click chart to set replay start (flat only)"><span class="material-symbols-outlined">my_location</span></button>
       <button id="btnFit" title="Fit — auto-zoom revealed bars (key 0)"><span class="material-symbols-outlined">fit_screen</span></button>
-      <button id="btnRandom" title="Random date mode — blind random day, auto-settles at 16:00 ET with a settlement dashboard"><span class="material-symbols-outlined">shuffle</span></button>
+      <button id="btnRandom" title="Random date GAME — blind random day, isolated sandbox, one round = 09:30–12:30 ET, then a settlement dashboard"><span class="material-symbols-outlined">shuffle</span></button>
+      <button id="btnSettleNow" title="End round now — flatten &amp; show the settlement dashboard" style="display:none"><span class="material-symbols-outlined">flag</span></button>
     </div>
 
     <div class="grp right">
@@ -110,7 +111,17 @@
       <button id="annClear" class="lt-btn" title="Clear all markers"><span class="material-symbols-outlined">delete</span></button>
     </nav>
 
-    <section id="chartwrap"><div id="chart"></div><div id="chartLegend"></div><div id="indLegend"></div><div id="oscPane"><div id="oscBar"><span class="osc-tag" id="oscTag">RSI</span><button id="oscClose" class="osc-x" title="Remove oscillator pane"><span class="material-symbols-outlined">close</span></button></div></div></section>
+    <section id="chartwrap"><div id="chart"></div><div id="chartLegend"></div><div id="indLegend"></div>
+      <div id="rndHud" style="display:none">
+        <div class="rh-head"><span class="rh-round">ROUND 1</span><span class="rh-badge"><span class="rh-dot"></span>LIVE</span></div>
+        <div class="rh-pnl">$0.00</div>
+        <div class="rh-sub">real $0 · open $0</div>
+        <div class="rh-bar"><div class="rh-fill"></div></div>
+        <div class="rh-scale"><span>09:30</span><span>12:30</span></div>
+        <div class="rh-meta"><span class="rh-left">3h left</span><span class="rh-streak" style="display:none"></span></div>
+        <button id="rhEnd" class="rh-end"><span class="material-symbols-outlined">flag</span>End round</button>
+      </div>
+      <div id="oscPane"><div id="oscBar"><span class="osc-tag" id="oscTag">RSI</span><button id="oscClose" class="osc-x" title="Remove oscillator pane"><span class="material-symbols-outlined">close</span></button></div></div></section>
     <div id="gutterCol" class="gutter col" title="Drag to resize side panel (double-click to reset)"></div>
 
     <aside id="side">
@@ -222,6 +233,6 @@
 <div id="dayDetail" class="day-detail"></div>
 <div id="logModal" class="day-detail"></div>
 <div id="settleModal" class="day-detail"></div>
-<script src="src/app.js?v=60"></script>
+<script src="src/app.js?v=62"></script>
 </body>
 </html>
