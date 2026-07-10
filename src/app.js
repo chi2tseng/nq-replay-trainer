@@ -1867,6 +1867,31 @@ function updateRndHud() {   // live game HUD over the chart: round #, running P&
   const ss = el.querySelector('.rh-streak'); ss.style.display = streak >= 2 ? '' : 'none';
   if (streak >= 2) ss.innerHTML = `<span class="material-symbols-outlined">local_fire_department</span>${streak}`;
 }
+function wireRndHudDrag() {   // let the game HUD be dragged anywhere over the chart so it never blocks the bars; position persists
+  const el = $('rndHud'); if (!el) return;
+  const pos = loadJSON('rt_hud_pos', null);
+  if (pos && typeof pos.left === 'number') { el.style.left = pos.left + 'px'; el.style.top = pos.top + 'px'; el.style.right = 'auto'; }
+  let drag = null;
+  el.addEventListener('mousedown', (e) => {
+    if (e.target.closest('#rhEnd')) return;                    // let the End-round button click through
+    e.stopPropagation(); e.preventDefault();                  // don't start a chart pan
+    const r = el.getBoundingClientRect(), wrap = $('chartwrap').getBoundingClientRect();
+    el.style.left = (r.left - wrap.left) + 'px'; el.style.top = (r.top - wrap.top) + 'px'; el.style.right = 'auto';   // freeze current spot as left/top (so a plain click doesn't jump it)
+    drag = { dx: e.clientX - r.left, dy: e.clientY - r.top }; el.style.cursor = 'grabbing';
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!drag) return;
+    const wrap = $('chartwrap').getBoundingClientRect();
+    const left = Math.max(0, Math.min(e.clientX - drag.dx - wrap.left, wrap.width - el.offsetWidth));
+    const top = Math.max(0, Math.min(e.clientY - drag.dy - wrap.top, wrap.height - el.offsetHeight));
+    el.style.left = left + 'px'; el.style.top = top + 'px';
+  });
+  window.addEventListener('mouseup', () => {
+    if (!drag) return;
+    drag = null; el.style.cursor = '';
+    saveJSON('rt_hud_pos', { left: parseFloat(el.style.left) || 0, top: parseFloat(el.style.top) || 0 });
+  });
+}
 function rndRoundStats() {
   const ts = trades.slice(rndStartCount);
   const net = ts.reduce((s, t) => s + t.pnl, 0), w = ts.filter(t => t.pnl > 0).length, l = ts.filter(t => t.pnl < 0).length;
@@ -2622,6 +2647,7 @@ function wire() {
   $('btnRandom').onclick = enterRnd;
   $('btnSettleNow').onclick = settleNow;
   { const rh = $('rhEnd'); if (rh) rh.onclick = settleNow; }
+  wireRndHudDrag();
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('settleModal') && $('settleModal').classList.contains('open')) closeSettle(); });
   $('btnAlert').onclick = setAlertTime; renderAlertLbl();
   $('annUp').onclick = () => setTool('au');
