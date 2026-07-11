@@ -1,8 +1,8 @@
 """Tiny static server for the Replay Trainer. Silences request logging so it runs cleanly
 under pyw.exe (window-less, no console -> writing logs to stderr would crash each request)."""
-import http.server, socketserver
+import http.server, socketserver, os
 
-DIR = r"C:\Users\chi2t\Downloads\replay-trainer"
+DIR = os.path.dirname(os.path.abspath(__file__))   # serve the app from wherever this script lives (move-proof)
 PORT = 5560
 
 class Handler(http.server.SimpleHTTPRequestHandler):
