@@ -802,3 +802,9 @@ button.bs-stop.sell:hover:not(:disabled){ background:#33262a; border-color:var(-
 .vp-color{ width:28px; height:18px; padding:1px; border:1px solid var(--line); border-radius:4px; background:var(--panel2); cursor:pointer; flex:none; }
 .vp-color::-webkit-color-swatch-wrapper{ padding:1px; }
 .vp-color::-webkit-color-swatch{ border:none; border-radius:2px; }
+
+/* ===================== Right-click menu: order-ATM selector ===================== */
+.ctx-atm{ display:flex; align-items:center; gap:8px; cursor:default; }
+.ctx-atm span{ font-size:11px; color:var(--dim); }
+.ctx-atm select{ flex:1; font-size:12px; padding:3px 6px; max-width:180px; }
+.ctx-atm:hover{ background:transparent; }

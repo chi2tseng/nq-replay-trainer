@@ -233,22 +233,28 @@ function renderRiskReadout() {
   };
   box.style.display = ''; box.innerHTML = cell('long', 'buy', 'BUY') + cell('short', 'sell', 'SELL');
 }
-function structBracket(side, kind, price) {   // R-based bracket AT ORDER TIME for struct ATMs: stop beyond the signal bar / entry structure, target = rr × risk (the right-panel R dial)
-  const a = atm[activeAtm] || {}; if (!a.struct) return null;
+function structBracket(side, kind, price, name) {   // R-based bracket AT ORDER TIME for struct ATMs: stop beyond the signal bar / entry structure, target = rr × risk
+  const a = atm[name || activeAtm] || {}; if (!a.struct) return null;
   const ext = curBarExtreme(), long = side === 'long';
   const stopPx = rnd(long ? Math.min(ext.lo, price) - TICK : Math.max(ext.hi, price) + TICK);   // clamp: a deep pullback limit keeps the stop on the correct side of entry
   const slT = Math.max(1, Math.round(Math.abs(price - stopPx) / TICK));
   return { slTicks: slT, tgts: [{ ticks: Math.max(1, Math.round(slT * (a.rr || 1))), qty: 1 }] };
 }
-const CTX_BRACKET_PTS = 40;   // right-click stop/limit orders: fixed SL & TP distance in POINTS (the panel buttons keep their R-based ATM brackets)
+const CTX_BRACKET_PTS = 40;   // the "±40pt fixed" option for right-click orders (SL & TP distance in points)
+let ctxAtm = loadJSON('rt_ctx_atm', '40pt');   // ATM used by right-click orders: '40pt' sentinel or any template name (selector inside the context menu)
 function placeEntryAt(side, kind, price) {
   if (position) return toast('Already in a position — flatten first');
   price = rnd(price);
-  const t = Math.max(1, Math.round(CTX_BRACKET_PTS / TICK));   // 40 pts → ticks for the active contract
-  const bracket = { slTicks: t, tgts: [{ ticks: t, qty: 1 }] };
-  const mult = (riskOn && sizeForRisk(t)) || Math.max(1, parseInt($('qty').value, 10) || 1);
-  entryOrder = { side, kind, price, atm: activeAtm, mult, ...bracket };
-  toast(`${side === 'long' ? 'Buy' : 'Sell'} ${kind === 'limit' ? 'Limit' : 'Stop'} @ ${f2(price)} · ±${CTX_BRACKET_PTS}pt bracket`);
+  let bracket, atmName;
+  if (ctxAtm === '40pt' || !atm[ctxAtm]) {   // fixed ±40pt (also the fallback if a saved template no longer exists)
+    const t = Math.max(1, Math.round(CTX_BRACKET_PTS / TICK));
+    bracket = { slTicks: t, tgts: [{ ticks: t, qty: 1 }] }; atmName = '40pt';
+  } else {
+    bracket = structBracket(side, kind, price, ctxAtm) || bracketFromAtm(ctxAtm); atmName = ctxAtm;
+  }
+  const mult = (riskOn && bracket.slTicks && sizeForRisk(bracket.slTicks)) || Math.max(1, parseInt($('qty').value, 10) || 1);
+  entryOrder = { side, kind, price, atm: atmName, mult, ...bracket };
+  toast(`${side === 'long' ? 'Buy' : 'Sell'} ${kind === 'limit' ? 'Limit' : 'Stop'} @ ${f2(price)} · ${atmName === '40pt' ? '±' + CTX_BRACKET_PTS + 'pt' : atmName}`);
   drawLines(); renderLive();
 }
 function moveStopTo(price) { if (!position) return; const s = orders.find(o => o.type === 'stop'); if (s) s.price = rnd(price); else orders.push({ type: 'stop', price: rnd(price), qty: position.qty }); drawLines(); renderLive(); toast('Stop → ' + f2(rnd(price))); }
@@ -270,6 +276,8 @@ function showCtx(clientX, clientY) {
     it.push({ h: `Working ${entryOrder.side === 'long' ? 'Buy' : 'Sell'} ${entryOrder.kind === 'limit' ? 'Limit' : 'Stop'} @ ${f2(entryOrder.price)}` });
     it.push({ l: 'Cancel order', f: () => cancelEntry() });
   } else {
+    it.push({ atmSel: 1 });   // which ATM the limit/stop rows below will use
+    it.push({ sep: 1 });
     it.push({ l: 'Buy Market', cls: 'buy', f: () => onEntryButtonDirect('long') });
     it.push({ l: 'Sell Market', cls: 'sell', f: () => onEntryButtonDirect('short') });
     it.push({ sep: 1 });
@@ -283,6 +291,16 @@ function showCtx(clientX, clientY) {
     const d = document.createElement('div');
     if (x.sep) { d.className = 'ctx-sep'; }
     else if (x.h) { d.className = 'ctx-head'; d.textContent = x.h; }
+    else if (x.atmSel) {   // order-ATM selector row: change what the limit/stop entries use; doesn't close the menu
+      d.className = 'ctx-item ctx-atm';
+      const lab = document.createElement('span'); lab.textContent = 'ATM'; d.appendChild(lab);
+      const sel = document.createElement('select'); sel.id = 'ctxAtmSel';
+      const opts = [['40pt', `±${CTX_BRACKET_PTS}pt fixed`]].concat(Object.keys(atm).map(k => [k, k]));
+      sel.innerHTML = opts.map(([v, l]) => `<option value="${escHtml(v)}"${v === (atm[ctxAtm] || ctxAtm === '40pt' ? ctxAtm : '40pt') ? ' selected' : ''}>${escHtml(l)}</option>`).join('');
+      ['mousedown', 'click'].forEach(ev => sel.addEventListener(ev, e => e.stopPropagation()));
+      sel.onchange = (e) => { ctxAtm = e.target.value; saveJSON('rt_ctx_atm', ctxAtm); };
+      d.appendChild(sel); d.onclick = (e) => e.stopPropagation();
+    }
     else { d.className = 'ctx-item' + (x.cls ? ' ' + x.cls : ''); d.textContent = x.l; d.onclick = () => { x.f(); hideCtx(); }; }
     ctxEl.appendChild(d);
   });
