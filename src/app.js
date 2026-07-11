@@ -240,13 +240,15 @@ function structBracket(side, kind, price) {   // R-based bracket AT ORDER TIME f
   const slT = Math.max(1, Math.round(Math.abs(price - stopPx) / TICK));
   return { slTicks: slT, tgts: [{ ticks: Math.max(1, Math.round(slT * (a.rr || 1))), qty: 1 }] };
 }
+const CTX_BRACKET_PTS = 40;   // right-click stop/limit orders: fixed SL & TP distance in POINTS (the panel buttons keep their R-based ATM brackets)
 function placeEntryAt(side, kind, price) {
   if (position) return toast('Already in a position — flatten first');
   price = rnd(price);
-  const bracket = structBracket(side, kind, price) || bracketFromAtm(activeAtm);   // limit AND stop orders get the R bracket up front
-  const mult = (riskOn && bracket.slTicks && sizeForRisk(bracket.slTicks)) || Math.max(1, parseInt($('qty').value, 10) || 1);
+  const t = Math.max(1, Math.round(CTX_BRACKET_PTS / TICK));   // 40 pts → ticks for the active contract
+  const bracket = { slTicks: t, tgts: [{ ticks: t, qty: 1 }] };
+  const mult = (riskOn && sizeForRisk(t)) || Math.max(1, parseInt($('qty').value, 10) || 1);
   entryOrder = { side, kind, price, atm: activeAtm, mult, ...bracket };
-  toast(`${side === 'long' ? 'Buy' : 'Sell'} ${kind === 'limit' ? 'Limit' : 'Stop'} @ ${f2(price)} + bracket`);
+  toast(`${side === 'long' ? 'Buy' : 'Sell'} ${kind === 'limit' ? 'Limit' : 'Stop'} @ ${f2(price)} · ±${CTX_BRACKET_PTS}pt bracket`);
   drawLines(); renderLive();
 }
 function moveStopTo(price) { if (!position) return; const s = orders.find(o => o.type === 'stop'); if (s) s.price = rnd(price); else orders.push({ type: 'stop', price: rnd(price), qty: position.qty }); drawLines(); renderLive(); toast('Stop → ' + f2(rnd(price))); }
