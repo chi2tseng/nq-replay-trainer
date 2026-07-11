@@ -794,3 +794,11 @@ button.bs-stop.sell:hover:not(:disabled){ background:#33262a; border-color:var(-
 .st-tally{ display:flex; justify-content:center; gap:8px 18px; margin-top:10px; font-size:12px; color:var(--dim); flex-wrap:wrap; }
 .st-tally b{ color:var(--txt); font-family:var(--mono); font-weight:700; }
 .st-tally b.pos{ color:var(--green) } .st-tally b.neg{ color:var(--red) }
+
+/* ===================== Volume Profile trio rows (popover) ===================== */
+.vp-row{ display:flex; align-items:center; gap:8px; }
+.vp-row .vp-name{ flex:1; }
+.vp-row .vp-tags{ font-family:var(--mono); font-size:10px; color:var(--dim); margin-left:4px; letter-spacing:.4px; }
+.vp-color{ width:28px; height:18px; padding:1px; border:1px solid var(--line); border-radius:4px; background:var(--panel2); cursor:pointer; flex:none; }
+.vp-color::-webkit-color-swatch-wrapper{ padding:1px; }
+.vp-color::-webkit-color-swatch{ border:none; border-radius:2px; }

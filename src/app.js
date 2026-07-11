@@ -333,8 +333,9 @@ function renderIndLegend(i) {
   add('bb', bbOn, 'BB', '20 2', `${tint('var(--dim)', fmtIndVal(bbData.up[i]))} ${tint(BB_MID, '<b>' + fmtIndVal(bbData.mid[i]) + '</b>')} ${tint('var(--dim)', fmtIndVal(bbData.lo[i]))}`);
   const emaVals = emaData.map(e => tint(e.color, fmtIndVal(e.arr[i]))).join(' ');
   add('ema', emaOn, 'EMA', emaPeriods.join(' '), emaVals);
-  if (vpOn) add('vp', true, 'VP prior', vpData ? vpData.key : '', vpData ? `${tint(VP_POC, 'POC ' + f2(vpData.poc))}  ${tint(VP_VA, 'VA ' + f2(vpData.vah) + '/' + f2(vpData.val))}` : '–');
-  if (vpTodayOn) add('vptoday', true, 'VP today', vpTodayData ? 'developing' : '', vpTodayData ? `${tint(VPT_POC, 'POC ' + f2(vpTodayData.poc))}  ${tint(VPT_VA, 'VA ' + f2(vpTodayData.vah) + '/' + f2(vpTodayData.val))}` : '–');
+  if (vpP.on) add('vpp', true, 'VP prev NY', vpPData ? vpPData.key : '', vpPData ? `${tint(vpP.color, 'PPOC ' + f2(vpPData.poc))}  ${tint(vpP.color, 'PVA ' + f2(vpPData.vah) + '/' + f2(vpPData.val))}` : '–');
+  if (vpO.on) add('vpo', true, 'VP overnight', vpOData ? '18:00→09:30' : 'forming', vpOData ? `${tint(vpO.color, 'OPOC ' + f2(vpOData.poc))}  ${tint(vpO.color, 'OVA ' + f2(vpOData.vah) + '/' + f2(vpOData.val))}` : '–');
+  if (vpD.on) add('vpd', true, 'VP developing', vpDData ? 'live' : '', vpDData ? `${tint(vpD.color, 'dPOC ' + f2(vpDData.poc))}  ${tint(vpD.color, 'dVA ' + f2(vpDData.vah) + '/' + f2(vpDData.val))}` : '–');
   el.innerHTML = rows.join('');
 }
 function toggleInd(which) {
@@ -342,8 +343,9 @@ function toggleInd(which) {
   else if (which === 'vwap') { setVwap(!vwapOn); const c = $('indVwap'); if (c) c.checked = vwapOn; }
   else if (which === 'bb') { setBB(!bbOn); const c = $('indBB'); if (c) c.checked = bbOn; }
   else if (which === 'ema') { setEMA(!emaOn); const c = $('indEma'); if (c) c.checked = emaOn; }
-  else if (which === 'vp') { setVp(!vpOn); const c = $('indVp'); if (c) c.checked = vpOn; }
-  else if (which === 'vptoday') { setVpToday(!vpTodayOn); const c = $('indVpToday'); if (c) c.checked = vpTodayOn; }
+  else if (which === 'vpp') { setVpCfg('p', { on: !vpP.on }); const c = $('indVpP'); if (c) c.checked = vpP.on; }
+  else if (which === 'vpo') { setVpCfg('o', { on: !vpO.on }); const c = $('indVpO'); if (c) c.checked = vpO.on; }
+  else if (which === 'vpd') { setVpCfg('d', { on: !vpD.on }); const c = $('indVpD'); if (c) c.checked = vpD.on; }
   renderIndLegend();
 }
 function initIndLegend() {
@@ -652,10 +654,12 @@ window.__osc = () => ({ mode: oscMode, hasChart: !!oscChart, rsiLen: oscRsi.filt
 let vwapOn = loadJSON('rt_vwap', false);
 let bbOn   = loadJSON('rt_bb',   false);
 let emaOn  = loadJSON('rt_ema',  true);
-let vpOn   = loadJSON('rt_vp',   true);   // fixed-range volume profile of the PRIOR trading day (POC + 70% value area)
-let vpData = null, vpSessionKey = null;
-let vpTodayOn = loadJSON('rt_vp_today', true);   // TODAY's developing volume profile — recomputed live as the replay reveals bars
-let vpTodayData = null, vpTodayEdge = -1;
+// Volume Profile trio (each {on,color}, individually toggleable/colorable):
+//   P = PREV day's NY session 09:30–16:00 (PVAH/PPOC/PVAL) · O = OVERNIGHT 18:00→09:30 (OVAH/OPOC/OVAL) · D = DEVELOPING (live)
+let vpP = Object.assign({ on: loadJSON('rt_vp', true), color: '#3b82f6' }, loadJSON('rt_vp_p', null));
+let vpO = Object.assign({ on: true, color: '#26c6da' }, loadJSON('rt_vp_o', null));
+let vpD = Object.assign({ on: loadJSON('rt_vp_today', true), color: '#f0b90b' }, loadJSON('rt_vp_d', null));
+let vpPData = null, vpPKey = null, vpOData = null, vpOKey = null, vpDData = null, vpDEdge = -1;
 let emaPeriods = (loadJSON('rt_ema_p', [10]) || [10])
   .filter(n => Number.isFinite(n) && n >= 1).slice(0, 6); // guard persisted value
 const BB_PERIOD = 20, BB_MULT = 2;
@@ -801,10 +805,10 @@ function setEmaPeriods(csv) {
   computeEMA(); indicatorRepaint(); toast('EMA: ' + list.join('/'));
 }
 
-// ---------- Volume Profile: PRIOR day (fixed) + TODAY (developing) — POC + 70% value area (VAH/VAL) ----------
-const VP_FILL = 'rgba(38,166,154,0.16)', VP_FILL_VA = 'rgba(38,166,154,0.42)', VP_POC = '#ef5350', VP_VA = '#3b82f6';
-const VPT_FILL = 'rgba(240,185,11,0.12)', VPT_FILL_VA = 'rgba(240,185,11,0.34)', VPT_POC = '#f0b90b', VPT_VA = '#f0b90b';
+// ---------- Volume Profile trio: PREV-day NY session + OVERNIGHT + DEVELOPING — POC + 70% value area ----------
 const VP_BINS = 80;
+const vpRgba = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; };
+const vpCol = (c, tag) => ({ fill: vpRgba(c, 0.10), fillVA: vpRgba(c, 0.26), poc: c, va: c, tag });   // one user color per profile; POC = thicker line
 function buildProfile(idxs) {   // volume-by-price over the given base-bar indices → bins + POC + 70% value area
   if (!idxs.length) return null;   // a single bar is enough (hi>lo guard below) — today's profile shows from the very first RTH bar
   let lo = Infinity, hi = -Infinity;
@@ -825,30 +829,49 @@ function buildProfile(idxs) {   // volume-by-price over the given base-bar indic
     poc: lo + (pocIdx + 0.5) * binH, vah: lo + (hiI + 1) * binH, val: lo + loI * binH };
 }
 function rthIdxs(s, endI) { const e = endI == null ? s.end : Math.min(endI, s.end), out = []; for (let i = s.start; i <= e; i++) { const m = etMinutes(baseBars[i].time); if (m >= 570 && m < 960) out.push(i); } return out; }
-function computeVP() {   // PRIOR day's RTH profile — static for the current day
-  vpData = null;
-  if (!vpOn || sessions.length < 2 || !baseBars.length) return;
+function onIdxs(s, endI) {   // OVERNIGHT bars of session s: 18:00 evening (m>=1080) through 09:29 morning (m<570)
+  const e = endI == null ? s.end : Math.min(endI, s.end), out = [];
+  for (let i = s.start; i <= e; i++) { const m = etMinutes(baseBars[i].time); if (m >= 1080 || m < 570) out.push(i); else break; }   // bars are ordered evening→morning→RTH; first RTH bar ends the overnight
+  return out;
+}
+const inOvernight = (m) => m >= 1080 || m < 570;
+function computeVPPrev() {   // PREV day's NY-session profile — fixed reference for the current day (PVAH/PPOC/PVAL)
+  vpPData = null;
+  if (!vpP.on || sessions.length < 2 || !baseBars.length) return;
   const pi = currentSessionIdx() - 1; if (pi < 0) return;
   const s = sessions[pi];
   let idxs = rthIdxs(s); if (idxs.length < 5) { idxs = []; for (let i = s.start; i <= s.end; i++) idxs.push(i); }   // holiday → full session
   const prof = buildProfile(idxs); if (!prof) return;
-  vpData = Object.assign(prof, { rangeStartTime: baseBars[idxs[0]].time, key: s.key });
+  vpPData = Object.assign(prof, { rangeStartTime: baseBars[idxs[0]].time, key: s.key });
 }
-function computeVPToday() {   // TODAY's developing RTH profile — only the bars revealed so far (grows as the replay advances)
-  vpTodayData = null;
-  if (!vpTodayOn || !sessions.length || !baseBars.length) return;
+function computeVPO() {   // CURRENT session's overnight profile — fixed once the replay has reached the 09:30 open (OVAH/OPOC/OVAL)
+  vpOData = null;
+  if (!vpO.on || !sessions.length || !baseBars.length) return;
   const ci = currentSessionIdx(); if (ci < 0) return;
-  const s = sessions[ci], idxs = rthIdxs(s, baseIdx);
-  const prof = buildProfile(idxs); if (!prof) return;
-  vpTodayData = Object.assign(prof, { rangeStartTime: baseBars[idxs[0]].time });
+  const s = sessions[ci];
+  if (inOvernight(etMinutes(curBaseT()))) return;   // still inside the overnight → the DEVELOPING profile covers it
+  const idxs = onIdxs(s); const prof = buildProfile(idxs); if (!prof) return;
+  vpOData = Object.assign(prof, { rangeStartTime: baseBars[idxs[0]].time, key: s.key });
 }
-function maybeUpdateVP() {   // prior-day recomputes on day change; today's recomputes whenever the revealed edge moves
+function computeVPD() {   // DEVELOPING profile of the segment being replayed: overnight 18:00→now, or NY session 09:30→now
+  vpDData = null;
+  if (!vpD.on || !sessions.length || !baseBars.length) return;
+  const ci = currentSessionIdx(); if (ci < 0) return;
+  const s = sessions[ci];
+  const idxs = inOvernight(etMinutes(curBaseT())) ? onIdxs(s, baseIdx) : rthIdxs(s, baseIdx);
+  const prof = buildProfile(idxs); if (!prof) return;
+  vpDData = Object.assign(prof, { rangeStartTime: baseBars[idxs[0]].time });
+}
+function maybeUpdateVP() {   // P on day change; O on day change or crossing the open; D whenever the revealed edge moves
   let dirty = false;
-  if (vpOn) { const s = sessions[currentSessionIdx()], k = s ? s.key : null; if (k !== vpSessionKey) { vpSessionKey = k; computeVP(); dirty = true; } }
-  else if (vpData) { vpData = null; vpSessionKey = null; dirty = true; }
-  if (vpTodayOn) { if (baseIdx !== vpTodayEdge) { vpTodayEdge = baseIdx; computeVPToday(); dirty = true; } }
-  else if (vpTodayData) { vpTodayData = null; vpTodayEdge = -1; dirty = true; }
-  if (dirty) vpRepaint();
+  const s = sessions[currentSessionIdx()];
+  if (vpP.on) { const k = s ? s.key : null; if (k !== vpPKey) { vpPKey = k; computeVPPrev(); dirty = true; } }
+  else if (vpPData) { vpPData = null; vpPKey = null; dirty = true; }
+  if (vpO.on) { const k = s ? s.key + ':' + (baseBars.length ? !inOvernight(etMinutes(curBaseT())) : 0) : null; if (k !== vpOKey) { vpOKey = k; computeVPO(); dirty = true; } }
+  else if (vpOData) { vpOData = null; vpOKey = null; dirty = true; }
+  if (vpD.on) { if (baseIdx !== vpDEdge) { vpDEdge = baseIdx; computeVPD(); dirty = true; } }
+  else if (vpDData) { vpDData = null; vpDEdge = -1; dirty = true; }
+  if (dirty) { vpRepaint(); renderIndLegend(); }   // keep the on-chart legend in lockstep with the recomputed levels
 }
 function drawVPProfile(ctx, ts, paneW, prof, col, dashed, labelLeft) {   // histogram + POC/VAH/VAL lines for one profile
   const y = p => candle.priceToCoordinate(p);
@@ -865,20 +888,21 @@ function drawVPProfile(ctx, ts, paneW, prof, col, dashed, labelLeft) {   // hist
     ctx.strokeStyle = color; ctx.lineWidth = w; ctx.setLineDash(dashed ? [5, 3] : []); ctx.beginPath(); ctx.moveTo(xa, yy); ctx.lineTo(paneW, yy); ctx.stroke(); ctx.setLineDash([]);
     ctx.font = '700 10px ui-monospace,monospace'; const txt = `${label} ${f2(price)}`, tw = ctx.measureText(txt).width + 8, lx = labelLeft ? xa + 2 : paneW - tw - 2;
     rrect(ctx, lx, yy - 7, tw, 14, 3); ctx.fillStyle = color; ctx.fill(); ctx.fillStyle = '#fff'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.fillText(txt, lx + 4, yy); };
-  drawLine(prof.vah, col.va, 1.4, col.tag + 'VAH');
-  drawLine(prof.val, col.va, 1.4, col.tag + 'VAL');
-  drawLine(prof.poc, col.poc, 1.6, col.tag + 'POC');
+  drawLine(prof.vah, col.va, 1.2, col.tag + 'VAH');
+  drawLine(prof.val, col.va, 1.2, col.tag + 'VAL');
+  drawLine(prof.poc, col.poc, 1.8, col.tag + 'POC');
 }
 const vpPrimitive = {
   attached(p) { this._req = () => p.requestUpdate(); },   // wrap: keep p as receiver so the repaint request can't lose its binding
   updateAllViews() {},
   paneViews: () => [{ zOrder: () => 'bottom', renderer: () => ({ draw: (target) => {
-    if ((!vpOn || !vpData) && (!vpTodayOn || !vpTodayData)) return;
+    if ((!vpP.on || !vpPData) && (!vpO.on || !vpOData) && (!vpD.on || !vpDData)) return;
     try {
       target.useMediaCoordinateSpace((scope) => {
         const ctx = scope.context, ts = chart.timeScale(), paneW = (scope.mediaSize && scope.mediaSize.width) || 99999;
-        if (vpOn && vpData) drawVPProfile(ctx, ts, paneW, vpData, { fill: VP_FILL, fillVA: VP_FILL_VA, poc: VP_POC, va: VP_VA, tag: '' }, false, false);                 // prior day: solid, labels right
-        if (vpTodayOn && vpTodayData) drawVPProfile(ctx, ts, paneW, vpTodayData, { fill: VPT_FILL, fillVA: VPT_FILL_VA, poc: VPT_POC, va: VPT_VA, tag: 'd' }, true, true);   // developing: dashed amber, labels left
+        if (vpP.on && vpPData) drawVPProfile(ctx, ts, paneW, vpPData, vpCol(vpP.color, 'P'), false, false);   // prev NY session: solid, labels at the right end
+        if (vpO.on && vpOData) drawVPProfile(ctx, ts, paneW, vpOData, vpCol(vpO.color, 'O'), false, false);   // overnight: solid, labels at the right end
+        if (vpD.on && vpDData) drawVPProfile(ctx, ts, paneW, vpDData, vpCol(vpD.color, 'd'), true, true);     // developing: dashed, labels left
       });
       window.__vp = { n: ((window.__vp || {}).n || 0) + 1, ok: true };
     } catch (e) { window.__vp = { err: String(e) }; }
@@ -886,8 +910,12 @@ const vpPrimitive = {
 };
 if (candle.attachPrimitive) candle.attachPrimitive(vpPrimitive);
 function vpRepaint() { if (vpPrimitive._req) vpPrimitive._req(); }
-function setVp(on) { vpOn = on; saveJSON('rt_vp', vpOn); vpSessionKey = null; maybeUpdateVP(); vpRepaint(); renderIndLegend(); }
-function setVpToday(on) { vpTodayOn = on; saveJSON('rt_vp_today', vpTodayOn); vpTodayEdge = -1; maybeUpdateVP(); vpRepaint(); renderIndLegend(); }
+function setVpCfg(which, patch) {   // which: 'p'|'o'|'d' — toggle or recolor one profile, persist, recompute, repaint
+  const cfg = which === 'p' ? vpP : which === 'o' ? vpO : vpD;
+  Object.assign(cfg, patch); saveJSON('rt_vp_' + which, cfg);
+  vpPKey = null; vpOKey = null; vpDEdge = -1;
+  maybeUpdateVP(); vpRepaint(); renderIndLegend();
+}
 
 // ---------- drawings (horizontal line / trend line / ray / rectangle) ----------
 const drawingsPrimitive = {
@@ -1554,7 +1582,7 @@ function buildTfSelect() { $('tfSelect').innerHTML = TF_OPTIONS.map(m => `<optio
 function buildDataSelect() { $('dataSelect').innerHTML = DATASETS.map((ds, i) => `<option value="${i}" ${i === dataIdx ? 'selected' : ''}>${ds.label}</option>`).join(''); }
 
 // ---------- timeframe / index bookkeeping ----------
-function rebuildTf() { bars = aggregate(baseBars, tf); computeRipster(); computeIndicators(); oscCompute(); stampBarIndices(); rebuildHA(); vpSessionKey = null; }
+function rebuildTf() { bars = aggregate(baseBars, tf); computeRipster(); computeIndicators(); oscCompute(); stampBarIndices(); rebuildHA(); vpPKey = null; vpOKey = null; vpDEdge = -1; }
 function tfIndexAtBase(bi) { // TF-bar index whose bucket contains baseBars[bi]
   const t = baseBars[bi].time; let lo = 0, hi = bars.length - 1, ans = 0;
   while (lo <= hi) { const mid = (lo + hi) >> 1; if (bars[mid].time <= t) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
@@ -2673,8 +2701,12 @@ function wire() {
   $('indVwap').checked = vwapOn; $('indVwap').onchange = (e) => setVwap(e.target.checked);
   $('indBB').checked = bbOn; $('indBB').onchange = (e) => setBB(e.target.checked);
   $('indEma').checked = emaOn; $('indEma').onchange = (e) => setEMA(e.target.checked);
-  $('indVp').checked = vpOn; $('indVp').onchange = (e) => setVp(e.target.checked);
-  $('indVpToday').checked = vpTodayOn; $('indVpToday').onchange = (e) => setVpToday(e.target.checked);
+  $('indVpP').checked = vpP.on; $('indVpP').onchange = (e) => setVpCfg('p', { on: e.target.checked });
+  $('indVpO').checked = vpO.on; $('indVpO').onchange = (e) => setVpCfg('o', { on: e.target.checked });
+  $('indVpD').checked = vpD.on; $('indVpD').onchange = (e) => setVpCfg('d', { on: e.target.checked });
+  $('colVpP').value = vpP.color; $('colVpP').oninput = (e) => setVpCfg('p', { color: e.target.value });
+  $('colVpO').value = vpO.color; $('colVpO').oninput = (e) => setVpCfg('o', { color: e.target.value });
+  $('colVpD').value = vpD.color; $('colVpD').oninput = (e) => setVpCfg('d', { color: e.target.value });
   $('emaPeriods').value = emaPeriods.join(','); $('emaPeriods').onchange = (e) => setEmaPeriods(e.target.value);
   wireOsc();
   $('chartTypeSelect').value = chartType; $('chartTypeSelect').onchange = (e) => setChartType(e.target.value);
