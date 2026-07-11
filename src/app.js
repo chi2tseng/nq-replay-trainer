@@ -667,7 +667,7 @@ let emaOn  = loadJSON('rt_ema',  true);
 //   P = PREV day's NY session 09:30–16:00 (PVAH/PPOC/PVAL) · O = OVERNIGHT 18:00→09:30 (OVAH/OPOC/OVAL) · D = DEVELOPING (live)
 let vpP = Object.assign({ on: loadJSON('rt_vp', true), color: '#3b82f6' }, loadJSON('rt_vp_p', null));
 let vpO = Object.assign({ on: true, color: '#26c6da' }, loadJSON('rt_vp_o', null));
-let vpD = Object.assign({ on: loadJSON('rt_vp_today', true), color: '#f0b90b' }, loadJSON('rt_vp_d', null));
+let vpD = Object.assign({ on: loadJSON('rt_vp_today', true), color: '#f0b90b', align: 'right' }, loadJSON('rt_vp_d', null));   // align: 'right' = histogram hugs the right edge (TV-style), 'left' = anchored at session start
 let vpPData = null, vpPKey = null, vpOData = null, vpOKey = null, vpDData = null, vpDEdge = -1;
 let emaPeriods = (loadJSON('rt_ema_p', [10]) || [10])
   .filter(n => Number.isFinite(n) && n >= 1).slice(0, 6); // guard persisted value
@@ -887,7 +887,7 @@ function maybeUpdateVP() {   // P on day change; O on day change or crossing the
   else if (vpDData) { vpDData = null; vpDEdge = -1; dirty = true; }
   if (dirty) { vpRepaint(); renderIndLegend(); }   // keep the on-chart legend in lockstep with the recomputed levels
 }
-function drawVPProfile(ctx, ts, paneW, prof, col, dashed, labelLeft) {   // histogram + POC/VAH/VAL lines for one profile
+function drawVPProfile(ctx, ts, paneW, prof, col, dashed, labelLeft, alignRight) {   // histogram + POC/VAH/VAL lines; alignRight = bars grow leftward from the right edge
   const y = p => candle.priceToCoordinate(p);
   const yLo = y(prof.lo), yHi = y(prof.hi);
   let xa = ts.timeToCoordinate(prof.rangeStartTime); if (xa == null) xa = 4; xa = Math.max(4, xa);
@@ -896,7 +896,7 @@ function drawVPProfile(ctx, ts, paneW, prof, col, dashed, labelLeft) {   // hist
     for (let k = 0; k < prof.N; k++) { const v = prof.binVol[k]; if (v <= 0) continue;
       const bw = (v / prof.maxVol) * maxBarW, yTop = y(prof.lo + (k + 1) * prof.binH);
       ctx.fillStyle = (k >= prof.vaLoIdx && k <= prof.vaHiIdx) ? col.fillVA : col.fill;
-      ctx.fillRect(xa, yTop, bw, Math.max(1, binPx - 1)); }
+      ctx.fillRect(alignRight ? paneW - bw : xa, yTop, bw, Math.max(1, binPx - 1)); }
   }
   const drawLine = (price, color, w, label) => { const yy = y(price); if (yy == null) return;
     ctx.strokeStyle = color; ctx.lineWidth = w; ctx.setLineDash(dashed ? [5, 3] : []); ctx.beginPath(); ctx.moveTo(xa, yy); ctx.lineTo(paneW, yy); ctx.stroke(); ctx.setLineDash([]);
@@ -916,7 +916,7 @@ const vpPrimitive = {
         const ctx = scope.context, ts = chart.timeScale(), paneW = (scope.mediaSize && scope.mediaSize.width) || 99999;
         if (vpP.on && vpPData) drawVPProfile(ctx, ts, paneW, vpPData, vpCol(vpP.color, 'P'), false, false);   // prev NY session: solid, labels at the right end
         if (vpO.on && vpOData) drawVPProfile(ctx, ts, paneW, vpOData, vpCol(vpO.color, 'O'), false, false);   // overnight: solid, labels at the right end
-        if (vpD.on && vpDData) drawVPProfile(ctx, ts, paneW, vpDData, vpCol(vpD.color, 'd'), true, false);    // developing: dashed, labels at the right end like P/O
+        if (vpD.on && vpDData) drawVPProfile(ctx, ts, paneW, vpDData, vpCol(vpD.color, 'd'), true, false, (vpD.align || 'right') === 'right');   // developing: dashed, labels right; histogram side user-selectable
       });
       window.__vp = { n: ((window.__vp || {}).n || 0) + 1, ok: true };
     } catch (e) { window.__vp = { err: String(e) }; }
@@ -2722,6 +2722,7 @@ function wire() {
   $('colVpP').value = vpP.color; $('colVpP').oninput = (e) => setVpCfg('p', { color: e.target.value });
   $('colVpO').value = vpO.color; $('colVpO').oninput = (e) => setVpCfg('o', { color: e.target.value });
   $('colVpD').value = vpD.color; $('colVpD').oninput = (e) => setVpCfg('d', { color: e.target.value });
+  $('vpDAlign').value = vpD.align || 'right'; $('vpDAlign').onchange = (e) => setVpCfg('d', { align: e.target.value });
   $('emaPeriods').value = emaPeriods.join(','); $('emaPeriods').onchange = (e) => setEmaPeriods(e.target.value);
   wireOsc();
   $('chartTypeSelect').value = chartType; $('chartTypeSelect').onchange = (e) => setChartType(e.target.value);

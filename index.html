@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>NQ Replay Trainer</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0e16'/%3E%3Cline x1='11' y1='5' x2='11' y2='27' stroke='%2316c784' stroke-width='2'/%3E%3Crect x='8' y='12' width='6' height='11' rx='1' fill='%2316c784'/%3E%3Cline x1='21' y1='6' x2='21' y2='28' stroke='%23ea3943' stroke-width='2'/%3E%3Crect x='18' y='10' width='6' height='9' rx='1' fill='%23ea3943'/%3E%3C/svg%3E" />
-<link rel="stylesheet" href="src/styles.css?v=68" />
+<link rel="stylesheet" href="src/styles.css?v=69" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,400..600,0..1,0&display=block">
@@ -42,6 +42,7 @@
           <div class="pop-row vp-row"><input type="checkbox" id="indVpO" /><span class="vp-name">Overnight <span class="vp-tags">OVAH·OPOC·OVAL</span></span><input type="color" id="colVpO" class="vp-color" title="Overnight color" /></div>
           <div class="pop-note">18:00→09:30 ET; appears once the replay reaches the open</div>
           <div class="pop-row vp-row"><input type="checkbox" id="indVpD" /><span class="vp-name">Developing <span class="vp-tags">live</span></span><input type="color" id="colVpD" class="vp-color" title="Developing color" /></div>
+          <div class="pop-row sub"><span>Histogram side</span><select id="vpDAlign"><option value="right">Right edge</option><option value="left">Session start</option></select></div>
           <div class="pop-note">builds as you replay — overnight before the open, NY session after; dashed</div>
           <div class="pop-h" style="margin-top:10px">Oscillator (sub-pane)</div>
           <div class="pop-row sub"><span>Mode</span>
@@ -236,6 +237,6 @@
 <div id="dayDetail" class="day-detail"></div>
 <div id="logModal" class="day-detail"></div>
 <div id="settleModal" class="day-detail"></div>
-<script src="src/app.js?v=68"></script>
+<script src="src/app.js?v=69"></script>
 </body>
 </html>
