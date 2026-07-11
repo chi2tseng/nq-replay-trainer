@@ -907,7 +907,7 @@ const vpPrimitive = {
         const ctx = scope.context, ts = chart.timeScale(), paneW = (scope.mediaSize && scope.mediaSize.width) || 99999;
         if (vpP.on && vpPData) drawVPProfile(ctx, ts, paneW, vpPData, vpCol(vpP.color, 'P'), false, false);   // prev NY session: solid, labels at the right end
         if (vpO.on && vpOData) drawVPProfile(ctx, ts, paneW, vpOData, vpCol(vpO.color, 'O'), false, false);   // overnight: solid, labels at the right end
-        if (vpD.on && vpDData) drawVPProfile(ctx, ts, paneW, vpDData, vpCol(vpD.color, 'd'), true, true);     // developing: dashed, labels left
+        if (vpD.on && vpDData) drawVPProfile(ctx, ts, paneW, vpDData, vpCol(vpD.color, 'd'), true, false);    // developing: dashed, labels at the right end like P/O
       });
       window.__vp = { n: ((window.__vp || {}).n || 0) + 1, ok: true };
     } catch (e) { window.__vp = { err: String(e) }; }
