@@ -211,9 +211,9 @@ function plannedStopTicks(side, kind, price) {   // stop distance (ticks) the ac
   const a = atm[activeAtm] || {};
   if (a.struct) {                                // structural stop = signal/current bar's opposite extreme ±1 tick
     const ext = curBarExtreme();
-    const oppExtreme = side === 'long' ? ext.lo - TICK : ext.hi + TICK;
     const entryRef = kind === 'stop' ? rnd(side === 'long' ? ext.hi + TICK : ext.lo - TICK)   // breakout level
                    : kind === 'limit' ? (price || curPx()) : curPx();
+    const oppExtreme = side === 'long' ? Math.min(ext.lo, entryRef) - TICK : Math.max(ext.hi, entryRef) + TICK;   // same clamp as structBracket → sizing matches the actual bracket
     return Math.max(1, Math.round(Math.abs(entryRef - oppExtreme) / TICK));
   }
   return a.sl > 0 ? a.sl : 0;                    // fixed SL ticks (0 = template has no stop → can't size)
@@ -233,11 +233,20 @@ function renderRiskReadout() {
   };
   box.style.display = ''; box.innerHTML = cell('long', 'buy', 'BUY') + cell('short', 'sell', 'SELL');
 }
+function structBracket(side, kind, price) {   // R-based bracket AT ORDER TIME for struct ATMs: stop beyond the signal bar / entry structure, target = rr × risk (the right-panel R dial)
+  const a = atm[activeAtm] || {}; if (!a.struct) return null;
+  const ext = curBarExtreme(), long = side === 'long';
+  const stopPx = rnd(long ? Math.min(ext.lo, price) - TICK : Math.max(ext.hi, price) + TICK);   // clamp: a deep pullback limit keeps the stop on the correct side of entry
+  const slT = Math.max(1, Math.round(Math.abs(price - stopPx) / TICK));
+  return { slTicks: slT, tgts: [{ ticks: Math.max(1, Math.round(slT * (a.rr || 1))), qty: 1 }] };
+}
 function placeEntryAt(side, kind, price) {
   if (position) return toast('Already in a position — flatten first');
-  const mult = Math.max(1, parseInt($('qty').value, 10) || 1);
-  entryOrder = { side, kind, price: rnd(price), atm: activeAtm, mult, ...bracketFromAtm(activeAtm) };
-  toast(`${side === 'long' ? 'Buy' : 'Sell'} ${kind === 'limit' ? 'Limit' : 'Stop'} @ ${f2(rnd(price))} + bracket`);
+  price = rnd(price);
+  const bracket = structBracket(side, kind, price) || bracketFromAtm(activeAtm);   // limit AND stop orders get the R bracket up front
+  const mult = (riskOn && bracket.slTicks && sizeForRisk(bracket.slTicks)) || Math.max(1, parseInt($('qty').value, 10) || 1);
+  entryOrder = { side, kind, price, atm: activeAtm, mult, ...bracket };
+  toast(`${side === 'long' ? 'Buy' : 'Sell'} ${kind === 'limit' ? 'Limit' : 'Stop'} @ ${f2(price)} + bracket`);
   drawLines(); renderLive();
 }
 function moveStopTo(price) { if (!position) return; const s = orders.find(o => o.type === 'stop'); if (s) s.price = rnd(price); else orders.push({ type: 'stop', price: rnd(price), qty: position.qty }); drawLines(); renderLive(); toast('Stop → ' + f2(rnd(price))); }
@@ -2000,6 +2009,7 @@ function onEntryButton(side) {
     } else {
       price = rnd(parseFloat($('entryPrice').value));
       if (!price) return toast('Enter an entry price');
+      if (a.struct) bracket = structBracket(side, 'limit', price);   // limit orders: SL/TP planned NOW from the R dial, not at the fill bar
     }
     const mult = resolveQty(side, kind, price);
     entryOrder = { side, kind, price, atm: activeAtm, mult, ...(bracket || bracketFromAtm(activeAtm)) };
