@@ -806,7 +806,7 @@ function setEmaPeriods(csv) {
 }
 
 // ---------- Volume Profile trio: PREV-day NY session + OVERNIGHT + DEVELOPING — POC + 70% value area ----------
-const VP_BINS = 80;
+const VP_MAX_BINS = 4000;   // tick-per-bin cap for pathological ranges (a 1000-pt NQ range = 4000 tick bins)
 const vpRgba = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; };
 const vpCol = (c, tag) => ({ fill: vpRgba(c, 0.10), fillVA: vpRgba(c, 0.26), poc: c, va: c, tag });   // one user color per profile; POC = thicker line
 function buildProfile(idxs) {   // volume-by-price over the given base-bar indices → bins + POC + 70% value area
@@ -814,10 +814,14 @@ function buildProfile(idxs) {   // volume-by-price over the given base-bar indic
   let lo = Infinity, hi = -Infinity;
   for (const i of idxs) { const b = baseBars[i]; if (b.low < lo) lo = b.low; if (b.high > hi) hi = b.high; }
   if (!(hi > lo)) return null;
-  const N = VP_BINS, binH = (hi - lo) / N, binVol = new Array(N).fill(0);
+  // MAX resolution: one bin per TICK level, so POC/VAH/VAL land on exact tick prices; uniform-bin fallback only for pathological ranges
+  const tickBins = Math.round((hi - lo) / TICK) + 1, tickAligned = tickBins <= VP_MAX_BINS;
+  const N = tickAligned ? tickBins : VP_MAX_BINS;
+  const binH = tickAligned ? TICK : (hi - lo) / N, lo0 = tickAligned ? lo - TICK / 2 : lo;
+  const binVol = new Array(N).fill(0);
+  const binOf = (p) => Math.max(0, Math.min(N - 1, tickAligned ? Math.round((p - lo) / TICK) : Math.floor((p - lo) / binH)));
   for (const i of idxs) { const b = baseBars[i];
-    const a = Math.max(0, Math.min(N - 1, Math.floor((b.low - lo) / binH)));
-    const z = Math.max(0, Math.min(N - 1, Math.floor((b.high - lo) / binH)));
+    const a = binOf(b.low), z = binOf(b.high);
     const per = (b.volume || 1) / (z - a + 1);
     for (let k = a; k <= z; k++) binVol[k] += per;
   }
@@ -825,8 +829,9 @@ function buildProfile(idxs) {   // volume-by-price over the given base-bar indic
   const total = binVol.reduce((x, v) => x + v, 0), target = total * 0.7;
   let loI = pocIdx, hiI = pocIdx, acc = binVol[pocIdx];
   while (acc < target && (loI > 0 || hiI < N - 1)) { const up = hiI < N - 1 ? binVol[hiI + 1] : -1, dn = loI > 0 ? binVol[loI - 1] : -1; if (up >= dn) acc += binVol[++hiI]; else acc += binVol[--loI]; }
-  return { binVol, N, lo, hi, binH, maxVol: Math.max(...binVol), vaLoIdx: loI, vaHiIdx: hiI,
-    poc: lo + (pocIdx + 0.5) * binH, vah: lo + (hiI + 1) * binH, val: lo + loI * binH };
+  const price = (k, edge) => tickAligned ? rnd(lo + k * TICK) : lo + (k + edge) * binH;   // tick bins → the exact tick level; uniform → old edge/center semantics
+  return { binVol, N, lo: lo0, hi: lo0 + N * binH, binH, maxVol: Math.max(...binVol), vaLoIdx: loI, vaHiIdx: hiI,
+    poc: price(pocIdx, 0.5), vah: price(hiI, 1), val: price(loI, 0) };
 }
 function rthIdxs(s, endI) { const e = endI == null ? s.end : Math.min(endI, s.end), out = []; for (let i = s.start; i <= e; i++) { const m = etMinutes(baseBars[i].time); if (m >= 570 && m < 960) out.push(i); } return out; }
 function onIdxs(s, endI) {   // OVERNIGHT bars of session s: 18:00 evening (m>=1080) through 09:29 morning (m<570)
