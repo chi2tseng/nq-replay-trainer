@@ -40,13 +40,15 @@ const tradingDayKey = (ts) => etFmt.format(new Date((ts + 6 * 3600) * 1000)); //
 function etMinutes(ts) { const p = etHM.formatToParts(new Date(ts * 1000)); let h = 0, m = 0; for (const x of p) { if (x.type === 'hour') h = +x.value; else if (x.type === 'minute') m = +x.value; } return h * 60 + m; } // minutes since midnight ET (DST-correct)
 // ET formatters for the LWC time axis (tick labels) + crosshair label — timestamps are UTC epoch s
 const _TM = (window.LightweightCharts && LightweightCharts.TickMarkType) || { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 };
-function etTickFmt(ts, type) { const o = etP(ts); if (type === _TM.Year || type === _TM.Month || type === _TM.DayOfMonth) return rndMode ? '·' : `${o.month}/${o.day}`; if (type === _TM.TimeWithSeconds) return `${o.hour}:${o.minute}:${o.second}`; return `${o.hour}:${o.minute}`; }   // random mode hides date-level labels (blind practice)
-const etCrosshairFmt = (ts) => { const o = etP(ts); return rndMode ? `${o.hour}:${o.minute} ET` : `${o.month}/${o.day} ${o.hour}:${o.minute} ET`; };
+const blindDate = () => rndMode || quizMode;   // random + quiz modes hide the calendar date so the practice stays honest
+function etTickFmt(ts, type) { const o = etP(ts); if (type === _TM.Year || type === _TM.Month || type === _TM.DayOfMonth) return blindDate() ? '·' : `${o.month}/${o.day}`; if (type === _TM.TimeWithSeconds) return `${o.hour}:${o.minute}:${o.second}`; return `${o.hour}:${o.minute}`; }
+const etCrosshairFmt = (ts) => { const o = etP(ts); return blindDate() ? `${o.hour}:${o.minute} ET` : `${o.month}/${o.day} ${o.hour}:${o.minute} ET`; };
 const loadJSON = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const saveJSON = (k, v) => localStorage.setItem(k, JSON.stringify(v));
 
 // ---------- state ----------
 let rndMode = false, rndCurKey = null, rndStartCount = 0, rndRounds = [], rndPrevMin = null, rndSettled = false;   // random-date practice mode
+let quizMode = false;   // quiz mode: replay the user's OWN past trades up to the bar before entry and re-decide (declared here so the date-blinding formatters can read it)
 let rndSavedTrades = null, rndSavedMarkers = null;   // real trades/markers parked while the random-mode sandbox runs
 let baseBars = [];           // raw 1-min bars
 let bars = [];               // current-timeframe bars (each carries subStart/subEnd into baseBars)
@@ -1929,13 +1931,14 @@ function updateRndHud() {   // live game HUD over the chart: round #, running P&
   const ss = el.querySelector('.rh-streak'); ss.style.display = streak >= 2 ? '' : 'none';
   if (streak >= 2) ss.innerHTML = `<span class="material-symbols-outlined">local_fire_department</span>${streak}`;
 }
-function wireRndHudDrag() {   // let the game HUD be dragged anywhere over the chart so it never blocks the bars; position persists
-  const el = $('rndHud'); if (!el) return;
-  const pos = loadJSON('rt_hud_pos', null);
+function wireRndHudDrag() { wireCardDrag('rndHud', 'rt_hud_pos', '#rhEnd'); }
+function wireCardDrag(elId, storeKey, skipSel) {   // let a chart overlay card be dragged anywhere so it never blocks the bars; position persists
+  const el = $(elId); if (!el) return;
+  const pos = loadJSON(storeKey, null);
   if (pos && typeof pos.left === 'number') { el.style.left = pos.left + 'px'; el.style.top = pos.top + 'px'; el.style.right = 'auto'; }
   let drag = null;
   el.addEventListener('mousedown', (e) => {
-    if (e.target.closest('#rhEnd')) return;                    // let the End-round button click through
+    if (skipSel && e.target.closest(skipSel)) return;           // let buttons inside the card click through
     e.stopPropagation(); e.preventDefault();                  // don't start a chart pan
     const r = el.getBoundingClientRect(), wrap = $('chartwrap').getBoundingClientRect();
     el.style.left = (r.left - wrap.left) + 'px'; el.style.top = (r.top - wrap.top) + 'px'; el.style.right = 'auto';   // freeze current spot as left/top (so a plain click doesn't jump it)
@@ -1951,7 +1954,7 @@ function wireRndHudDrag() {   // let the game HUD be dragged anywhere over the c
   window.addEventListener('mouseup', () => {
     if (!drag) return;
     drag = null; el.style.cursor = '';
-    saveJSON('rt_hud_pos', { left: parseFloat(el.style.left) || 0, top: parseFloat(el.style.top) || 0 });
+    saveJSON(storeKey, { left: parseFloat(el.style.left) || 0, top: parseFloat(el.style.top) || 0 });
   });
 }
 function rndRoundStats() {
@@ -2009,6 +2012,140 @@ function openSettle() {   // settlement dashboard: this day's stats + running to
   $('stClose').onclick = closeSettle;
 }
 function closeSettle() { const el = $('settleModal'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } }
+
+// ---------- QUIZ mode: replay YOUR real trades to the bar before entry, re-decide, then see what you actually did ----------
+const QUIZ_TF = 3;                 // questions are posed on 3-minute bars
+let quizAll = [], quizQs = [], quizIdx = 0, quizAns = [], quizShown = false;
+let quizSaveTf = null, quizSaveTrades = null, quizSaveMarkers = null, quizSaveShow = null;
+const baseIdxAt = (t) => { let a = 0, b = baseBars.length - 1, r = -1; while (a <= b) { const m = (a + b) >> 1; if (baseBars[m].time <= t) { r = m; a = m + 1; } else b = m - 1; } return r; };   // last base bar at/before t
+async function loadQuizTrades() {
+  if (quizAll.length) return true;
+  try { const r = await fetch('data/quiz_trades.json?v=' + new Date().toISOString().slice(0, 10)); if (!r.ok) throw 0; quizAll = await r.json(); }
+  catch (e) { toast('data/quiz_trades.json not found'); return false; }
+  return quizAll.length > 0;
+}
+async function enterQuiz() {
+  if (quizMode) return exitQuiz();
+  if (locked()) return toast('Flatten & cancel orders before the quiz');
+  if (!(await loadQuizTrades())) return;
+  if (!/NQ/.test(INSTR.symbol)) return toast('Switch to an NQ dataset — the quiz log is MNQ');
+  const lo = baseBars[0].time, hi = baseBars[baseBars.length - 1].time;
+  const pool = quizAll.filter(q => q.revealTime >= lo && q.exitTime <= hi);   // only questions this dataset can actually replay
+  if (!pool.length) return toast('This dataset does not cover any of the logged trades');
+  quizQs = pool.slice(); for (let i = quizQs.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [quizQs[i], quizQs[j]] = [quizQs[j], quizQs[i]]; }   // shuffle so you can't ride the calendar
+  quizAns = []; quizIdx = 0; quizMode = true;
+  quizSaveTf = tf; quizSaveTrades = trades; quizSaveMarkers = markers; quizSaveShow = showTrades;
+  trades = []; markers = []; showTrades = true;                              // sandbox: your journal is parked, the chart shows only quiz markers
+  const b = $('btnQuiz'); if (b) b.classList.add('active');
+  const hud = $('quizCard'); if (hud) hud.style.display = '';
+  if (pool.length < quizAll.length) toast(`Quiz: ${pool.length} of ${quizAll.length} trades replayable`);
+  quizGoto(0);
+}
+function exitQuiz() {
+  quizMode = false;
+  trades = quizSaveTrades || []; markers = quizSaveMarkers || []; if (quizSaveShow != null) showTrades = quizSaveShow;
+  quizSaveTrades = quizSaveMarkers = null;
+  if (quizSaveTf != null && quizSaveTf !== tf) { tf = quizSaveTf; rebuildTf(); syncIdxFromBase(); hardReveal(); const s = $('tfSelect'); if (s) s.value = String(tf); }
+  quizSaveTf = null;
+  const b = $('btnQuiz'); if (b) b.classList.remove('active');
+  const hud = $('quizCard'); if (hud) hud.style.display = 'none';
+  closeQuizScore(); refreshMarkers();
+  try { chart.timeScale().applyOptions({}); } catch (e) {}                   // un-blind the axis date labels
+  renderAll();
+}
+function quizGoto(i) {
+  if (i >= quizQs.length) return quizFinish();
+  const q = quizQs[i]; quizIdx = i; quizShown = false;
+  position = null; entryOrder = null; orders = []; markers = [];             // a stray hotkey trade must not leak into the next question
+  pause();
+  if (tf !== QUIZ_TF) { tf = QUIZ_TF; rebuildTf(); const s = $('tfSelect'); if (s) s.value = String(QUIZ_TF); }
+  baseIdx = Math.max(0, baseIdxAt(q.revealTime + (QUIZ_TF * 60 - 60)));      // last 1-min sub-bar of the 3m bar that CLOSES right before the entry bar
+  syncIdxFromBase(); hardReveal(); fitRecent(90); refreshMarkers(); renderAll();
+  renderQuizCard();
+}
+function quizAnswer(ans) {
+  if (!quizMode || quizShown) return;
+  const q = quizQs[quizIdx]; if (!q) return;
+  quizAns[quizIdx] = ans; quizShown = true;
+  const end = baseIdxAt(q.exitTime + QUIZ_TF * 60 * 4);                      // play the outcome out, plus a few bars of follow-through
+  baseIdx = Math.min(baseBars.length - 1, Math.max(baseIdx, end));
+  syncIdxFromBase(); hardReveal();
+  markers = [                                                               // reveal what you actually did
+    { baseTime: q.entryTime, position: q.side === 'long' ? 'belowBar' : 'aboveBar', color: q.side === 'long' ? '#26a69a' : '#ef5350', shape: q.side === 'long' ? 'arrowUp' : 'arrowDown', text: `YOU ${q.side === 'long' ? 'LONG' : 'SHORT'} ${f2(q.entry)}` },
+    { baseTime: q.exitTime, position: q.side === 'long' ? 'aboveBar' : 'belowBar', color: q.pnl >= 0 ? '#26a69a' : '#ef5350', shape: q.side === 'long' ? 'arrowDown' : 'arrowUp', text: `${usd(q.pnl)}` }
+  ];
+  refreshMarkers(); fitRecent(110); renderAll();
+  renderQuizCard();
+}
+function quizVerdict(q, a) {   // how this answer compares to what actually happened
+  const win = q.pnl > 0, loss = q.pnl < 0;
+  if (a === 'skip') return loss ? { k: 'good', t: 'Dodged a loser' } : win ? { k: 'miss', t: 'Passed on a winner' } : { k: 'flat', t: 'Passed on a scratch' };
+  if (a === q.side) return win ? { k: 'good', t: 'Took the winner again' } : loss ? { k: 'bad', t: 'Repeated the loser' } : { k: 'flat', t: 'Same scratch trade' };
+  return loss ? { k: 'good', t: 'Faded it — right call' } : win ? { k: 'bad', t: 'Faded a winner' } : { k: 'flat', t: 'Faded a scratch' };
+}
+function renderQuizCard() {
+  const el = $('quizCard'); if (!el || !quizMode) return;
+  const q = quizQs[quizIdx]; if (!q) return;
+  const n = quizQs.length, sideTxt = s => s === 'long' ? 'LONG' : s === 'short' ? 'SHORT' : 'SKIP';
+  if (!quizShown) {
+    el.innerHTML = `<div class="qz-head"><span class="qz-n">Q ${quizIdx + 1} / ${n}</span><span class="qz-tf">${q.etHM} ET · ${QUIZ_TF}m</span></div>`
+      + `<div class="qz-ask">Do you take this trade?</div>`
+      + `<div class="qz-btns"><button class="qz-b buy" data-a="long">LONG</button><button class="qz-b sell" data-a="short">SHORT</button><button class="qz-b skip" data-a="skip">SKIP</button></div>`
+      + `<div class="qz-foot">last closed bar before your real entry</div>`;
+  } else {
+    const a = quizAns[quizIdx], v = quizVerdict(q, a), s = quizScore();
+    el.innerHTML = `<div class="qz-head"><span class="qz-n">Q ${quizIdx + 1} / ${n}</span><span class="qz-tf">${q.etHM} ET</span></div>`
+      + `<div class="qz-cmp"><span>You <b class="${a === 'long' ? 'pos' : a === 'short' ? 'neg' : ''}">${sideTxt(a)}</b></span><span>Then <b class="${q.side === 'long' ? 'pos' : 'neg'}">${sideTxt(q.side)}</b></span></div>`
+      + `<div class="qz-res ${q.pnl >= 0 ? 'pos' : 'neg'}">${usd(q.pnl)}</div>`
+      + `<div class="qz-sub">${q.qty} lot · ${q.holdMin}min · ${f2(q.entry)} → ${f2(q.exit)}</div>`
+      + `<div class="qz-verdict ${v.k}">${v.t}</div>`
+      + `<div class="qz-run">Sim ${usd(s.simPnl)} · You-then ${usd(s.realPnl)} · ${s.n}/${n} answered</div>`
+      + `<div class="qz-btns"><button class="qz-b next" data-a="next">${quizIdx + 1 >= n ? 'See results' : 'Next question'}</button></div>`;
+  }
+  el.querySelectorAll('.qz-b').forEach(b => b.onclick = (e) => { e.stopPropagation(); const a = b.dataset.a; if (a === 'next') quizGoto(quizIdx + 1); else quizAnswer(a); });
+}
+function quizScore() {
+  const r = { n: 0, agree: 0, opp: 0, skip: 0, dodged: 0, losers: 0, caught: 0, winners: 0, simPnl: 0, realPnl: 0, good: 0 };
+  quizQs.forEach((q, i) => {
+    const a = quizAns[i]; if (!a) return;
+    r.n++; r.realPnl += q.pnl;
+    if (q.pnl > 0) r.winners++; else if (q.pnl < 0) r.losers++;
+    if (a === 'skip') { r.skip++; if (q.pnl < 0) r.dodged++; }
+    else if (a === q.side) { r.agree++; r.simPnl += q.pnl; if (q.pnl > 0) r.caught++; }
+    else { r.opp++; r.simPnl -= q.pnl; }
+    if (quizVerdict(q, a).k === 'good') r.good++;
+  });
+  return r;
+}
+function quizFinish() {
+  const el = $('quizModal'); if (!el) return;
+  const s = quizScore(), n = quizQs.length;
+  const pct = (a, b) => b ? Math.round(100 * a / b) + '%' : '–';
+  const cell = (k, v, cls) => `<div class="st-cell"><div class="st-k">${k}</div><div class="st-v ${cls || ''}">${v}</div></div>`;
+  const delta = s.simPnl - s.realPnl;
+  el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">Quiz results</span> · ${s.n} answered</div>`
+    + `<button class="dd-x" id="qzClose"><span class="material-symbols-outlined">close</span></button></div>`
+    + `<div class="st-over"><span class="st-badge ${delta > 0 ? 'win' : delta < 0 ? 'loss' : 'flat'}">${delta > 0 ? 'IMPROVED' : delta < 0 ? 'WORSE' : 'LEVEL'}</span>`
+    + `<div class="st-big ${delta >= 0 ? 'pos' : 'neg'}">${delta >= 0 ? '+' : ''}${usd(delta)}</div>`
+    + `<div class="st-tally"><span>Today's calls <b class="${s.simPnl >= 0 ? 'pos' : 'neg'}">${usd(s.simPnl)}</b></span><span>You back then <b class="${s.realPnl >= 0 ? 'pos' : 'neg'}">${usd(s.realPnl)}</b></span></div></div>`
+    + `<div class="st-grid">`
+    + cell('Dodged losers', `${s.dodged} / ${s.losers}`, s.dodged > s.losers / 2 ? 'pos' : '')
+    + cell('Kept winners', `${s.caught} / ${s.winners}`, s.caught > s.winners / 2 ? 'pos' : '')
+    + cell('Good calls', `${s.good} / ${s.n} · ${pct(s.good, s.n)}`)
+    + cell('Same side', String(s.agree))
+    + cell('Faded', String(s.opp))
+    + cell('Skipped', String(s.skip))
+    + `</div>`
+    + `<div class="st-run">Each chip = one question · green = good call, red = bad, grey = neutral</div>`
+    + `<div class="qz-chips">` + quizQs.map((q, i) => { const a = quizAns[i]; if (!a) return `<span class="qz-chip"></span>`;
+        const v = quizVerdict(q, a); return `<span class="qz-chip ${v.k}" title="${escHtml(q.day + ' ' + q.etHM + ' · you ' + a + ' · then ' + q.side + ' · ' + usd(q.pnl) + ' · ' + v.t)}">${i + 1}</span>`; }).join('') + `</div>`
+    + `<div class="st-actions"><button id="qzAgain" class="primary"><span class="material-symbols-outlined">replay</span>New round</button><button id="qzExit">Exit quiz</button></div></div>`;
+  el.classList.add('open');
+  $('qzAgain').onclick = () => { closeQuizScore(); quizAns = []; for (let i = quizQs.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [quizQs[i], quizQs[j]] = [quizQs[j], quizQs[i]]; } quizGoto(0); };
+  $('qzExit').onclick = () => { const d = quizScore(); exitQuiz(); toast(`Quiz done · your calls ${usd(d.simPnl)} vs then ${usd(d.realPnl)}`); };
+  $('qzClose').onclick = closeQuizScore;
+}
+function closeQuizScore() { const el = $('quizModal'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } }
 
 function onEntryButton(side) {
   if (position) { if (position.side !== side) return flatten('reverse'); return toast('Already in a position — FLATTEN first'); }
@@ -2203,7 +2340,7 @@ function setShowTrades(on) {
 // ---------- rendering ----------
 function renderAll() { renderLive(); renderTrades(); renderDash(); }
 function renderLive() {
-  $('clock').textContent = baseBars.length ? (rndMode ? tFmt(curBaseT()).replace(/^\d\d\/\d\d\s*/, '') : tFmt(curBaseT())) : '--:--';   // random mode: time only, date blinded
+  $('clock').textContent = baseBars.length ? (blindDate() ? tFmt(curBaseT()).replace(/^\d\d\/\d\d\s*/, '') : tFmt(curBaseT())) : '--:--';   // blind modes: time only, date hidden
   $('clockPrice').textContent = baseBars.length ? f2(curPx()) : '--';
   maybeUpdateVP();   // recompute the prior-day volume profile when the trading day changes
   updateAlertBar();  // keep the alert-time vertical line anchored to the current session
@@ -2233,7 +2370,7 @@ function renderLive() {
   const _db = $('dateBtn'); if (_db) _db.disabled = lock || rndMode;   // random mode keeps day-jump + scrub blinded
   const _pn = $('btnPrevDay'), _nn = $('btnNextDay'), _ps = $('btnPickStart');
   if (_pn) _pn.disabled = rndMode; if (_nn) _nn.disabled = rndMode; if (_ps) _ps.disabled = rndMode;
-  const _dl = $('dateLabel'); if (_dl) { const _s = sessions[currentSessionIdx()]; _dl.textContent = rndMode ? '· · ·' : (_s ? _s.key : '—'); }
+  const _dl = $('dateLabel'); if (_dl) { const _s = sessions[currentSessionIdx()]; _dl.textContent = blindDate() ? '· · ·' : (_s ? _s.key : '—'); }
   $('entryPriceRow').style.display = $('entryType').value === 'market' ? 'none' : '';
   renderRiskReadout();
 }
@@ -2711,6 +2848,9 @@ function wire() {
   $('btnSettleNow').onclick = settleNow;
   { const rh = $('rhEnd'); if (rh) rh.onclick = settleNow; }
   wireRndHudDrag();
+  $('btnQuiz').onclick = enterQuiz;
+  wireCardDrag('quizCard', 'rt_quiz_pos', '.qz-b');
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('quizModal') && $('quizModal').classList.contains('open')) closeQuizScore(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('settleModal') && $('settleModal').classList.contains('open')) closeSettle(); });
   $('btnAlert').onclick = setAlertTime; renderAlertLbl();
   $('annUp').onclick = () => setTool('au');

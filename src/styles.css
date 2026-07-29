@@ -808,3 +808,36 @@ button.bs-stop.sell:hover:not(:disabled){ background:#33262a; border-color:var(-
 .ctx-atm span{ font-size:11px; color:var(--dim); }
 .ctx-atm select{ flex:1; font-size:12px; padding:3px 6px; max-width:180px; }
 .ctx-atm:hover{ background:transparent; }
+
+/* ===================== Quiz mode: question card + results ===================== */
+#btnQuiz.active{ border-color:var(--brand); color:var(--brand); }
+#quizCard{ position:absolute; top:12px; right:12px; z-index:21; width:238px; padding:13px 14px; cursor:grab;
+  background:rgba(19,23,34,.9); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+  border:1px solid var(--line); border-radius:10px; box-shadow:0 8px 28px rgba(0,0,0,.5); user-select:none; }
+.qz-head{ display:flex; justify-content:space-between; align-items:baseline; font-family:var(--mono); font-size:11px; }
+.qz-n{ font-weight:700; letter-spacing:1.4px; color:var(--brand); }
+.qz-tf{ color:var(--dim); }
+.qz-ask{ font-size:14px; font-weight:600; margin:10px 0 9px; }
+.qz-btns{ display:flex; gap:6px; }
+.qz-b{ flex:1; padding:9px 4px; font-weight:700; font-size:12px; letter-spacing:.5px; border-radius:6px; }
+.qz-b.buy{ background:var(--green); border-color:var(--green); color:#fff; }
+.qz-b.sell{ background:var(--red); border-color:var(--red); color:#fff; }
+.qz-b.skip{ background:var(--panel2); color:var(--dim); }
+.qz-b.next{ background:var(--brand); border-color:var(--brand); color:var(--on-brand); }
+.qz-foot{ font-size:10px; color:var(--dim); margin-top:8px; text-align:center; }
+.qz-cmp{ display:flex; justify-content:space-between; font-size:12px; color:var(--dim); margin:9px 0 4px; }
+.qz-cmp b{ font-family:var(--mono); }
+.qz-res{ font-family:var(--mono); font-size:26px; font-weight:800; line-height:1.2; font-variant-numeric:tabular-nums; }
+.qz-sub{ font-family:var(--mono); font-size:10px; color:var(--dim); margin-bottom:8px; }
+.qz-verdict{ font-size:12px; font-weight:700; padding:5px 8px; border-radius:5px; text-align:center; margin-bottom:8px; }
+.qz-verdict.good{ background:rgba(38,166,154,.16); color:var(--green); }
+.qz-verdict.bad{ background:rgba(239,83,80,.16); color:var(--red); }
+.qz-verdict.miss{ background:rgba(240,185,11,.14); color:#f0b90b; }
+.qz-verdict.flat{ background:var(--panel2); color:var(--dim); }
+.qz-run{ font-family:var(--mono); font-size:10px; color:var(--dim); margin-bottom:9px; }
+.qz-chips{ display:flex; flex-wrap:wrap; gap:4px; margin:8px 0 4px; }
+.qz-chip{ width:22px; height:20px; display:inline-flex; align-items:center; justify-content:center;
+  font-family:var(--mono); font-size:10px; border-radius:4px; background:var(--panel2); color:var(--dim); cursor:default; }
+.qz-chip.good{ background:rgba(38,166,154,.28); color:var(--green); }
+.qz-chip.bad{ background:rgba(239,83,80,.28); color:var(--red); }
+.qz-chip.miss{ background:rgba(240,185,11,.24); color:#f0b90b; }
