@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Entry Quiz — 你的真實進場點考試</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0e16'/%3E%3Cline x1='11' y1='5' x2='11' y2='27' stroke='%2316c784' stroke-width='2'/%3E%3Crect x='8' y='12' width='6' height='11' rx='1' fill='%2316c784'/%3E%3Cline x1='21' y1='6' x2='21' y2='28' stroke='%23ea3943' stroke-width='2'/%3E%3Crect x='18' y='10' width='6' height='9' rx='1' fill='%23ea3943'/%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,400..600,0..1,0&display=block">
+<script src="lib/lightweight-charts.standalone.production.js"></script>
+<style>
+:root{
+  --bg:#131722; --panel:#1e222d; --panel2:#2a2e39; --line:#2a2e39;
+  --txt:#d1d4dc; --dim:#9aa0ad; --brand:#2962ff; --brand-hi:#1e53e5;
+  --green:#26a69a; --red:#ef5350; --amber:#f0b90b;
+  --mono:ui-monospace,"SF Mono",Consolas,Menlo,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--txt);font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans TC",sans-serif;-webkit-font-smoothing:antialiased}
+#app{display:grid;grid-template-rows:auto minmax(0,1fr) auto;height:100vh}
+.material-symbols-outlined{font-variation-settings:'opsz' 20,'wght' 400;font-size:19px;line-height:1;vertical-align:middle}
+button{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--panel2);color:var(--txt);border-radius:6px;padding:7px 12px;font-weight:500;transition:background .12s,border-color .12s,filter .12s}
+button:hover:not(:disabled){background:#2f3340;border-color:#363a45}
+button:active:not(:disabled){filter:brightness(.94)}
+button:disabled{opacity:.38;cursor:not-allowed}
+button:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
+
+/* ---- header: progress + ALWAYS-ON scoreboard ---- */
+header{background:var(--panel);border-bottom:1px solid var(--line);padding:9px 14px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.brand{font-weight:700;letter-spacing:.3px;color:var(--brand);display:flex;align-items:center;gap:6px;white-space:nowrap}
+.prog{display:flex;align-items:center;gap:9px;min-width:190px}
+.prog-n{font-family:var(--mono);font-size:12px;color:var(--dim);white-space:nowrap}
+.prog-bar{flex:1;height:5px;background:var(--panel2);border-radius:99px;overflow:hidden;min-width:70px}
+.prog-fill{height:100%;width:0;background:linear-gradient(90deg,var(--brand),var(--green));border-radius:99px;transition:width .2s}
+.score{margin-left:auto;display:flex;gap:16px;flex-wrap:wrap}
+.sc{display:flex;flex-direction:column;line-height:1.25}
+.sc-k{font-size:10px;color:var(--dim);letter-spacing:.4px;text-transform:uppercase;white-space:nowrap}
+.sc-v{font-family:var(--mono);font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.sc-v small{font-size:11px;font-weight:500;color:var(--dim)}
+.pos{color:var(--green)} .neg{color:var(--red)} .amb{color:var(--amber)}
+
+/* ---- chart ---- */
+#chartwrap{position:relative;min-height:0}
+#chart{position:absolute;inset:0}
+#badge{position:absolute;top:12px;left:12px;z-index:5;background:rgba(19,23,34,.88);border:1px solid var(--line);border-radius:8px;padding:8px 11px;font-family:var(--mono);font-size:11px;color:var(--dim);pointer-events:none}
+#badge b{color:var(--txt);font-size:13px}
+
+/* ---- action bar ---- */
+footer{background:var(--panel);border-top:1px solid var(--line);padding:12px 14px;min-height:96px;display:flex;align-items:center;gap:12px}
+.ask{font-size:15px;font-weight:600;white-space:nowrap}
+.ask small{display:block;font-size:11px;font-weight:400;color:var(--dim);margin-top:2px}
+.acts{display:flex;gap:10px;margin-left:auto}
+.big{min-width:132px;padding:13px 18px;font-weight:700;font-size:14px;letter-spacing:.6px;border-radius:8px}
+.big kbd{display:block;font-size:9px;font-weight:500;opacity:.75;margin-top:3px;font-family:var(--mono)}
+.buy{background:var(--green);border-color:var(--green);color:#fff}
+.buy:hover:not(:disabled){background:#2bb9ab;border-color:#2bb9ab}
+.sell{background:var(--red);border-color:var(--red);color:#fff}
+.sell:hover:not(:disabled){background:#f2635f;border-color:#f2635f}
+.skip{background:var(--panel2);color:var(--dim)}
+.next{background:var(--brand);border-color:var(--brand);color:#fff}
+.next:hover:not(:disabled){background:var(--brand-hi);border-color:var(--brand-hi)}
+.rev{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+.rev-cmp{font-size:13px;color:var(--dim)}
+.rev-cmp b{font-family:var(--mono);font-size:14px}
+.rev-pnl{font-family:var(--mono);font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1}
+.rev-sub{font-family:var(--mono);font-size:11px;color:var(--dim)}
+.verdict{padding:7px 13px;border-radius:7px;font-weight:700;font-size:13px}
+.verdict.good{background:rgba(38,166,154,.16);color:var(--green)}
+.verdict.bad{background:rgba(239,83,80,.16);color:var(--red)}
+.verdict.miss{background:rgba(240,185,11,.14);color:var(--amber)}
+.verdict.flat{background:var(--panel2);color:var(--dim)}
+
+/* ---- results overlay ---- */
+#res{position:fixed;inset:0;z-index:200;background:rgba(8,11,18,.82);display:none;align-items:flex-start;justify-content:center;padding:26px;overflow:auto}
+#res.open{display:flex}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;max-width:900px;width:100%;padding:22px 24px}
+.card h2{margin:0 0 4px;font-size:17px}
+.card .sub{color:var(--dim);font-size:12px;margin-bottom:16px}
+.hero{text-align:center;padding:6px 0 16px;border-bottom:1px solid var(--line);margin-bottom:16px}
+.tag{display:inline-block;font-family:var(--mono);font-size:12px;font-weight:800;letter-spacing:2.4px;padding:5px 15px;border-radius:99px}
+.tag.win{background:rgba(38,166,154,.16);color:var(--green)}
+.tag.loss{background:rgba(239,83,80,.16);color:var(--red)}
+.tag.flat{background:var(--panel2);color:var(--dim)}
+.hero-n{font-family:var(--mono);font-size:42px;font-weight:800;line-height:1.1;margin-top:9px;font-variant-numeric:tabular-nums}
+.hero-s{color:var(--dim);font-size:12px;margin-top:7px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:9px;margin-bottom:16px}
+.cell{background:var(--panel2);border-radius:7px;padding:9px 11px}
+.cell .k{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px}
+.cell .v{font-family:var(--mono);font-size:16px;font-weight:700;margin-top:3px;font-variant-numeric:tabular-nums}
+.chips{display:flex;flex-wrap:wrap;gap:4px;margin:10px 0 18px}
+.chip{width:23px;height:21px;display:inline-flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;border-radius:4px;background:var(--panel2);color:var(--dim)}
+.chip.good{background:rgba(38,166,154,.3);color:var(--green)}
+.chip.bad{background:rgba(239,83,80,.3);color:var(--red)}
+.chip.miss{background:rgba(240,185,11,.26);color:var(--amber)}
+.brk{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:18px}
+.brk th{text-align:left;color:var(--dim);font-weight:500;font-size:10px;text-transform:uppercase;letter-spacing:.4px;padding:5px 8px;border-bottom:1px solid var(--line)}
+.brk td{padding:6px 8px;border-bottom:1px solid rgba(42,46,57,.5);font-family:var(--mono)}
+.brk td:first-child{font-family:inherit;color:var(--dim)}
+.row-end{display:flex;gap:10px}
+#loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg);z-index:300;color:var(--dim);gap:10px}
+.spin{width:17px;height:17px;border:2px solid var(--panel2);border-top-color:var(--brand);border-radius:50%;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+@media (max-width:820px){ .score{width:100%;margin-left:0} footer{flex-wrap:wrap} .acts{margin-left:0;width:100%} .big{flex:1;min-width:0} }
+</style>
+</head>
+<body>
+<div id="loading"><div class="spin"></div><span>載入題庫…</span></div>
+
+<div id="app">
+  <header>
+    <span class="brand"><span class="material-symbols-outlined">quiz</span>Entry Quiz</span>
+    <div class="prog">
+      <span class="prog-n" id="progN">— / —</span>
+      <div class="prog-bar"><div class="prog-fill" id="progFill"></div></div>
+    </div>
+    <div class="score">
+      <div class="sc"><span class="sc-k">新版勝率</span><span class="sc-v" id="scWr">–</span></div>
+      <div class="sc"><span class="sc-k">當時勝率</span><span class="sc-v" id="scWrThen">–</span></div>
+      <div class="sc"><span class="sc-k">模擬損益</span><span class="sc-v" id="scPnl">$0</span></div>
+      <div class="sc"><span class="sc-k">當時損益</span><span class="sc-v" id="scPnlThen">$0</span></div>
+      <div class="sc"><span class="sc-k">避開虧損</span><span class="sc-v" id="scDodge">0/0</span></div>
+      <div class="sc"><span class="sc-k">抓住獲利</span><span class="sc-v" id="scKeep">0/0</span></div>
+      <div class="sc"><button id="btnRes" title="隨時看目前成績"><span class="material-symbols-outlined">leaderboard</span></button></div>
+    </div>
+  </header>
+
+  <section id="chartwrap">
+    <div id="chart"></div>
+    <div id="badge">NQ · 3m · <b id="bTime">--:--</b> ET<br><span id="bNote">進場那根形成中</span></div>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+
+<div id="res"><div class="card" id="resCard"></div></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const f2 = v => (Math.round(v * 100) / 100).toFixed(2);
+const usd = v => (v < 0 ? '-$' : '$') + Math.abs(v).toFixed(2);
+const pct = (a, b) => b ? Math.round(100 * a / b) + '%' : '–';
+
+let QS = [], qi = 0, ans = [], shown = false, chart, candle;
+
+// ---------- chart ----------
+function initChart() {
+  const etP = ts => { const o = {}; for (const x of new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(ts * 1000))) o[x.type] = x.value; return o; };
+  chart = LightweightCharts.createChart($('chart'), {
+    layout: { background: { color: '#131722' }, textColor: '#9aa0ad', fontSize: 11 },
+    grid: { vertLines: { color: 'rgba(42,46,57,.55)' }, horzLines: { color: 'rgba(42,46,57,.55)' } },
+    rightPriceScale: { borderColor: '#2a2e39' },
+    // date is deliberately blinded — you should not be able to recognise the day
+    timeScale: { borderColor: '#2a2e39', timeVisible: true, secondsVisible: false, rightOffset: 8,
+                 tickMarkFormatter: (ts, type) => { const o = etP(ts); return type <= 2 ? '·' : `${o.hour}:${o.minute}`; } },
+    localization: { timeFormatter: ts => { const o = etP(ts); return `${o.hour}:${o.minute} ET`; } },
+    crosshair: { mode: 0 },
+    handleScroll: true, handleScale: true
+  });
+  candle = chart.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
+  new ResizeObserver(() => { const r = $('chart').getBoundingClientRect(); chart.resize(r.width - 1, r.height, true); chart.resize(r.width, r.height, true); }).observe($('chart'));
+}
+const cd = b => ({ time: b.t, open: b.o, high: b.h, low: b.l, close: b.c });
+
+// ---------- questions ----------
+function showQuestion() {
+  const q = QS[qi]; shown = false;
+  candle.setMarkers([]);
+  candle.setData(q.pre.concat([q.form]).map(cd));            // history + the entry bar, formed only to the minute you entered
+  chart.timeScale().setVisibleLogicalRange({ from: q.pre.length - 70, to: q.pre.length + 8 });
+  $('bTime').textContent = q.etHM;
+  $('bNote').textContent = `進場那根形成中(${q.formMin}/3 分鐘)`;
+  renderFoot(); renderScore();
+}
+function answer(a) {
+  if (shown) return;
+  const q = QS[qi]; ans[qi] = a; shown = true;
+  candle.setData(q.pre.concat(q.post).map(cd));              // play the outcome out
+  const eb = Math.floor(q.entryTime / 180) * 180, xb = Math.floor(q.exitTime / 180) * 180;
+  candle.setMarkers([
+    { time: eb, position: q.side === 'long' ? 'belowBar' : 'aboveBar', color: q.side === 'long' ? '#26a69a' : '#ef5350', shape: q.side === 'long' ? 'arrowUp' : 'arrowDown', text: `當時 ${q.side === 'long' ? '多' : '空'} ${f2(q.entry)}` },
+    { time: xb, position: q.side === 'long' ? 'aboveBar' : 'belowBar', color: q.pnl >= 0 ? '#26a69a' : '#ef5350', shape: q.side === 'long' ? 'arrowDown' : 'arrowUp', text: usd(q.pnl) }
+  ].sort((x, y) => x.time - y.time));
+  chart.timeScale().setVisibleLogicalRange({ from: q.pre.length - 60, to: q.pre.length + q.post.length + 4 });
+  $('bNote').textContent = '揭曉:當時的你';
+  renderFoot(); renderScore();
+}
+function next() { if (qi + 1 >= QS.length) { qi = QS.length; return showResults(); } qi++; showQuestion(); }
+
+function verdict(q, a) {
+  const w = q.pnl > 0, l = q.pnl < 0;
+  if (a === 'skip') return l ? { k: 'good', t: '成功避雷' } : w ? { k: 'miss', t: '錯過獲利' } : { k: 'flat', t: '跳過平盤單' };
+  if (a === q.side) return w ? { k: 'good', t: '抓住獲利' } : l ? { k: 'bad', t: '重蹈覆轍' } : { k: 'flat', t: '一樣平盤' };
+  return l ? { k: 'good', t: '反手正確' } : w ? { k: 'bad', t: '反手做錯' } : { k: 'flat', t: '反手平盤' };
+}
+const sideTxt = s => s === 'long' ? '做多' : s === 'short' ? '做空' : '不進場';
+
+function renderFoot() {
+  const q = QS[qi], f = $('foot');
+  if (!shown) {
+    f.innerHTML = `<div class="ask">這裡你要進場嗎?<small>${q.etHM} ET · 3 分 K · 只看得到進場那根形成中的樣子</small></div>`
+      + `<div class="acts">`
+      + `<button class="big buy" data-a="long">做多<kbd>A</kbd></button>`
+      + `<button class="big sell" data-a="short">做空<kbd>D</kbd></button>`
+      + `<button class="big skip" data-a="skip">不進場<kbd>S</kbd></button></div>`;
+  } else {
+    const a = ans[qi], v = verdict(q, a);
+    f.innerHTML = `<div class="rev">`
+      + `<div><div class="rev-cmp">你 <b class="${a === 'long' ? 'pos' : a === 'short' ? 'neg' : ''}">${sideTxt(a)}</b> · 當時 <b class="${q.side === 'long' ? 'pos' : 'neg'}">${sideTxt(q.side)}</b></div>`
+      + `<div class="rev-pnl ${q.pnl >= 0 ? 'pos' : 'neg'}">${usd(q.pnl)}</div>`
+      + `<div class="rev-sub">${q.qty} 口 · 持倉 ${q.holdMin} 分 · ${f2(q.entry)} → ${f2(q.exit)}</div></div>`
+      + `<div class="verdict ${v.k}">${v.t}</div></div>`
+      + `<div class="acts"><button class="big next" data-a="next">${qi + 1 >= QS.length ? '看成績' : '下一題'}<kbd>Enter</kbd></button></div>`;
+  }
+  f.querySelectorAll('button[data-a]').forEach(b => b.onclick = () => b.dataset.a === 'next' ? next() : answer(b.dataset.a));
+}
+
+// ---------- scoring (always visible) ----------
+function score() {
+  const r = { n: 0, taken: 0, simW: 0, simL: 0, winners: 0, losers: 0, dodged: 0, caught: 0, simPnl: 0, realPnl: 0, good: 0, agree: 0, opp: 0, skip: 0 };
+  QS.forEach((q, i) => {
+    const a = ans[i]; if (!a) return;
+    r.n++; r.realPnl += q.pnl;
+    if (q.pnl > 0) r.winners++; else if (q.pnl < 0) r.losers++;
+    if (a === 'skip') { r.skip++; if (q.pnl < 0) r.dodged++; }
+    else {
+      const p = a === q.side ? q.pnl : -q.pnl;   // 反手 = 同一出場點的鏡像結果(近似:你自己的停損停利會不同)
+      r.taken++; r.simPnl += p; if (p > 0) r.simW++; else if (p < 0) r.simL++;
+      if (a === q.side) { r.agree++; if (q.pnl > 0) r.caught++; } else r.opp++;
+    }
+    if (verdict(q, a).k === 'good') r.good++;
+  });
+  r.simWr = (r.simW + r.simL) ? Math.round(100 * r.simW / (r.simW + r.simL)) : null;
+  r.realWr = (r.winners + r.losers) ? Math.round(100 * r.winners / (r.winners + r.losers)) : null;
+  return r;
+}
+function renderScore() {
+  const s = score(), done = Math.min(qi + (shown ? 1 : 0), QS.length);
+  $('progN').textContent = `第 ${Math.min(qi + 1, QS.length)} / ${QS.length} 題`;
+  $('progFill').style.width = (100 * done / QS.length).toFixed(1) + '%';
+  const wr = $('scWr'); wr.textContent = s.simWr == null ? '–' : s.simWr + '%';
+  wr.innerHTML = (s.simWr == null ? '–' : s.simWr + '%') + (s.taken ? ` <small>${s.simW}W/${s.simL}L</small>` : '');
+  wr.className = 'sc-v ' + (s.simWr == null || s.realWr == null ? '' : s.simWr > s.realWr ? 'pos' : s.simWr < s.realWr ? 'neg' : '');
+  $('scWrThen').innerHTML = (s.realWr == null ? '–' : s.realWr + '%') + (s.n ? ` <small>${s.winners}W/${s.losers}L</small>` : '');
+  $('scPnl').textContent = usd(s.simPnl); $('scPnl').className = 'sc-v ' + (s.simPnl >= 0 ? 'pos' : 'neg');
+  $('scPnlThen').textContent = usd(s.realPnl); $('scPnlThen').className = 'sc-v ' + (s.realPnl >= 0 ? 'pos' : 'neg');
+  $('scDodge').innerHTML = `${s.dodged}/${s.losers}`; $('scDodge').className = 'sc-v ' + (s.losers && s.dodged > s.losers / 2 ? 'pos' : '');
+  $('scKeep').innerHTML = `${s.caught}/${s.winners}`; $('scKeep').className = 'sc-v ' + (s.winners && s.caught > s.winners / 2 ? 'pos' : '');
+}
+
+// ---------- results ----------
+function showResults() {
+  const s = score(), d = s.simPnl - s.realPnl;
+  const byGroup = (name, test) => {
+    const set = QS.map((q, i) => ({ q, a: ans[i] })).filter(x => x.a && test(x.q));
+    if (!set.length) return '';
+    let tk = 0, w = 0, l = 0, p = 0;
+    set.forEach(x => { if (x.a === 'skip') return; tk++; const v = x.a === x.q.side ? x.q.pnl : -x.q.pnl; p += v; if (v > 0) w++; else if (v < 0) l++; });
+    return `<tr><td>${name}</td><td>${set.length}</td><td>${tk}</td><td>${set.length - tk}</td><td>${pct(w, w + l)}</td><td class="${p >= 0 ? 'pos' : 'neg'}">${usd(p)}</td></tr>`;
+  };
+  $('resCard').innerHTML = `<h2>考試成績</h2><div class="sub">共 ${s.n} 題 · 題庫來自你 ${QS.length} 筆真實進場</div>`
+    + `<div class="hero"><span class="tag ${d > 0 ? 'win' : d < 0 ? 'loss' : 'flat'}">${d > 0 ? '有進步' : d < 0 ? '退步' : '持平'}</span>`
+    + `<div class="hero-n ${d >= 0 ? 'pos' : 'neg'}">${d >= 0 ? '+' : ''}${usd(d)}</div>`
+    + `<div class="hero-s">你這次的判斷 ${usd(s.simPnl)} &nbsp;vs&nbsp; 當時的你 ${usd(s.realPnl)}</div></div>`
+    + `<div class="grid">`
+    + `<div class="cell"><div class="k">新版勝率</div><div class="v ${s.realWr != null && s.simWr > s.realWr ? 'pos' : s.realWr != null && s.simWr < s.realWr ? 'neg' : ''}">${s.simWr == null ? '–' : s.simWr + '%'} <small style="font-size:11px;color:var(--dim)">${s.simW}W/${s.simL}L</small></div></div>`
+    + `<div class="cell"><div class="k">當時勝率(同題)</div><div class="v">${s.realWr == null ? '–' : s.realWr + '%'} <small style="font-size:11px;color:var(--dim)">${s.winners}W/${s.losers}L</small></div></div>`
+    + `<div class="cell"><div class="k">出手 / 跳過</div><div class="v">${s.taken} / ${s.skip}</div></div>`
+    + `<div class="cell"><div class="k">避開虧損單</div><div class="v ${s.losers && s.dodged > s.losers / 2 ? 'pos' : ''}">${s.dodged} / ${s.losers}</div></div>`
+    + `<div class="cell"><div class="k">抓住獲利單</div><div class="v ${s.winners && s.caught > s.winners / 2 ? 'pos' : ''}">${s.caught} / ${s.winners}</div></div>`
+    + `<div class="cell"><div class="k">好判斷</div><div class="v">${s.good} / ${s.n} · ${pct(s.good, s.n)}</div></div>`
+    + `</div>`
+    + `<table class="brk"><tr><th>分類</th><th>題數</th><th>出手</th><th>跳過</th><th>勝率</th><th>模擬損益</th></tr>`
+    + byGroup('當時做多的題', q => q.side === 'long') + byGroup('當時做空的題', q => q.side === 'short')
+    + byGroup('當時賺錢的題', q => q.pnl > 0) + byGroup('當時賠錢的題', q => q.pnl < 0)
+    + byGroup('11:00 前', q => q.etHM < '11:00') + byGroup('11:00 後', q => q.etHM >= '11:00')
+    + `</table>`
+    + `<div class="chips">` + QS.map((q, i) => { const a = ans[i]; if (!a) return `<span class="chip"></span>`;
+        const v = verdict(q, a); return `<span class="chip ${v.k}" title="${q.etHM} ET · 你${sideTxt(a)} · 當時${sideTxt(q.side)} · ${usd(q.pnl)} · ${v.t}">${i + 1}</span>`; }).join('') + `</div>`
+    + `<div class="row-end"><button class="next" id="again"><span class="material-symbols-outlined">replay</span> 重新測驗</button>`
+    + `<button id="close">關閉</button></div>`;
+  $('res').classList.add('open');
+  $('again').onclick = () => { $('res').classList.remove('open'); start(); };
+  $('close').onclick = () => { $('res').classList.remove('open'); if (qi >= QS.length) { qi = QS.length - 1; shown = true; renderFoot(); } };
+}
+
+// ---------- boot ----------
+function start() {
+  for (let i = QS.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [QS[i], QS[j]] = [QS[j], QS[i]]; }
+  ans = []; qi = 0; showQuestion();
+}
+document.addEventListener('keydown', e => {
+  if ($('res').classList.contains('open')) return;
+  const k = e.key.toLowerCase();
+  if (!shown && (k === 'a' || k === '1')) answer('long');
+  else if (!shown && (k === 'd' || k === '3')) answer('short');
+  else if (!shown && (k === 's' || k === '2')) answer('skip');
+  else if (shown && (k === 'enter' || k === ' ')) { e.preventDefault(); next(); }
+});
+$('btnRes').onclick = showResults;
+(async () => {
+  try {
+    const r = await fetch('data/quiz_bars.json?v=' + new Date().toISOString().slice(0, 10));
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    QS = await r.json();
+    if (!QS.length) throw new Error('題庫是空的');
+  } catch (err) {
+    $('loading').innerHTML = `<span style="color:var(--red)">載入題庫失敗:${err.message}<br>先跑 <code>py scripts/build_quiz_bars.py</code></span>`;
+    return;
+  }
+  initChart(); start();
+  $('loading').style.display = 'none';
+})();
+</script>
+</body>
+</html>
