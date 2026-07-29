@@ -2059,8 +2059,12 @@ function quizGoto(i) {
   position = null; entryOrder = null; orders = []; markers = [];             // a stray hotkey trade must not leak into the next question
   pause();
   if (tf !== QUIZ_TF) { tf = QUIZ_TF; rebuildTf(); const s = $('tfSelect'); if (s) s.value = String(QUIZ_TF); }
-  baseIdx = Math.max(0, baseIdxAt(q.revealTime + (QUIZ_TF * 60 - 60)));      // last 1-min sub-bar of the 3m bar that CLOSES right before the entry bar
-  syncIdxFromBase(); hardReveal(); fitRecent(90); refreshMarkers(); renderAll();
+  // Land INSIDE the entry bar: it forms only up to the minute you actually entered and never completes.
+  // syncIdxFromBase() deliberately snaps back to the last COMPLETE tf bar, so drive idx directly and
+  // finish with commitForming() — the same path playback uses to paint a partial candle.
+  baseIdx = Math.max(0, baseIdxAt(q.entryTime));
+  idx = tfIndexAtBase(baseIdx);
+  hardReveal(); commitForming(); fitRecent(90); refreshMarkers(); renderAll();
   renderQuizCard();
 }
 function quizAnswer(ans) {
@@ -2091,7 +2095,7 @@ function renderQuizCard() {
     el.innerHTML = `<div class="qz-head"><span class="qz-n">Q ${quizIdx + 1} / ${n}</span><span class="qz-tf">${q.etHM} ET · ${QUIZ_TF}m</span></div>`
       + `<div class="qz-ask">Do you take this trade?</div>`
       + `<div class="qz-btns"><button class="qz-b buy" data-a="long">LONG</button><button class="qz-b sell" data-a="short">SHORT</button><button class="qz-b skip" data-a="skip">SKIP</button></div>`
-      + `<div class="qz-foot">last closed bar before your real entry</div>`;
+      + `<div class="qz-foot">your entry bar, still forming</div>`;
   } else {
     const a = quizAns[quizIdx], v = quizVerdict(q, a), s = quizScore();
     el.innerHTML = `<div class="qz-head"><span class="qz-n">Q ${quizIdx + 1} / ${n}</span><span class="qz-tf">${q.etHM} ET</span></div>`
@@ -2099,22 +2103,28 @@ function renderQuizCard() {
       + `<div class="qz-res ${q.pnl >= 0 ? 'pos' : 'neg'}">${usd(q.pnl)}</div>`
       + `<div class="qz-sub">${q.qty} lot · ${q.holdMin}min · ${f2(q.entry)} → ${f2(q.exit)}</div>`
       + `<div class="qz-verdict ${v.k}">${v.t}</div>`
-      + `<div class="qz-run">Sim ${usd(s.simPnl)} · You-then ${usd(s.realPnl)} · ${s.n}/${n} answered</div>`
+      + `<div class="qz-run">Sim ${usd(s.simPnl)} · then ${usd(s.realPnl)} · WR ${s.simWr == null ? '–' : s.simWr + '%'} vs ${s.realWr == null ? '–' : s.realWr + '%'} · ${s.n}/${n}</div>`
       + `<div class="qz-btns"><button class="qz-b next" data-a="next">${quizIdx + 1 >= n ? 'See results' : 'Next question'}</button></div>`;
   }
   el.querySelectorAll('.qz-b').forEach(b => b.onclick = (e) => { e.stopPropagation(); const a = b.dataset.a; if (a === 'next') quizGoto(quizIdx + 1); else quizAnswer(a); });
 }
 function quizScore() {
-  const r = { n: 0, agree: 0, opp: 0, skip: 0, dodged: 0, losers: 0, caught: 0, winners: 0, simPnl: 0, realPnl: 0, good: 0 };
+  const r = { n: 0, agree: 0, opp: 0, skip: 0, dodged: 0, losers: 0, caught: 0, winners: 0, simPnl: 0, realPnl: 0, good: 0,
+              taken: 0, simW: 0, simL: 0 };
   quizQs.forEach((q, i) => {
     const a = quizAns[i]; if (!a) return;
     r.n++; r.realPnl += q.pnl;
     if (q.pnl > 0) r.winners++; else if (q.pnl < 0) r.losers++;
     if (a === 'skip') { r.skip++; if (q.pnl < 0) r.dodged++; }
-    else if (a === q.side) { r.agree++; r.simPnl += q.pnl; if (q.pnl > 0) r.caught++; }
-    else { r.opp++; r.simPnl -= q.pnl; }
+    else {
+      const p = a === q.side ? q.pnl : -q.pnl;   // faded = the mirror outcome at the same exit point (approximation: your own stop/target would differ)
+      r.taken++; r.simPnl += p; if (p > 0) r.simW++; else if (p < 0) r.simL++;
+      if (a === q.side) { r.agree++; if (q.pnl > 0) r.caught++; } else r.opp++;
+    }
     if (quizVerdict(q, a).k === 'good') r.good++;
   });
+  r.simWr = (r.simW + r.simL) ? Math.round(100 * r.simW / (r.simW + r.simL)) : null;         // win rate of the trades you WOULD have taken
+  r.realWr = (r.winners + r.losers) ? Math.round(100 * r.winners / (r.winners + r.losers)) : null;   // win rate you actually had, same question set
   return r;
 }
 function quizFinish() {
@@ -2129,6 +2139,9 @@ function quizFinish() {
     + `<div class="st-big ${delta >= 0 ? 'pos' : 'neg'}">${delta >= 0 ? '+' : ''}${usd(delta)}</div>`
     + `<div class="st-tally"><span>Today's calls <b class="${s.simPnl >= 0 ? 'pos' : 'neg'}">${usd(s.simPnl)}</b></span><span>You back then <b class="${s.realPnl >= 0 ? 'pos' : 'neg'}">${usd(s.realPnl)}</b></span></div></div>`
     + `<div class="st-grid">`
+    + cell('New win rate', s.simWr == null ? '–' : `${s.simWr}% · ${s.simW}W/${s.simL}L`, s.realWr != null && s.simWr > s.realWr ? 'pos' : s.realWr != null && s.simWr < s.realWr ? 'neg' : '')
+    + cell('Then, same set', s.realWr == null ? '–' : `${s.realWr}% · ${s.winners}W/${s.losers}L`)
+    + cell('Trades taken', `${s.taken} / ${s.n}`)
     + cell('Dodged losers', `${s.dodged} / ${s.losers}`, s.dodged > s.losers / 2 ? 'pos' : '')
     + cell('Kept winners', `${s.caught} / ${s.winners}`, s.caught > s.winners / 2 ? 'pos' : '')
     + cell('Good calls', `${s.good} / ${s.n} · ${pct(s.good, s.n)}`)
