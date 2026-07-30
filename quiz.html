@@ -166,13 +166,32 @@ function initChart() {
   new ResizeObserver(() => { const r = $('chart').getBoundingClientRect(); chart.resize(r.width - 1, r.height, true); chart.resize(r.width, r.height, true); }).observe($('chart'));
 }
 const cd = b => ({ time: b.t, open: b.o, high: b.h, low: b.l, close: b.c });
+// Put `price` on the pane's centre line. Autoscale frames the visible bars, then scaleMargins
+// shift that band; solving for the margins is what actually centres a given price instead of
+// leaving it pinned near an edge. `vis` must be the same bars the time scale will show.
+function frameOn(price, vis) {
+  let lo = Infinity, hi = -Infinity;
+  vis.forEach(b => { if (b.l < lo) lo = b.l; if (b.h > hi) hi = b.h; });
+  const ps = chart.priceScale('right');
+  if (!(hi > lo)) { ps.applyOptions({ autoScale: true, scaleMargins: { top: .1, bottom: .1 } }); return; }
+  const f = (hi - price) / (hi - lo);            // 0 = price at the top of the range, 1 = at the bottom
+  const EDGE = .05, cl = v => Math.max(.02, Math.min(.45, v));
+  let t, b;
+  if (f <= .5) { b = EDGE; t = (.5 - (1 - EDGE) * f) / (1 - f); }   // price high in the range -> pad the top
+  else { t = EDGE; b = (1 - EDGE) - .45 / f; }                      // price low in the range -> pad the bottom
+  ps.applyOptions({ autoScale: true, scaleMargins: { top: cl(t), bottom: cl(b) } });
+}
 
 // ---------- questions ----------
 function showQuestion() {
   const q = QS[qi]; shown = false;
   candle.setMarkers([]);
-  candle.setData(q.pre.concat([q.form]).map(cd));            // history + the entry bar, formed only to the minute you entered
-  chart.timeScale().setVisibleLogicalRange({ from: q.pre.length - 70, to: q.pre.length + 8 });
+  candle.setData(q.pre.concat([q.form]).map(cd));            // history + the entry bar, formed only up to the entry second
+  // Re-frame vertically every question: panning or zooming turns autoscale off, and the next
+  // question can sit 1,000+ points away, which would leave its candles off-screen entirely.
+  const from = Math.max(0, q.pre.length - 70);
+  frameOn(q.entry, q.pre.concat([q.form]).slice(from));   // your fill price lands on the centre line
+  chart.timeScale().setVisibleLogicalRange({ from, to: q.pre.length + 8 });
   $('bTime').textContent = q.etHM;
   $('bNote').textContent = `進場當下 第 ${q.formSec} 秒 · 這根還沒收(收盤 = 你的成交價)`;
   renderFoot(); renderScore();
@@ -186,6 +205,7 @@ function answer(a) {
     { time: eb, position: q.side === 'long' ? 'belowBar' : 'aboveBar', color: q.side === 'long' ? '#26a69a' : '#ef5350', shape: q.side === 'long' ? 'arrowUp' : 'arrowDown', text: `當時 ${q.side === 'long' ? '多' : '空'} ${f2(q.entry)}` },
     { time: xb, position: q.side === 'long' ? 'aboveBar' : 'belowBar', color: q.pnl >= 0 ? '#26a69a' : '#ef5350', shape: q.side === 'long' ? 'arrowDown' : 'arrowUp', text: usd(q.pnl) }
   ].sort((x, y) => x.time - y.time));
+  chart.priceScale('right').applyOptions({ autoScale: true, scaleMargins: { top: .1, bottom: .1 } });   // reveal: frame the whole move, not just the entry
   chart.timeScale().setVisibleLogicalRange({ from: q.pre.length - 60, to: q.pre.length + q.post.length + 4 });
   $('bNote').textContent = '揭曉:當時的你';
   renderFoot(); renderScore();
