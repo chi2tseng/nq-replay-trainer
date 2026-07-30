@@ -174,7 +174,7 @@ function showQuestion() {
   candle.setData(q.pre.concat([q.form]).map(cd));            // history + the entry bar, formed only to the minute you entered
   chart.timeScale().setVisibleLogicalRange({ from: q.pre.length - 70, to: q.pre.length + 8 });
   $('bTime').textContent = q.etHM;
-  $('bNote').textContent = `進場那根形成中(${q.formMin}/3 分鐘)`;
+  $('bNote').textContent = `進場當下 第 ${q.formSec} 秒 · 這根還沒收(收盤 = 你的成交價)`;
   renderFoot(); renderScore();
 }
 function answer(a) {
@@ -203,7 +203,7 @@ const sideTxt = s => s === 'long' ? '做多' : s === 'short' ? '做空' : '不�
 function renderFoot() {
   const q = QS[qi], f = $('foot');
   if (!shown) {
-    f.innerHTML = `<div class="ask">這裡你要進場嗎?<small>${q.etHM} ET · 3 分 K · 只看得到進場那根形成中的樣子</small></div>`
+    f.innerHTML = `<div class="ask">這裡你要進場嗎?<small>${q.etHM} ET · 3 分 K · 畫面就是你按下去那一秒的樣子,最後一根還沒收</small></div>`
       + `<div class="acts"><button class="endq" data-a="end">結束測驗</button>`
       + `<button class="big buy" data-a="long">做多<kbd>A</kbd></button>`
       + `<button class="big sell" data-a="short">做空<kbd>D</kbd></button>`
@@ -312,7 +312,9 @@ document.addEventListener('keydown', e => {
 $('btnRes').onclick = showResults;
 (async () => {
   try {
-    const r = await fetch('data/quiz_bars.json?v=' + new Date().toISOString().slice(0, 10));
+    // always take the freshest build: a per-day key silently served a stale question bank
+    // after a same-day rebuild, and 600 KB off local disk costs nothing.
+    const r = await fetch('data/quiz_bars.json?v=' + Date.now(), { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     QS = await r.json();
     if (!QS.length) throw new Error('題庫是空的');

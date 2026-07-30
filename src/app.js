@@ -2064,7 +2064,15 @@ function quizGoto(i) {
   // finish with commitForming() — the same path playback uses to paint a partial candle.
   baseIdx = Math.max(0, baseIdxAt(q.entryTime));
   idx = tfIndexAtBase(baseIdx);
-  hardReveal(); commitForming(); fitRecent(90); refreshMarkers(); renderAll();
+  hardReveal();
+  // Pin the forming candle to the entry INSTANT, not the entry minute: the fill price is where
+  // price stood at that second, and only minutes that had already closed contribute the range.
+  { const s = bars[idx].subStart, emin = Math.floor(q.entryTime / 60) * 60;
+    fBucket = bars[idx].time; fO = baseBars[s].open; fC = q.entry;
+    fH = Math.max(fO, q.entry); fL = Math.min(fO, q.entry); fV = 0;
+    for (let i = s; i < baseBars.length && baseBars[i].time < emin; i++) {
+      fH = Math.max(fH, baseBars[i].high); fL = Math.min(fL, baseBars[i].low); fV += baseBars[i].volume; } }
+  commitForming(); fitRecent(90); refreshMarkers(); renderAll();
   renderQuizCard();
 }
 function quizAnswer(ans) {
