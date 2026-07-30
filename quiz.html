@@ -61,6 +61,10 @@ footer{background:var(--panel);border-top:1px solid var(--line);padding:12px 14p
 .skip{background:var(--panel2);color:var(--dim)}
 .next{background:var(--brand);border-color:var(--brand);color:#fff}
 .next:hover:not(:disabled){background:var(--brand-hi);border-color:var(--brand-hi)}
+.endq{background:transparent;border-color:var(--line);color:var(--dim);font-size:12px;padding:9px 12px;align-self:center}
+.endq:hover:not(:disabled){background:var(--panel2);color:var(--txt)}
+.endq-top{display:inline-flex;align-items:center;gap:5px;padding:6px 11px;font-size:12px;font-weight:600;background:var(--panel2);border-color:#3a3f4a}
+.endq-top .material-symbols-outlined{font-size:17px}
 .rev{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
 .rev-cmp{font-size:13px;color:var(--dim)}
 .rev-cmp b{font-family:var(--mono);font-size:14px}
@@ -122,7 +126,7 @@ footer{background:var(--panel);border-top:1px solid var(--line);padding:12px 14p
       <div class="sc"><span class="sc-k">當時損益</span><span class="sc-v" id="scPnlThen">$0</span></div>
       <div class="sc"><span class="sc-k">避開虧損</span><span class="sc-v" id="scDodge">0/0</span></div>
       <div class="sc"><span class="sc-k">抓住獲利</span><span class="sc-v" id="scKeep">0/0</span></div>
-      <div class="sc"><button id="btnRes" title="隨時看目前成績"><span class="material-symbols-outlined">leaderboard</span></button></div>
+      <div class="sc"><button id="btnRes" class="endq-top" title="中途結束,直接看成績(Esc)"><span class="material-symbols-outlined">flag</span>結束測驗</button></div>
     </div>
   </header>
 
@@ -200,7 +204,7 @@ function renderFoot() {
   const q = QS[qi], f = $('foot');
   if (!shown) {
     f.innerHTML = `<div class="ask">這裡你要進場嗎?<small>${q.etHM} ET · 3 分 K · 只看得到進場那根形成中的樣子</small></div>`
-      + `<div class="acts">`
+      + `<div class="acts"><button class="endq" data-a="end">結束測驗</button>`
       + `<button class="big buy" data-a="long">做多<kbd>A</kbd></button>`
       + `<button class="big sell" data-a="short">做空<kbd>D</kbd></button>`
       + `<button class="big skip" data-a="skip">不進場<kbd>S</kbd></button></div>`;
@@ -211,9 +215,13 @@ function renderFoot() {
       + `<div class="rev-pnl ${q.pnl >= 0 ? 'pos' : 'neg'}">${usd(q.pnl)}</div>`
       + `<div class="rev-sub">${q.qty} 口 · 持倉 ${q.holdMin} 分 · ${f2(q.entry)} → ${f2(q.exit)}</div></div>`
       + `<div class="verdict ${v.k}">${v.t}</div></div>`
-      + `<div class="acts"><button class="big next" data-a="next">${qi + 1 >= QS.length ? '看成績' : '下一題'}<kbd>Enter</kbd></button></div>`;
+      + `<div class="acts"><button class="endq" data-a="end">結束測驗</button>`
+      + `<button class="big next" data-a="next">${qi + 1 >= QS.length ? '看成績' : '下一題'}<kbd>Enter</kbd></button></div>`;
   }
-  f.querySelectorAll('button[data-a]').forEach(b => b.onclick = () => b.dataset.a === 'next' ? next() : answer(b.dataset.a));
+  f.querySelectorAll('button[data-a]').forEach(b => b.onclick = () => {
+    const a = b.dataset.a;
+    if (a === 'end') showResults(); else if (a === 'next') next(); else answer(a);
+  });
 }
 
 // ---------- scoring (always visible) ----------
@@ -259,7 +267,9 @@ function showResults() {
     set.forEach(x => { if (x.a === 'skip') return; tk++; const v = x.a === x.q.side ? x.q.pnl : -x.q.pnl; p += v; if (v > 0) w++; else if (v < 0) l++; });
     return `<tr><td>${name}</td><td>${set.length}</td><td>${tk}</td><td>${set.length - tk}</td><td>${pct(w, w + l)}</td><td class="${p >= 0 ? 'pos' : 'neg'}">${usd(p)}</td></tr>`;
   };
-  $('resCard').innerHTML = `<h2>考試成績</h2><div class="sub">共 ${s.n} 題 · 題庫來自你 ${QS.length} 筆真實進場</div>`
+  const ended = qi >= QS.length;
+  $('resCard').innerHTML = `<h2>考試成績</h2>`
+    + `<div class="sub">${ended ? `全部 ${QS.length} 題作答完畢` : `已作答 ${s.n} / ${QS.length} 題(中途結束)`} · 題庫來自你 ${QS.length} 筆真實進場</div>`
     + `<div class="hero"><span class="tag ${d > 0 ? 'win' : d < 0 ? 'loss' : 'flat'}">${d > 0 ? '有進步' : d < 0 ? '退步' : '持平'}</span>`
     + `<div class="hero-n ${d >= 0 ? 'pos' : 'neg'}">${d >= 0 ? '+' : ''}${usd(d)}</div>`
     + `<div class="hero-s">你這次的判斷 ${usd(s.simPnl)} &nbsp;vs&nbsp; 當時的你 ${usd(s.realPnl)}</div></div>`
@@ -279,7 +289,7 @@ function showResults() {
     + `<div class="chips">` + QS.map((q, i) => { const a = ans[i]; if (!a) return `<span class="chip"></span>`;
         const v = verdict(q, a); return `<span class="chip ${v.k}" title="${q.etHM} ET · 你${sideTxt(a)} · 當時${sideTxt(q.side)} · ${usd(q.pnl)} · ${v.t}">${i + 1}</span>`; }).join('') + `</div>`
     + `<div class="row-end"><button class="next" id="again"><span class="material-symbols-outlined">replay</span> 重新測驗</button>`
-    + `<button id="close">關閉</button></div>`;
+    + `<button id="close">${ended ? '關閉' : '繼續作答'}</button></div>`;
   $('res').classList.add('open');
   $('again').onclick = () => { $('res').classList.remove('open'); start(); };
   $('close').onclick = () => { $('res').classList.remove('open'); if (qi >= QS.length) { qi = QS.length - 1; shown = true; renderFoot(); } };
@@ -291,8 +301,9 @@ function start() {
   ans = []; qi = 0; showQuestion();
 }
 document.addEventListener('keydown', e => {
-  if ($('res').classList.contains('open')) return;
   const k = e.key.toLowerCase();
+  if ($('res').classList.contains('open')) { if (k === 'escape') $('close').click(); return; }
+  if (k === 'escape') { showResults(); return; }                 // bail out mid-quiz straight to the scorecard
   if (!shown && (k === 'a' || k === '1')) answer('long');
   else if (!shown && (k === 'd' || k === '3')) answer('short');
   else if (!shown && (k === 's' || k === '2')) answer('skip');
