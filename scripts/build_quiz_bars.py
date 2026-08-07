@@ -4,13 +4,17 @@ Keeps the standalone quiz page self-contained and instant: no 39 MB dataset load
 Per question: `pre` = complete bars before the entry bar, `form` = the entry bar AS OF THE
 ENTRY SECOND (see below), `post` = the completed entry bar plus everything through the exit + tail.
 
-Usage: py scripts/build_quiz_bars.py
+Usage: py scripts/build_quiz_bars.py [trades.json] [bars.json]
+  default set : py scripts/build_quiz_bars.py
+  another set : py scripts/build_quiz_bars.py quiz2_trades.json quiz2_bars.json
 """
-import json, os, bisect, datetime
+import json, os, bisect, datetime, sys
 HERE = os.path.dirname(os.path.abspath(__file__)); DATA = os.path.join(HERE, "..", "data")
 TF = 180; PRE_BARS = 150; TAIL_BARS = 12
+SRC = sys.argv[1] if len(sys.argv) > 1 else "quiz_trades.json"
+DST = sys.argv[2] if len(sys.argv) > 2 else "quiz_bars.json"
 bars = json.load(open(os.path.join(DATA, "NQ_db_1m.json")))
-qs = json.load(open(os.path.join(DATA, "quiz_trades.json")))
+qs = json.load(open(os.path.join(DATA, SRC)))
 bt = [b["time"] for b in bars]
 
 def agg(lo_t, hi_t):                      # aggregate 1-min bars into 3-min buckets over [lo_t, hi_t)
@@ -51,10 +55,12 @@ for q in qs:
     o["formMin"] = int((emin - eb) / 60)                  # fully-closed minutes behind the live one
     out.append(o)
 
-p = os.path.join(DATA, "quiz_bars.json")
+p = os.path.join(DATA, DST)
 json.dump(out, open(p, "w"), separators=(",", ":"))
 kb = os.path.getsize(p) / 1024
-print("wrote %s: %d questions, %.0f KB" % (os.path.basename(p), len(out), kb))
+skipped = len(qs) - len(out)
+print("wrote %s: %d questions, %.0f KB%s" % (os.path.basename(p), len(out), kb,
+      ("  (SKIPPED %d — no bar data for those days)" % skipped) if skipped else ""))
 c = {}
 for q in out: c[q["formMin"]] = c.get(q["formMin"], 0) + 1
 print("closed minutes behind the live one:", dict(sorted(c.items())))
