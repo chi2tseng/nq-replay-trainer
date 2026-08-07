@@ -2089,8 +2089,10 @@ function quizAnswer(ans) {
   refreshMarkers(); fitRecent(110); renderAll();
   renderQuizCard();
 }
+const QZ_FLAT_USD = 15;   // |P&L| under this is a scratch — commission + a tick of noise, not a real win or loss
+const qzWin = p => p >= QZ_FLAT_USD, qzLoss = p => p <= -QZ_FLAT_USD;
 function quizVerdict(q, a) {   // how this answer compares to what actually happened
-  const win = q.pnl > 0, loss = q.pnl < 0;
+  const win = qzWin(q.pnl), loss = qzLoss(q.pnl);
   if (a === 'skip') return loss ? { k: 'good', t: 'Dodged a loser' } : win ? { k: 'miss', t: 'Passed on a winner' } : { k: 'flat', t: 'Passed on a scratch' };
   if (a === q.side) return win ? { k: 'good', t: 'Took the winner again' } : loss ? { k: 'bad', t: 'Repeated the loser' } : { k: 'flat', t: 'Same scratch trade' };
   return loss ? { k: 'good', t: 'Faded it — right call' } : win ? { k: 'bad', t: 'Faded a winner' } : { k: 'flat', t: 'Faded a scratch' };
@@ -2122,12 +2124,12 @@ function quizScore() {
   quizQs.forEach((q, i) => {
     const a = quizAns[i]; if (!a) return;
     r.n++; r.realPnl += q.pnl;
-    if (q.pnl > 0) r.winners++; else if (q.pnl < 0) r.losers++;
-    if (a === 'skip') { r.skip++; if (q.pnl < 0) r.dodged++; }
+    if (qzWin(q.pnl)) r.winners++; else if (qzLoss(q.pnl)) r.losers++;
+    if (a === 'skip') { r.skip++; if (qzLoss(q.pnl)) r.dodged++; }
     else {
       const p = a === q.side ? q.pnl : -q.pnl;   // faded = the mirror outcome at the same exit point (approximation: your own stop/target would differ)
-      r.taken++; r.simPnl += p; if (p > 0) r.simW++; else if (p < 0) r.simL++;
-      if (a === q.side) { r.agree++; if (q.pnl > 0) r.caught++; } else r.opp++;
+      r.taken++; r.simPnl += p; if (qzWin(p)) r.simW++; else if (qzLoss(p)) r.simL++;
+      if (a === q.side) { r.agree++; if (qzWin(q.pnl)) r.caught++; } else r.opp++;
     }
     if (quizVerdict(q, a).k === 'good') r.good++;
   });

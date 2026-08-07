@@ -35,6 +35,10 @@ const $ = id => document.getElementById(id);
 const f2 = v => (Math.round(v * 100) / 100).toFixed(2);
 const usd = v => (v < 0 ? '-$' : '$') + Math.abs(v).toFixed(2);
 const pct = (a, b) => b ? Math.round(100 * a / b) + '%' : '–';
+// Anything inside +/-$15 is a scratch, not a win or a loss: commissions and a tick of noise live
+// in that band, so counting those trades would move the win rate without meaning anything.
+const FLAT_USD = 15;
+const isWin = p => p >= FLAT_USD, isLoss = p => p <= -FLAT_USD;
 
 let QS = [], qi = 0, ans = [], shown = false, chart, candle;
 
@@ -103,7 +107,7 @@ function answer(a) {
 function next() { if (qi + 1 >= QS.length) { qi = QS.length; return showResults(); } qi++; showQuestion(); }
 
 function verdict(q, a) {
-  const w = q.pnl > 0, l = q.pnl < 0;
+  const w = isWin(q.pnl), l = isLoss(q.pnl);
   if (a === 'skip') return l ? { k: 'good', t: '成功避雷' } : w ? { k: 'miss', t: '錯過獲利' } : { k: 'flat', t: '跳過平盤單' };
   if (a === q.side) return w ? { k: 'good', t: '抓住獲利' } : l ? { k: 'bad', t: '重蹈覆轍' } : { k: 'flat', t: '一樣平盤' };
   return l ? { k: 'good', t: '反手正確' } : w ? { k: 'bad', t: '反手做錯' } : { k: 'flat', t: '反手平盤' };
@@ -136,16 +140,16 @@ function renderFoot() {
 
 // ---------- scoring (always visible) ----------
 function score() {
-  const r = { n: 0, taken: 0, simW: 0, simL: 0, winners: 0, losers: 0, dodged: 0, caught: 0, simPnl: 0, realPnl: 0, good: 0, agree: 0, opp: 0, skip: 0 };
+  const r = { n: 0, taken: 0, simW: 0, simL: 0, simF: 0, winners: 0, losers: 0, flats: 0, dodged: 0, caught: 0, simPnl: 0, realPnl: 0, good: 0, agree: 0, opp: 0, skip: 0 };
   QS.forEach((q, i) => {
     const a = ans[i]; if (!a) return;
     r.n++; r.realPnl += q.pnl;
-    if (q.pnl > 0) r.winners++; else if (q.pnl < 0) r.losers++;
-    if (a === 'skip') { r.skip++; if (q.pnl < 0) r.dodged++; }
+    if (isWin(q.pnl)) r.winners++; else if (isLoss(q.pnl)) r.losers++; else r.flats++;
+    if (a === 'skip') { r.skip++; if (isLoss(q.pnl)) r.dodged++; }
     else {
       const p = a === q.side ? q.pnl : -q.pnl;   // 反手 = 同一出場點的鏡像結果(近似:你自己的停損停利會不同)
-      r.taken++; r.simPnl += p; if (p > 0) r.simW++; else if (p < 0) r.simL++;
-      if (a === q.side) { r.agree++; if (q.pnl > 0) r.caught++; } else r.opp++;
+      r.taken++; r.simPnl += p; if (isWin(p)) r.simW++; else if (isLoss(p)) r.simL++; else r.simF++;
+      if (a === q.side) { r.agree++; if (isWin(q.pnl)) r.caught++; } else r.opp++;
     }
     if (verdict(q, a).k === 'good') r.good++;
   });
@@ -158,9 +162,9 @@ function renderScore() {
   $('progN').textContent = `第 ${Math.min(qi + 1, QS.length)} / ${QS.length} 題`;
   $('progFill').style.width = (100 * done / QS.length).toFixed(1) + '%';
   const wr = $('scWr'); wr.textContent = s.simWr == null ? '–' : s.simWr + '%';
-  wr.innerHTML = (s.simWr == null ? '–' : s.simWr + '%') + (s.taken ? ` <small>${s.simW}W/${s.simL}L</small>` : '');
+  wr.innerHTML = (s.simWr == null ? '–' : s.simWr + '%') + (s.taken ? ` <small>${s.simW}W/${s.simL}L${s.simF ? '/' + s.simF + 'B' : ''}</small>` : '');
   wr.className = 'sc-v ' + (s.simWr == null || s.realWr == null ? '' : s.simWr > s.realWr ? 'pos' : s.simWr < s.realWr ? 'neg' : '');
-  $('scWrThen').innerHTML = (s.realWr == null ? '–' : s.realWr + '%') + (s.n ? ` <small>${s.winners}W/${s.losers}L</small>` : '');
+  $('scWrThen').innerHTML = (s.realWr == null ? '–' : s.realWr + '%') + (s.n ? ` <small>${s.winners}W/${s.losers}L${s.flats ? '/' + s.flats + 'B' : ''}</small>` : '');
   $('scPnl').textContent = usd(s.simPnl); $('scPnl').className = 'sc-v ' + (s.simPnl >= 0 ? 'pos' : 'neg');
   $('scPnlThen').textContent = usd(s.realPnl); $('scPnlThen').className = 'sc-v ' + (s.realPnl >= 0 ? 'pos' : 'neg');
   $('scDodge').innerHTML = `${s.dodged}/${s.losers}`; $('scDodge').className = 'sc-v ' + (s.losers && s.dodged > s.losers / 2 ? 'pos' : '');
@@ -174,18 +178,18 @@ function showResults() {
     const set = QS.map((q, i) => ({ q, a: ans[i] })).filter(x => x.a && test(x.q));
     if (!set.length) return '';
     let tk = 0, w = 0, l = 0, p = 0;
-    set.forEach(x => { if (x.a === 'skip') return; tk++; const v = x.a === x.q.side ? x.q.pnl : -x.q.pnl; p += v; if (v > 0) w++; else if (v < 0) l++; });
+    set.forEach(x => { if (x.a === 'skip') return; tk++; const v = x.a === x.q.side ? x.q.pnl : -x.q.pnl; p += v; if (isWin(v)) w++; else if (isLoss(v)) l++; });
     return `<tr><td>${name}</td><td>${set.length}</td><td>${tk}</td><td>${set.length - tk}</td><td>${pct(w, w + l)}</td><td class="${p >= 0 ? 'pos' : 'neg'}">${usd(p)}</td></tr>`;
   };
   const ended = qi >= QS.length;
   $('resCard').innerHTML = `<h2>考試成績</h2>`
-    + `<div class="sub">${ended ? `全部 ${QS.length} 題作答完畢` : `已作答 ${s.n} / ${QS.length} 題(中途結束)`} · 題庫來自你 ${QS.length} 筆真實進場</div>`
+    + `<div class="sub">${ended ? `全部 ${QS.length} 題作答完畢` : `已作答 ${s.n} / ${QS.length} 題(中途結束)`} · 題庫來自你 ${QS.length} 筆真實進場 · 損益在 ±$${FLAT_USD} 內算平盤,不計入勝率</div>`
     + `<div class="hero"><span class="tag ${d > 0 ? 'win' : d < 0 ? 'loss' : 'flat'}">${d > 0 ? '有進步' : d < 0 ? '退步' : '持平'}</span>`
     + `<div class="hero-n ${d >= 0 ? 'pos' : 'neg'}">${d >= 0 ? '+' : ''}${usd(d)}</div>`
     + `<div class="hero-s">你這次的判斷 ${usd(s.simPnl)} &nbsp;vs&nbsp; 當時的你 ${usd(s.realPnl)}</div></div>`
     + `<div class="grid">`
-    + `<div class="cell"><div class="k">新版勝率</div><div class="v ${s.realWr != null && s.simWr > s.realWr ? 'pos' : s.realWr != null && s.simWr < s.realWr ? 'neg' : ''}">${s.simWr == null ? '–' : s.simWr + '%'} <small style="font-size:11px;color:var(--dim)">${s.simW}W/${s.simL}L</small></div></div>`
-    + `<div class="cell"><div class="k">當時勝率(同題)</div><div class="v">${s.realWr == null ? '–' : s.realWr + '%'} <small style="font-size:11px;color:var(--dim)">${s.winners}W/${s.losers}L</small></div></div>`
+    + `<div class="cell"><div class="k">新版勝率</div><div class="v ${s.realWr != null && s.simWr > s.realWr ? 'pos' : s.realWr != null && s.simWr < s.realWr ? 'neg' : ''}">${s.simWr == null ? '–' : s.simWr + '%'} <small style="font-size:11px;color:var(--dim)">${s.simW}W/${s.simL}L${s.simF ? '/' + s.simF + 'B' : ''}</small></div></div>`
+    + `<div class="cell"><div class="k">當時勝率(同題)</div><div class="v">${s.realWr == null ? '–' : s.realWr + '%'} <small style="font-size:11px;color:var(--dim)">${s.winners}W/${s.losers}L${s.flats ? '/' + s.flats + 'B' : ''}</small></div></div>`
     + `<div class="cell"><div class="k">出手 / 跳過</div><div class="v">${s.taken} / ${s.skip}</div></div>`
     + `<div class="cell"><div class="k">避開虧損單</div><div class="v ${s.losers && s.dodged > s.losers / 2 ? 'pos' : ''}">${s.dodged} / ${s.losers}</div></div>`
     + `<div class="cell"><div class="k">抓住獲利單</div><div class="v ${s.winners && s.caught > s.winners / 2 ? 'pos' : ''}">${s.caught} / ${s.winners}</div></div>`
@@ -193,7 +197,8 @@ function showResults() {
     + `</div>`
     + `<table class="brk"><tr><th>分類</th><th>題數</th><th>出手</th><th>跳過</th><th>勝率</th><th>模擬損益</th></tr>`
     + byGroup('當時做多的題', q => q.side === 'long') + byGroup('當時做空的題', q => q.side === 'short')
-    + byGroup('當時賺錢的題', q => q.pnl > 0) + byGroup('當時賠錢的題', q => q.pnl < 0)
+    + byGroup('當時賺錢的題', q => isWin(q.pnl)) + byGroup('當時賠錢的題', q => isLoss(q.pnl))
+    + byGroup(`當時平盤的題(±$${FLAT_USD}內)`, q => !isWin(q.pnl) && !isLoss(q.pnl))
     + byGroup('11:00 前', q => q.etHM < '11:00') + byGroup('11:00 後', q => q.etHM >= '11:00')
     + `</table>`
     + `<div class="chips">` + QS.map((q, i) => { const a = ans[i]; if (!a) return `<span class="chip"></span>`;
