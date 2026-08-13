@@ -14,8 +14,8 @@ let INSTR = { symbol: 'NQ', tickSize: 0.25, tickValue: 5 }; // active contract s
 // single-load-no-day-picker dataset is wanted again later; buildDataSelect() filters them
 // out of the dropdown, they still load fine if re-shown or referenced directly.
 const DATASETS = [
-  { id: 'nqdeep', label: 'NQ · deep history 15s (2023–2026 · pick a day)', deep: true, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
-  { id: 'esdeep', label: 'ES · deep history 15s (2023–2026 · pick a day)', deep: true, instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } },
+  { id: 'nqdeep', label: 'NQ', deep: true, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
+  { id: 'esdeep', label: 'ES', deep: true, instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } },
   { id: 'nq1m', label: 'NQ · multi-res (finest available · daily-updated)', url: 'data/NQ_multi.json', hidden: true, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },   // $20/pt
   { id: 'es1m', label: 'ES · multi-res (finest available · daily-updated)', url: 'data/ES_multi.json', hidden: true, instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
 ];
