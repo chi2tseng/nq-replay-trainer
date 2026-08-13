@@ -2,7 +2,7 @@
 
 Yahoo caps 1m history at ~8 days, so we MERGE each pull into the on-disk dataset
 (fresh wins on overlap, so the still-forming last bar gets finalised next run) and the
-file grows day by day. 5m files (60-day cap) are just refreshed as a rolling window.
+file grows day by day.
 
 Real CME futures, full ~23h Globex session, no API key, no cost.
 Run daily via Task Scheduler (see scripts/setup_daily_yahoo.ps1).
@@ -12,8 +12,7 @@ Usage: python update_yahoo.py
 import json, os, sys, datetime, urllib.request, urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__)); DATA = os.path.join(HERE, "..", "data")
-APPEND_1M  = [("NQ=F", "NQ_db_1m.json", 0.25), ("ES=F", "ES_db_1m.json", 0.25)]      # accumulate (8-day Yahoo window merged in)
-REFRESH_5M = [("NQ=F", "NQ_real_5m.json", 0.25), ("ES=F", "ES_real_5m.json", 0.25), ("YM=F", "YM_real_5m.json", 1.0)]  # rolling 60-day
+APPEND_1M = [("NQ=F", "NQ_db_1m.json", 0.25), ("ES=F", "ES_db_1m.json", 0.25)]      # the only two series the app ships (accumulate, 8-day Yahoo window merged in)
 
 def fetch(sym, interval, rng, tick):
     rt = lambda x: round(round(x / tick) * tick, 2)
@@ -57,15 +56,5 @@ for sym, fname, tick in APPEND_1M:
     json.dump(merged, open(path, "w"))
     newest = utc(merged[-1]["time"]) if merged else "-"
     print(f"  {sym:5} 1m -> {fname}: +{added} new bars (total {before}->{len(merged)}), newest {newest} UTC", flush=True)
-
-for sym, fname, tick in REFRESH_5M:
-    path = os.path.join(DATA, fname)
-    try:
-        fresh = fetch(sym, "5m", "60d", tick)
-    except Exception as ex:
-        print(f"  {sym:5} 5m -> {fname}: FETCH FAILED ({ex})", flush=True); continue
-    json.dump(fresh, open(path, "w"))
-    newest = utc(fresh[-1]["time"]) if fresh else "-"
-    print(f"  {sym:5} 5m -> {fname}: {len(fresh)} bars (rolling 60d), newest {newest} UTC", flush=True)
 
 print("done", flush=True)

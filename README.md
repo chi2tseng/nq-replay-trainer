@@ -11,12 +11,12 @@ A TradingView-style **bar-replay practice platform** for NQ (Nasdaq-100) futures
 - **Indicators** — Ripster EMA Clouds (hl2 source: 8/9, 5/12, 34/50, 72/89, 180/200).
 - **Drawing tools** — horizontal line / trend line / ray / rectangle; plus arrow & long/short annotations.
 - **Analytics** — per-trade log (ticks / $ / R / exit type) and a dashboard: win rate, profit factor, expectancy, avg R, equity curve. CSV export. Everything persists in `localStorage`.
-- **Datasets** (switch top-left) — Nasdaq-100 1-min deep history (Dukascopy) and NQ 30-second bars (real tick).
+- **Datasets** (switch top-left) — NQ and ES, real CME 1-minute bars, ~14 months deep and refreshed daily for free (see below).
 
 ## Data
-- `data/NQ_deep_1m.json` — Nasdaq-100 1-min, ~3.5 months (Dukascopy "USA 100" index CFD; tracks NQ within a small basis).
-- `data/NQ_30s.json` — NQ 30-second bars built from tick.
-- Regenerate with the helpers in `scripts/` (`fetch_yahoo.py`, `convert_dukascopy.py`, `convert_nt_tick.py`).
+- `data/NQ_db_1m.json`, `data/ES_db_1m.json` — real CME continuous futures, 1-minute, full Globex session.
+- Kept current for free by `scripts/update_yahoo.py` (Yahoo Finance, no API key, no cost) — merges each day's
+  1-minute bars into the on-disk file so it keeps growing. Runs daily via Task Scheduler; see `scripts/setup_daily_yahoo.ps1`.
 
 ## Run locally
 ```

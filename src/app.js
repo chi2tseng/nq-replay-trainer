@@ -5,16 +5,13 @@
  * simulated on the underlying 30-second sub-bars, so accuracy is timeframe-independent. */
 
 let INSTR = { symbol: 'NQ', tickSize: 0.25, tickValue: 5 }; // active contract spec (per-dataset; NQ: $20/pt -> $5/tick)
+// Trimmed to the two best series (2026-08-13): each is real CME 1-minute data, ~14 months deep,
+// and freshened daily by scripts/update_yahoo.py — no reason to offer the shorter/coarser/other-symbol
+// sets (15s/5s Databento snapshots had gone stale; 5m Yahoo was redundant with these finer 1m sets;
+// YM/tick/30s were one-off or off-target). Re-add via git history if a narrower series is ever needed.
 const DATASETS = [
-  { id: 'nq1y', label: 'NQ · 1m · 1 year (real CME · Databento)',    url: 'data/NQ_db_1m.json',  instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },   // $20/pt
-  { id: 'nq15', label: 'NQ · 15s · 3 months (real CME · Databento)', url: 'data/NQ_db_15s.json', base: 0.25, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
-  { id: 'nq5s', label: 'NQ · 5s · 3 weeks (real CME · Databento)',  url: 'data/NQ_db_5s.json', base: 5 / 60, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },  // 5s base → clean 15s/20s/30s
-  { id: 'nqtick', label: 'NQ · Tick replay · Tradovate (pick a day)', tick: true, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },  // per-day real prints, fetched on demand
-  { id: 'es1y', label: 'ES · 1m · 1 year (real CME · Databento)',    url: 'data/ES_db_1m.json',  instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
-  { id: 'nq5',  label: 'NQ · 5m · 60d (real · Yahoo)',  url: 'data/NQ_real_5m.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
-  { id: 'es5',  label: 'ES · 5m · 60d (real · Yahoo)',  url: 'data/ES_real_5m.json', instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
-  { id: 'ym5',  label: 'YM · 5m · 60d (real · Yahoo)',  url: 'data/YM_real_5m.json', instr: { symbol: 'YM', tickSize: 1, tickValue: 5 } },        // $5/pt
-  { id: 'tick', label: 'NQ · 30s · Jun 7–12 (real tick)', url: 'data/NQ_30s.json',  instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
+  { id: 'nq1m', label: 'NQ · 1m (real CME · daily-updated)', url: 'data/NQ_db_1m.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },   // $20/pt
+  { id: 'es1m', label: 'ES · 1m (real CME · daily-updated)', url: 'data/ES_db_1m.json', instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
 ];
 const STD_TF = [0.25, 1 / 3, 0.5, 1, 2, 3, 5, 10, 15, 30, 60];   // standard timeframes in minutes (0.25=15s, 1/3=20s, 0.5=30s)
 let BASE_TF = 1;        // base bar resolution (minutes) — auto-detected per dataset
