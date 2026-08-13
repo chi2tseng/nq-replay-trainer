@@ -18,3 +18,11 @@ data/NQ_y20*.json
 
 # per-day tick (trades) replay files — fetched on demand, local-only (too big for GitHub)
 data/tick/
+
+# raw build inputs for the multi-res blend + deep-history monthly chunks (scripts/merge_multires.py,
+# scripts/split_monthly.py): each is 400MB+ per symbol, way over GitHub's 100MB/file limit, and the
+# app never fetches these directly — only their OUTPUTS (data/*_multi.json, data/chunks/<SYM>/*.json,
+# both git-tracked) are served. Resume-manifest sidecars are pure build bookkeeping, same reason.
+data/*_db_15s.json
+data/*_db_5s.json
+data/*.weeks
