@@ -5,13 +5,21 @@
  * simulated on the underlying 30-second sub-bars, so accuracy is timeframe-independent. */
 
 let INSTR = { symbol: 'NQ', tickSize: 0.25, tickValue: 5 }; // active contract spec (per-dataset; NQ: $20/pt -> $5/tick)
-// Trimmed to the two best series (2026-08-13): each is real CME 1-minute data, ~14 months deep,
-// and freshened daily by scripts/update_yahoo.py — no reason to offer the shorter/coarser/other-symbol
-// sets (15s/5s Databento snapshots had gone stale; 5m Yahoo was redundant with these finer 1m sets;
-// YM/tick/30s were one-off or off-target). Re-add via git history if a narrower series is ever needed.
+// Trimmed to the two best series (2026-08-13). Each is a MULTI-RESOLUTION blend
+// (scripts/merge_multires.py): whatever the finest fetched data is at a given moment — 5s /
+// 15s Databento where it's been pulled, 1m (real CME, daily-freshened by update_yahoo.py)
+// everywhere else, most recently the live tail. detectBaseTf() picks up the finest spacing
+// present automatically; older windows just look sparse at a timeframe finer than what was
+// fetched for that period — that's a real data-coverage limit, not a bug.
+// Deep history (2026-08-13): 3 years of real 15s bars, split one-file-per-month under
+// data/chunks/<SYM>/ (scripts/fetch_15s_bulk.py + split_monthly.py) so no single file ever
+// approaches GitHub's 100MB push limit. Loaded on demand — picking a day fetches just that
+// month (+ the prior month, so day-1 previous-session context exists), never the whole span.
 const DATASETS = [
-  { id: 'nq1m', label: 'NQ · 1m (real CME · daily-updated)', url: 'data/NQ_db_1m.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },   // $20/pt
-  { id: 'es1m', label: 'ES · 1m (real CME · daily-updated)', url: 'data/ES_db_1m.json', instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
+  { id: 'nq1m', label: 'NQ · multi-res (finest available · daily-updated)', url: 'data/NQ_multi.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },   // $20/pt
+  { id: 'es1m', label: 'ES · multi-res (finest available · daily-updated)', url: 'data/ES_multi.json', instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
+  { id: 'nqdeep', label: 'NQ · deep history 15s (2023–2026 · pick a day)', deep: true, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
+  { id: 'esdeep', label: 'ES · deep history 15s (2023–2026 · pick a day)', deep: true, instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } },
 ];
 const STD_TF = [0.25, 1 / 3, 0.5, 1, 2, 3, 5, 10, 15, 30, 60];   // standard timeframes in minutes (0.25=15s, 1/3=20s, 0.5=30s)
 let BASE_TF = 1;        // base bar resolution (minutes) — auto-detected per dataset
@@ -59,6 +67,7 @@ const RENDER_WINDOW = 4000, WINDOW_SLACK = 1500;
 let seriesFrom = 0;          // first absolute bar index currently in the candle/vol series (logical 0)
 // Tradovate-style tick replay: one day's real prints as the base resolution
 let tickMode = false, tickMs = [], availTickDays = [], curTickDay = null, simMs = 0, speedUITick = false;
+let deepMode = false, deepSym = null, deepIndex = [], deepAllDays = new Set(), deepMonth = null;   // declared up here (not near enterDeepMode below) — init() runs early and loadDataset() reads deepMode on its first line; a late `let` here is the exact TDZ trap seriesFrom/RENDER_WINDOW already hit once
 let fO = 0, fH = 0, fL = 0, fC = 0, fV = 0, fBucket = -1;   // live-forming candle accumulator
 
 let position = null;         // {side,qty,entry,entryTime,atm,slTicks,maxFav,beDone}
@@ -1538,7 +1547,8 @@ function showLoading(on, msg) {
 
 async function loadDataset(ds) {
   if (ds && ds.tick) return enterTickMode(ds);          // Tradovate-style per-day tick replay
-  tickMode = false; setSpeedOptions(false);
+  if (ds && ds.deep) return enterDeepMode(ds);          // GitHub-safe monthly-chunked deep 15s history, loaded on demand
+  tickMode = false; deepMode = false; setSpeedOptions(false);
   const url = typeof ds === 'string' ? ds : ds.url;   // tolerate a bare url too
   let data;
   showLoading(true, 'Loading market data…');
@@ -1551,6 +1561,11 @@ async function loadDataset(ds) {
   if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; }   // switch active contract spec (tick grid + $/tick + symbol)
   if ($('symbol')) $('symbol').textContent = INSTR.symbol;
   if ($('entryPrice')) $('entryPrice').step = String(TICK);
+  finishLoad(data, ds);
+  showLoading(false);
+  return true;
+}
+function finishLoad(data, ds) {   // shared tail of loadDataset() / loadDeepMonth(): data is already fetched, INSTR/TICK already set
   baseBars = data;
   BASE_TF = (ds && ds.base) || detectBaseTf(baseBars); buildTfOptions();   // ds.base = explicit base resolution (min) for clean sub-minute sets
   tf = BASE_TF < 1 ? 1 : BASE_TF;                 // default view: 1m when base is sub-minute, else base
@@ -1568,8 +1583,40 @@ async function loadDataset(ds) {
   requestAnimationFrame(sizeChart); setTimeout(sizeChart, 300); setTimeout(sizeChart, 1200);
   if (!wired) { wire(); wired = true; }
   renderAll();
+}
+
+// ---------- deep history: monthly-chunked 15s (fetch only the month you're looking at) ----------
+// (state vars declared up top near tickMode — see the TDZ note there)
+async function enterDeepMode(ds) {
+  tickMode = false;
+  if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; if ($('symbol')) $('symbol').textContent = INSTR.symbol; if ($('entryPrice')) $('entryPrice').step = String(TICK); }
+  deepSym = INSTR.symbol;
+  let idx;
+  try { const r = await fetch(`data/chunks/${deepSym}/index.json?v=` + Date.now()); idx = r.ok ? await r.json() : []; } catch (e) { idx = []; }
+  deepIndex = (Array.isArray(idx) ? idx : []).slice().sort((a, b) => a.month < b.month ? -1 : 1);
+  deepAllDays = new Set(deepIndex.flatMap(m => m.days));
+  if (!deepIndex.length) { deepMode = true; toast('No deep-history months yet — run fetch_15s_bulk.py + split_monthly.py'); if (!wired) { wire(); wired = true; } return true; }
+  return loadDeepMonth(deepIndex[deepIndex.length - 1].month);   // default: most recent available month
+}
+async function loadDeepMonth(month) {
+  const mi = deepIndex.findIndex(m => m.month === month); if (mi < 0) return false;
+  showLoading(true, `Loading ${month}…`);
+  const months = mi > 0 ? [deepIndex[mi - 1].month, month] : [month];   // pull the prior month in too, so day 1's "previous session" VP has something to show
+  let bars = [];
+  try {
+    for (const m of months) { const r = await fetch(`data/chunks/${deepSym}/${m}.json?v=` + Date.now()); if (!r.ok) throw 0; bars = bars.concat(await r.json()); }
+  } catch (e) { showLoading(false); toast('Month not available locally: ' + month); return false; }
+  pause(); position = null; entryOrder = null; orders = []; markers = []; tool = ''; pendingPt = null;
+  tickMode = false; deepMode = true; deepMonth = month; setSpeedOptions(false);
+  finishLoad(bars, null);
   showLoading(false);
+  toast(`Deep history · ${month} · ${bars.length.toLocaleString()} bars`);
   return true;
+}
+async function jumpToDeepDay(key) {   // calendar click on a day whose month isn't loaded yet
+  closeCal();
+  const ok = await loadDeepMonth(key.slice(0, 7));
+  if (ok && dayIdx[key] != null) gotoSession(dayIdx[key]);
 }
 
 // ---------- sessions (computed on base) ----------
@@ -1591,7 +1638,7 @@ function renderCalendar() {
   let cells = '';
   for (let i = 0; i < startWd; i++) cells += '<span class="cal-day empty"></span>';
   for (let d = 1; d <= days; d++) {
-    const key = `${calY}-${pad(calM + 1)}-${pad(d)}`, has = key in dayIdx, sel = key === curKey;
+    const key = `${calY}-${pad(calM + 1)}-${pad(d)}`, has = key in dayIdx || (deepMode && deepAllDays.has(key)), sel = key === curKey;
     cells += `<button class="cal-day${has ? ' has' : ''}${sel ? ' sel' : ''}" ${has ? `data-key="${key}"` : 'disabled'}>${d}</button>`;
   }
   el.innerHTML =
@@ -1607,7 +1654,11 @@ function wireCalendar() {
   $('dateBtn').onclick = (e) => { e.stopPropagation(); if (locked()) return toast("Can't jump while in a position / working order"); $('datePopover').classList.contains('open') ? closeCal() : openCal(); };
   $('datePopover').addEventListener('click', (e) => {
     const nav = e.target.closest('.cal-nav'); if (nav) { calM += +nav.dataset.mo; if (calM < 0) { calM = 11; calY--; } if (calM > 11) { calM = 0; calY++; } renderCalendar(); return; }
-    const day = e.target.closest('.cal-day.has'); if (day && day.dataset.key != null) { if (tickMode) { closeCal(); loadTickDay(day.dataset.key); } else if (dayIdx[day.dataset.key] != null) gotoSession(dayIdx[day.dataset.key]); }
+    const day = e.target.closest('.cal-day.has'); if (day && day.dataset.key != null) {
+      if (tickMode) { closeCal(); loadTickDay(day.dataset.key); }
+      else if (dayIdx[day.dataset.key] != null) { gotoSession(dayIdx[day.dataset.key]); }   // gotoSession() closes the popover itself
+      else if (deepMode) { jumpToDeepDay(day.dataset.key); }   // month not loaded yet — fetch it, then jump
+    }
   });
   document.addEventListener('mousedown', (e) => { const p = $('datePopover'); if (p && p.classList.contains('open') && !p.contains(e.target) && !$('dateBtn').contains(e.target)) closeCal(); });
 }
@@ -1628,7 +1679,12 @@ function syncIdxFromBase() {
   // sub-bars, and curPx() would read a sub-bar that isn't the displayed candle's close.
   // Snap back to the last fully-revealed TF bar, then align baseIdx to its end so
   // curPx() (=baseBars[baseIdx].close) always equals the current candle's close.
-  if (idx > 0 && bars[idx].subEnd > baseIdx) idx--;
+  // BUT only roll back when baseIdx sits STRICTLY inside the bucket (subStart < baseIdx):
+  // landing exactly ON a bucket's first sub-bar is a fresh jump/reveal-reset (gotoSession
+  // sets baseIdx = a session's very first bar), not a leftover partial bucket — rolling back
+  // then would cross into the PREVIOUS session/day. Only bites when base resolution is finer
+  // than the display tf (e.g. 15s deep-history data shown at the default 1m view).
+  if (idx > 0 && bars[idx].subEnd > baseIdx && bars[idx].subStart < baseIdx) idx--;
   baseIdx = bars[idx].subEnd;
 }
 
@@ -1742,6 +1798,7 @@ function setSpeedOptions() {   // Realtime (clock-paced) + steady bars/sec — b
     `<optgroup label="Steady rate">` + bs.map(([v, l]) => `<option value="${v}" ${v === 1 ? 'selected' : ''}>${l}</option>`).join('') + `</optgroup>`;
 }
 async function enterTickMode(ds) {
+  deepMode = false;
   if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; if ($('symbol')) $('symbol').textContent = INSTR.symbol; if ($('entryPrice')) $('entryPrice').step = String(TICK); }
   let idxFile;
   try { const r = await fetch('data/tick/index.json?v=' + Date.now()); idxFile = r.ok ? await r.json() : []; } catch (e) { idxFile = []; }
