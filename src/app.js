@@ -5,21 +5,19 @@
  * simulated on the underlying 30-second sub-bars, so accuracy is timeframe-independent. */
 
 let INSTR = { symbol: 'NQ', tickSize: 0.25, tickValue: 5 }; // active contract spec (per-dataset; NQ: $20/pt -> $5/tick)
-// Trimmed to the two best series (2026-08-13). Each is a MULTI-RESOLUTION blend
-// (scripts/merge_multires.py): whatever the finest fetched data is at a given moment — 5s /
-// 15s Databento where it's been pulled, 1m (real CME, daily-freshened by update_yahoo.py)
-// everywhere else, most recently the live tail. detectBaseTf() picks up the finest spacing
-// present automatically; older windows just look sparse at a timeframe finer than what was
-// fetched for that period — that's a real data-coverage limit, not a bug.
 // Deep history (2026-08-13): 3 years of real 15s bars, split one-file-per-month under
 // data/chunks/<SYM>/ (scripts/fetch_15s_bulk.py + split_monthly.py) so no single file ever
 // approaches GitHub's 100MB push limit. Loaded on demand — picking a day fetches just that
 // month (+ the prior month, so day-1 previous-session context exists), never the whole span.
+// This is now the default/only VISIBLE pair — the older quick multi-res sets (1m base,
+// daily-updated but shallower) are kept (hidden:true) rather than deleted, in case a fast
+// single-load-no-day-picker dataset is wanted again later; buildDataSelect() filters them
+// out of the dropdown, they still load fine if re-shown or referenced directly.
 const DATASETS = [
-  { id: 'nq1m', label: 'NQ · multi-res (finest available · daily-updated)', url: 'data/NQ_multi.json', instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },   // $20/pt
-  { id: 'es1m', label: 'ES · multi-res (finest available · daily-updated)', url: 'data/ES_multi.json', instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
   { id: 'nqdeep', label: 'NQ · deep history 15s (2023–2026 · pick a day)', deep: true, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
   { id: 'esdeep', label: 'ES · deep history 15s (2023–2026 · pick a day)', deep: true, instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } },
+  { id: 'nq1m', label: 'NQ · multi-res (finest available · daily-updated)', url: 'data/NQ_multi.json', hidden: true, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },   // $20/pt
+  { id: 'es1m', label: 'ES · multi-res (finest available · daily-updated)', url: 'data/ES_multi.json', hidden: true, instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
 ];
 const STD_TF = [0.25, 1 / 3, 0.5, 1, 2, 3, 5, 10, 15, 30, 60];   // standard timeframes in minutes (0.25=15s, 1/3=20s, 0.5=30s)
 let BASE_TF = 1;        // base bar resolution (minutes) — auto-detected per dataset
@@ -1663,7 +1661,7 @@ function wireCalendar() {
   document.addEventListener('mousedown', (e) => { const p = $('datePopover'); if (p && p.classList.contains('open') && !p.contains(e.target) && !$('dateBtn').contains(e.target)) closeCal(); });
 }
 function buildTfSelect() { $('tfSelect').innerHTML = TF_OPTIONS.map(m => `<option value="${m}" ${m === tf ? 'selected' : ''}>${m < 1 ? Math.round(m * 60) + 's' : m + 'm'}</option>`).join(''); }
-function buildDataSelect() { $('dataSelect').innerHTML = DATASETS.map((ds, i) => `<option value="${i}" ${i === dataIdx ? 'selected' : ''}>${ds.label}</option>`).join(''); }
+function buildDataSelect() { $('dataSelect').innerHTML = DATASETS.map((ds, i) => ds.hidden ? '' : `<option value="${i}" ${i === dataIdx ? 'selected' : ''}>${ds.label}</option>`).join(''); }   // hidden entries stay in DATASETS (still loadable) but never render in the dropdown
 
 // ---------- timeframe / index bookkeeping ----------
 function rebuildTf() { bars = aggregate(baseBars, tf); computeRipster(); computeIndicators(); oscCompute(); stampBarIndices(); rebuildHA(); vpPKey = null; vpOKey = null; vpDEdge = -1; }
