@@ -57,4 +57,8 @@ for sym, fname, tick in APPEND_1M:
     newest = utc(merged[-1]["time"]) if merged else "-"
     print(f"  {sym:5} 1m -> {fname}: +{added} new bars (total {before}->{len(merged)}), newest {newest} UTC", flush=True)
 
+import subprocess
+print("--- re-blending multi-res series (free, local — picks up today's 1m tail) ---", flush=True)
+subprocess.run([sys.executable, os.path.join(HERE, "merge_multires.py")], check=False)
+
 print("done", flush=True)

@@ -1453,6 +1453,16 @@ function cd(b) {
     if (!h) { const j = bars.indexOf(b); h = (j >= 0 && haBars[j]) ? haBars[j] : b; } // fallback if __i missing
     return { time: h.time, open: h.open, high: h.high, low: h.low, close: h.close };
   }
+  if (chartType === 'cont') {
+    // "gapless": draw the body starting at the PREVIOUS bar's close instead of this bar's real open.
+    // Purely cosmetic — bars[]/baseBars[] and every fill in the trading engine keep the real open,
+    // so P&L is unaffected. Exists because NQ's real open is ~2 ticks off the prior close (bid/ask
+    // bounce over the ~180ms between those two trades); verified real against Databento OHLCV,
+    // Yahoo 1m AND raw trades, so it is the tape, not a data defect. high/low are widened to cover
+    // the stitched open, otherwise the body would stick out past the wick.
+    const prev = bars[b.__i - 1], o = prev ? prev.close : b.open;   // __i stamped in rebuildTf()
+    return { time: b.time, open: o, high: Math.max(b.high, o), low: Math.min(b.low, o), close: b.close };
+  }
   if (chartType === 'hollow') {
     const up = b.close >= b.open;
     return { time: b.time, open: b.open, high: b.high, low: b.low, close: b.close,
@@ -1473,6 +1483,7 @@ function makePriceSeries() {
     case 'hollow':   // hollow = candlestick with per-bar transparent up-bodies (see cd()); set defaults too
       return chart.addCandlestickSeries({ upColor: CT_TRANSPARENT, downColor: CT_DOWN, borderUpColor: CT_UP, borderDownColor: CT_DOWN, borderVisible: true, wickUpColor: CT_UP, wickDownColor: CT_DOWN });
     case 'ha':
+    case 'cont':
     case 'candles':
     default:
       return chart.addCandlestickSeries({ upColor: CT_UP, downColor: CT_DOWN, borderVisible: false, wickUpColor: CT_UP, wickDownColor: CT_DOWN });
