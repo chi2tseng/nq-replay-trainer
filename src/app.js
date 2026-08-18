@@ -68,7 +68,7 @@ let playing = false, timer = null;
 const RENDER_WINDOW = 4000, WINDOW_SLACK = 1500;
 let seriesFrom = 0;          // first absolute bar index currently in the candle/vol series (logical 0)
 // Tradovate-style tick replay: one day's real prints as the base resolution
-let tickMode = false, tickMs = [], availTickDays = [], curTickDay = null, simMs = 0, speedUITick = false;
+let tickMode = false, tickMs = [], availTickDays = [], curTickDay = null, simMs = 0, speedUIBase = null;
 let deepMode = false, deepSym = null, deepIndex = [], deepAllDays = new Set(), deepMonth = null;   // declared up here (not near enterDeepMode below) — init() runs early and loadDataset() reads deepMode on its first line; a late `let` here is the exact TDZ trap seriesFrom/RENDER_WINDOW already hit once
 let fO = 0, fH = 0, fL = 0, fC = 0, fV = 0, fBucket = -1;   // live-forming candle accumulator
 
@@ -1675,7 +1675,7 @@ function wireCalendar() {
   });
   document.addEventListener('mousedown', (e) => { const p = $('datePopover'); if (p && p.classList.contains('open') && !p.contains(e.target) && !$('dateBtn').contains(e.target)) closeCal(); });
 }
-function buildTfSelect() { $('tfSelect').innerHTML = TF_OPTIONS.map(m => `<option value="${m}" ${m === tf ? 'selected' : ''}>${m < 1 ? Math.round(m * 60) + 's' : m + 'm'}</option>`).join(''); }
+function buildTfSelect() { $('tfSelect').innerHTML = TF_OPTIONS.map(m => `<option value="${m}" ${m === tf ? 'selected' : ''}>${m < 1 ? Math.round(m * 60) + 's' : m + 'm'}</option>`).join(''); setSpeedOptions(); }   // setSpeedOptions here too: BASE_TF is final by now, and the sub-bar labels quote it
 function buildDataSelect() { $('dataSelect').innerHTML = DATASETS.map((ds, i) => ds.hidden ? '' : `<option value="${i}" ${i === dataIdx ? 'selected' : ''}>${ds.label}</option>`).join(''); }   // hidden entries stay in DATASETS (still loadable) but never render in the dropdown
 
 // ---------- timeframe / index bookkeeping ----------
@@ -1718,7 +1718,27 @@ function maybeReWindow() {                            // trim once the series ha
   return true;
 }
 function hardReveal() { feedWindow(false); refreshMarkers(); drawLines(); renderLegend(null); oscHardReveal(); resetForming(); setAlertBaseline(); rndPrevMin = null; }   // rndPrevMin reset: a jump must re-seed the settle-crossing baseline
+// Advance exactly ONE base sub-bar (15s on the deep datasets, one print on tick). revealTick() rolls
+// the display bar over when the bucket changes AND runs processSub() on the bar, so a stop/target
+// sitting inside a 3m candle fires on the 15s slice that actually reached it — not at the bar close.
+function stepSub() {
+  if (baseIdx >= baseBars.length - 1) { pause(); return; }
+  baseIdx++; revealTick(baseIdx);
+  maybeReWindow(); commitForming();
+  renderLive(); renderLegend(null); alertCheck(); settleCheck();
+}
+function stepAny() { return subStepMode() ? stepSub() : stepFwd(); }
 function stepFwd() {
+  // If sub-stepping left the current display bar half-revealed, FINISH it instead of jumping to the
+  // next one — otherwise its remaining sub-bars would never be processed and their fills would vanish.
+  const cur = bars[idx];
+  if (cur && baseIdx < cur.subEnd) {
+    for (let i = baseIdx + 1; i <= cur.subEnd; i++) processSub(baseBars[i]);
+    baseIdx = cur.subEnd;
+    candle.update(cd(cur)); vol.update(vd(cur));
+    resetForming(); renderLive(); renderLegend(null); alertCheck(); settleCheck();
+    return;
+  }
   if (idx >= bars.length - 1) { pause(); return; }
   idx++;
   if (maybeReWindow()) {}                             // grew past window → re-fed (incl. the new bar) + osc
@@ -1741,6 +1761,7 @@ function play() {
   resetForming();
   const sv = String($('speedSelect').value);
   if (sv.indexOf('rt:') === 0) { simMs = baseMs(baseIdx); timer = setInterval(playRtFrame, TICK_FRAME_MS); }   // Realtime: clock-paced (real tape on tick)
+  else if (sv.indexOf('sub:') === 0) { playBudget = 0; timer = setInterval(playSubFrame, TICK_FRAME_MS); }      // sub-bar/s: N base bars per second
   else { playBudget = 0; timer = setInterval(playFrame, TICK_FRAME_MS); }                                       // bars/s: steady display-bar rate
 }
 function pause() { playing = false; $('btnPlay').textContent = 'play_arrow'; clearInterval(timer); timer = null; }
@@ -1802,13 +1823,23 @@ function setAlertTime() {
 // each print is a sub-bar → fills are tick-accurate, and during PLAY the current candle
 // forms live print-by-print, paced in real time (speed = realtime ×).
 const TICK_FRAME_MS = 50;
-function setSpeedOptions() {   // Realtime (clock-paced) + steady bars/sec — both form the candle & work on every timeframe
-  if (speedUITick) return; speedUITick = true;
+function subUnit() { return tickMode ? 'print' : (BASE_TF < 1 ? Math.round(BASE_TF * 60) + 's' : BASE_TF + 'm'); }   // the base resolution, spelled out for the menu
+function subStepMode() { return String($('speedSelect').value).indexOf('sub:') === 0; }
+function setSpeedOptions() {   // Sub-bar · Realtime (clock-paced) · steady display-bars/sec. Rebuilt whenever the base resolution changes so the sub-bar labels never lie about it.
+  const key = (tickMode ? 'tick' : String(BASE_TF)), first = speedUIBase === null;
+  if (speedUIBase === key) return; speedUIBase = key;
+  const keep = first ? '' : $('speedSelect').value, u = subUnit();   // first build ignores index.html's static "1 bar/s" so the sub-bar rate is the out-of-the-box default
+  const sub = [0.5, 1, 2, 4, 10].map(n => [`sub:${n}`, `${u} × ${n}/s`]);
   const rt = [['rt:1', 'Realtime 1×'], ['rt:10', 'Realtime 10×'], ['rt:60', 'Realtime 60×'], ['rt:300', 'Realtime 300×']];
-  const bs = [[0.5, '0.5 bar/s'], [1, '1 bar/s'], [2, '2 bar/s'], [5, '5 bar/s'], [10, '10 bar/s'], [30, '30 bar/s']];
+  const bs = [0.5, 1, 2, 5, 10, 30].map(n => [String(n), `${n} bar/s`]);
+  const grp = (label, rows) => `<optgroup label="${label}">` + rows.map(([v, l]) => `<option value="${v}">${l}</option>`).join('') + `</optgroup>`;
   $('speedSelect').innerHTML =
-    `<optgroup label="Real-time (clock-paced)">` + rt.map(([v, l]) => `<option value="${v}">${l}</option>`).join('') + `</optgroup>` +
-    `<optgroup label="Steady rate">` + bs.map(([v, l]) => `<option value="${v}" ${v === 1 ? 'selected' : ''}>${l}</option>`).join('') + `</optgroup>`;
+    grp(`Sub-bar — ${u} at a time (step + play)`, sub) +
+    grp('Real-time (clock-paced)', rt) +
+    grp('Steady rate (whole display bars)', bs);
+  // keep the user's pick across a dataset switch; otherwise default to one sub-bar per second, so
+  // stepping and playing both advance by the BASE resolution (a 3m candle forms over 12 × 15s)
+  $('speedSelect').value = [...$('speedSelect').options].some(o => o.value === keep) ? keep : 'sub:1';
 }
 async function enterTickMode(ds) {
   // Probe availability BEFORE mutating any mode flag or INSTR: data/tick/ is gitignored (~554MB), so
@@ -1873,6 +1904,14 @@ function playFrame() {   // steady display-bars/sec reveal; each base sub-bar = 
     if (playBudget < cost) break;
     playBudget -= cost; baseIdx++; revealTick(baseIdx); if (++n > 500000) break;
   }
+  if (n) { maybeReWindow(); commitForming(); renderLive(); renderLegend(null); alertCheck(); settleCheck(); }
+  if (baseIdx >= baseBars.length - 1) pause();
+}
+function playSubFrame() {   // steady SUB-BAR rate: N base bars/sec regardless of the display timeframe, so on 15s base a 3m candle builds over 12 reveals and every intrabar stop/target lands on its real slice
+  const rate = Number(String($('speedSelect').value).slice(4)) || 1;
+  playBudget += rate * (TICK_FRAME_MS / 1000);
+  let n = 0;
+  while (playBudget >= 1 && baseIdx < baseBars.length - 1) { playBudget -= 1; baseIdx++; revealTick(baseIdx); if (++n > 500000) break; }
   if (n) { maybeReWindow(); commitForming(); renderLive(); renderLegend(null); alertCheck(); settleCheck(); }
   if (baseIdx >= baseBars.length - 1) pause();
 }
@@ -2926,7 +2965,7 @@ function renderLogList() {
 // ---------- wiring ----------
 function wire() {
   $('btnPlay').onclick = play;
-  $('btnStepFwd').onclick = () => { pause(); stepFwd(); };
+  $('btnStepFwd').onclick = () => { pause(); stepAny(); };
   $('btnStepBack').onclick = () => { pause(); stepBack(); };
   $('btnToStart').onclick = () => gotoSession(+$('sessionSelect').value);
   $('btnPrevDay').onclick = prevDay;
@@ -3038,7 +3077,7 @@ function wire() {
 
   document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-    if (e.code === 'Space') { e.preventDefault(); pause(); stepFwd(); }
+    if (e.code === 'Space') { e.preventDefault(); pause(); stepAny(); }
     else if (e.key === 'p') play(); else if (e.key === 'b') onEntryButton('long');
     else if (e.key === 's') onEntryButton('short'); else if (e.key === 'f') flatten();
     else if (e.key === '[' || e.key === 'ArrowLeft') { e.preventDefault(); prevDay(); }
