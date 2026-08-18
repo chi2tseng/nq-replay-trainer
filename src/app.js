@@ -16,6 +16,10 @@ let INSTR = { symbol: 'NQ', tickSize: 0.25, tickValue: 5 }; // active contract s
 const DATASETS = [
   { id: 'nqdeep', label: 'NQ', deep: true, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
   { id: 'esdeep', label: 'ES', deep: true, instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } },
+  // Every individual print as a base bar -> fills happen on the real tape (true slippage), and the
+  // candle grows print-by-print on Realtime. Days live in data/tick/ (gitignored, ~10MB each), so this
+  // one is LOCAL-ONLY: on GitHub Pages the index fetch 404s and it falls back to the "no tick days" toast.
+  { id: 'nqtick', label: 'NQ tick', tick: true, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
   { id: 'nq1m', label: 'NQ · multi-res (finest available · daily-updated)', url: 'data/NQ_multi.json', hidden: true, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },   // $20/pt
   { id: 'es1m', label: 'ES · multi-res (finest available · daily-updated)', url: 'data/ES_multi.json', hidden: true, instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
 ];
@@ -1807,12 +1811,17 @@ function setSpeedOptions() {   // Realtime (clock-paced) + steady bars/sec — b
     `<optgroup label="Steady rate">` + bs.map(([v, l]) => `<option value="${v}" ${v === 1 ? 'selected' : ''}>${l}</option>`).join('') + `</optgroup>`;
 }
 async function enterTickMode(ds) {
-  deepMode = false;
-  if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; if ($('symbol')) $('symbol').textContent = INSTR.symbol; if ($('entryPrice')) $('entryPrice').step = String(TICK); }
+  // Probe availability BEFORE mutating any mode flag or INSTR: data/tick/ is gitignored (~554MB), so
+  // on the published site this 404s and we must leave the currently-loaded dataset fully intact —
+  // returning false makes the dataSelect handler revert the dropdown. (Setting tickMode/deepMode here
+  // and returning true, as this used to, left the old dataset rendered but running tick-mode logic.)
   let idxFile;
   try { const r = await fetch('data/tick/index.json?v=' + Date.now()); idxFile = r.ok ? await r.json() : []; } catch (e) { idxFile = []; }
-  availTickDays = (Array.isArray(idxFile) ? idxFile : (idxFile.days || [])).slice().sort();
-  if (!availTickDays.length) { tickMode = true; toast('No tick days yet — run scripts/fetch_tick_days.py to pull a day'); if (!wired) { wire(); wired = true; } return true; }
+  const days = (Array.isArray(idxFile) ? idxFile : (idxFile.days || [])).slice().sort();
+  if (!days.length) { toast('Tick days are local-only (data/tick/) — not published, run scripts/fetch_tick_days.py locally'); if (!wired) { wire(); wired = true; } return false; }
+  availTickDays = days;
+  deepMode = false;
+  if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; if ($('symbol')) $('symbol').textContent = INSTR.symbol; if ($('entryPrice')) $('entryPrice').step = String(TICK); }
   return loadTickDay(availTickDays[availTickDays.length - 1]);
 }
 async function loadTickDay(day) {
