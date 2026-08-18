@@ -239,7 +239,8 @@ function renderRiskReadout() {
   const cell = (side, cls, lbl) => {
     const st = plannedStopTicks(side, kind, px), n = sizeForRisk(st);
     if (!n) return `<span class="rk ${cls}"><span>${lbl}</span><span>— set a stop</span></span>`;
-    return `<span class="rk ${cls}"><span>${lbl} <b>${n}</b></span><span>${st}t · ${usd(n * st * INSTR.tickValue)}</span></span>`;
+    const d = atmUnit === 'pts' ? `${+(st * TICK).toFixed(2)}pt` : `${st}t`;   // quote the stop in whatever unit the ATM editor is set to
+    return `<span class="rk ${cls}"><span>${lbl} <b>${n}</b></span><span>${d} · ${usd(n * st * INSTR.tickValue)}</span></span>`;
   };
   box.style.display = ''; box.innerHTML = cell('long', 'buy', 'BUY') + cell('short', 'sell', 'SELL');
 }
@@ -2801,7 +2802,25 @@ function drawEquity() {
 }
 
 // ---------- ATM editor ----------
-function buildAtmSelect() { $('atmSelect').innerHTML = Object.keys(atm).map(k => `<option ${k === activeAtm ? 'selected' : ''}>${k}</option>`).join(''); loadAtmIntoEditor(activeAtm); syncRrField(); }
+// Distances (stop, targets, breakeven, trail) are ALWAYS stored in ticks — the fill engine, saved
+// templates and every $ calc read ticks. `atmUnit` only changes what the editor shows and accepts,
+// so switching it can never alter an existing template or a live bracket. 1 tick = TICK points
+// (0.25 on NQ/ES), and TICK follows the loaded instrument, so the conversion re-derives per dataset.
+let atmUnit = loadJSON('rt_atm_unit', 'ticks');
+function unitLbl() { return atmUnit === 'pts' ? 'pts' : 'ticks'; }
+function tkToDisp(ticks) { return atmUnit === 'pts' ? +(ticks * TICK).toFixed(4) : ticks; }
+function dispToTk(v) { const n = +v || 0; return atmUnit === 'pts' ? Math.round(n / TICK) : Math.round(n); }   // pts land on a whole tick — 10.3 pts on NQ becomes 41t, not 41.2t
+function applyAtmUnitUI() {
+  const u = unitLbl(), step = atmUnit === 'pts' ? String(TICK) : '1';
+  const set = (id, txt) => { const el = $(id); if (el) el.textContent = txt; };
+  set('lblAtmSL', `Stop SL (${u})`); set('lblAtmTgtU', u);
+  set('lblAtmBE', `Trigger / offset (${u})`); set('lblAtmTrail', `Start / distance (${u})`);
+  ['atmSL', 'atmT1t', 'atmT2t', 'atmT3t', 'atmBEtrig', 'atmBEoff', 'atmTrailTrig', 'atmTrailDist']
+    .forEach(id => { const el = $(id); if (el) el.step = step; });
+  const sel = $('atmUnit'); if (sel && sel.value !== atmUnit) sel.value = atmUnit;
+}
+function setAtmUnit(u) { atmUnit = (u === 'pts' ? 'pts' : 'ticks'); saveJSON('rt_atm_unit', atmUnit); applyAtmUnitUI(); loadAtmIntoEditor($('atmSelect').value || activeAtm); renderRiskReadout(); }
+function buildAtmSelect() { $('atmSelect').innerHTML = Object.keys(atm).map(k => `<option ${k === activeAtm ? 'selected' : ''}>${k}</option>`).join(''); applyAtmUnitUI(); loadAtmIntoEditor(activeAtm); syncRrField(); }
 function syncRrField() {   // show the Target-R dial only for structural ATMs; it drives the active preset's reward multiple (rr)
   const f = $('rrField'); if (!f) return; const a = atm[activeAtm] || {};
   if (a.struct) { f.style.display = ''; $('rrInput').value = a.rr || 1; } else f.style.display = 'none';
@@ -2809,19 +2828,19 @@ function syncRrField() {   // show the Target-R dial only for structural ATMs; i
 function setRr(v) { const a = atm[activeAtm]; if (!a || !a.struct) return; a.rr = Math.max(0.25, Math.round(v * 4) / 4); $('rrInput').value = a.rr; saveJSON('rt_atm', atm); renderRiskReadout(); }
 function loadAtmIntoEditor(name) {
   const a = atm[name]; if (!a) return; const t = a.targets || [];
-  $('atmName').value = name; $('atmSL').value = a.sl;
-  $('atmT1t').value = t[0] ? t[0].ticks : 0; $('atmT1q').value = t[0] ? t[0].qty : 0;
-  $('atmT2t').value = t[1] ? t[1].ticks : 0; $('atmT2q').value = t[1] ? t[1].qty : 0;
-  $('atmT3t').value = t[2] ? t[2].ticks : 0; $('atmT3q').value = t[2] ? t[2].qty : 0;
-  $('atmBEon').checked = a.be.on; $('atmBEtrig').value = a.be.trig; $('atmBEoff').value = a.be.off;
-  $('atmTrailon').checked = a.trail.on; $('atmTrailTrig').value = a.trail.trig; $('atmTrailDist').value = a.trail.dist;
+  $('atmName').value = name; $('atmSL').value = tkToDisp(a.sl);
+  $('atmT1t').value = tkToDisp(t[0] ? t[0].ticks : 0); $('atmT1q').value = t[0] ? t[0].qty : 0;
+  $('atmT2t').value = tkToDisp(t[1] ? t[1].ticks : 0); $('atmT2q').value = t[1] ? t[1].qty : 0;
+  $('atmT3t').value = tkToDisp(t[2] ? t[2].ticks : 0); $('atmT3q').value = t[2] ? t[2].qty : 0;
+  $('atmBEon').checked = a.be.on; $('atmBEtrig').value = tkToDisp(a.be.trig); $('atmBEoff').value = tkToDisp(a.be.off);
+  $('atmTrailon').checked = a.trail.on; $('atmTrailTrig').value = tkToDisp(a.trail.trig); $('atmTrailDist').value = tkToDisp(a.trail.dist);
 }
 function saveAtm() {
   const name = $('atmName').value.trim(); if (!name) return toast('Template needs a name');
   const targets = [];
-  [['atmT1t', 'atmT1q'], ['atmT2t', 'atmT2q'], ['atmT3t', 'atmT3q']].forEach(([t, q]) => { const tk = +$(t).value, qy = +$(q).value; if (tk > 0 && qy > 0) targets.push({ ticks: tk, qty: qy }); });
-  if (!targets.length) return toast('At least one target (ticks & qty > 0)');
-  atm[name] = { sl: +$('atmSL').value, targets, be: { on: $('atmBEon').checked, trig: +$('atmBEtrig').value, off: +$('atmBEoff').value }, trail: { on: $('atmTrailon').checked, trig: +$('atmTrailTrig').value, dist: +$('atmTrailDist').value } };
+  [['atmT1t', 'atmT1q'], ['atmT2t', 'atmT2q'], ['atmT3t', 'atmT3q']].forEach(([t, q]) => { const tk = dispToTk($(t).value), qy = +$(q).value; if (tk > 0 && qy > 0) targets.push({ ticks: tk, qty: qy }); });
+  if (!targets.length) return toast(`At least one target (${unitLbl()} & qty > 0)`);
+  atm[name] = { sl: dispToTk($('atmSL').value), targets, be: { on: $('atmBEon').checked, trig: dispToTk($('atmBEtrig').value), off: dispToTk($('atmBEoff').value) }, trail: { on: $('atmTrailon').checked, trig: dispToTk($('atmTrailTrig').value), dist: dispToTk($('atmTrailDist').value) } };
   saveJSON('rt_atm', atm); activeAtm = name; buildAtmSelect(); toast('Saved ' + name);
 }
 function delAtm() { const name = $('atmName').value.trim(); if (atm[name] && Object.keys(atm).length > 1) { delete atm[name]; saveJSON('rt_atm', atm); activeAtm = Object.keys(atm)[0]; buildAtmSelect(); toast('Deleted ' + name); } }
@@ -3053,6 +3072,7 @@ function wire() {
   $('rrInput').oninput = (e) => setRr(parseFloat(e.target.value) || 1);
   $('rrMinus').onclick = () => setRr((+$('rrInput').value || 1) - 0.25);
   $('rrPlus').onclick = () => setRr((+$('rrInput').value || 1) + 0.25);
+  $('atmUnit').value = atmUnit; $('atmUnit').onchange = (e) => setAtmUnit(e.target.value);
   $('btnAtmSave').onclick = saveAtm;
   $('btnAtmDel').onclick = delAtm;
 
