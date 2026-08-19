@@ -91,6 +91,10 @@ if (loadJSON('rt_atm_v', 0) < 3) {   // merge new struct presets into an existin
   ['Struct SL · 1:2', 'Struct SL · Custom R'].forEach(k => { if (!atm[k]) atm[k] = d[k]; });
   saveJSON('rt_atm', atm); saveJSON('rt_atm_v', 3);
 }
+if (loadJSON('rt_atm_v', 0) < 4) {   // merge the inline Custom SL/TP preset in without clobbering user-made ATMs
+  if (!atm['Custom SL/TP']) atm['Custom SL/TP'] = defaultAtms()['Custom SL/TP'];
+  saveJSON('rt_atm', atm); saveJSON('rt_atm_v', 4);
+}
 let activeAtm = Object.keys(atm)[0];
 let riskOn = loadJSON('rt_risk_on', false), riskUsd = loadJSON('rt_risk_usd', 200);   // fixed-$ position sizing: contracts derived from $risk ÷ stop
 
@@ -99,6 +103,10 @@ function defaultAtms() {
     'Struct SL · 1:1':    { struct: true, rr: 1, sl: 0, targets: [], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },   // stop at current bar's high(short)/low(long) ±1tick; target = 1× risk
     'Struct SL · 1:2':    { struct: true, rr: 2, sl: 0, targets: [], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },   // structural stop; target = 2× risk
     'Struct SL · Custom R': { struct: true, rr: 1.5, sl: 0, targets: [], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } }, // structural stop; dial the R multiple with the Target-R input
+    // Driven by the Stop/Target boxes in the order panel (see syncRrField) instead of the template
+    // editor — type a distance, trade. It is an ordinary ATM otherwise, so bracketFromAtm,
+    // plannedStopTicks, fixed-$ sizing, Buy/Sell Stop and the right-click menu all use it unchanged.
+    'Custom SL/TP':       { custom: true, sl: 40, targets: [{ ticks: 40, qty: 1 }], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },
     '40pt / 40pt':        { sl: 160, targets: [{ ticks: 160, qty: 1 }], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },   // 160 ticks = 40 pt on NQ/ES (0.25 tick)
     'Flat 10/20':         { sl: 10, targets: [{ ticks: 20, qty: 1 }], be: { on: false, trig: 12, off: 1 }, trail: { on: false, trig: 16, dist: 8 } },
     'Scalp 8/8 +BE':      { sl: 8,  targets: [{ ticks: 8, qty: 1 }],  be: { on: true,  trig: 6,  off: 1 }, trail: { on: false, trig: 8,  dist: 5 } },
@@ -2815,15 +2823,26 @@ function applyAtmUnitUI() {
   const set = (id, txt) => { const el = $(id); if (el) el.textContent = txt; };
   set('lblAtmSL', `Stop SL (${u})`); set('lblAtmTgtU', u);
   set('lblAtmBE', `Trigger / offset (${u})`); set('lblAtmTrail', `Start / distance (${u})`);
-  ['atmSL', 'atmT1t', 'atmT2t', 'atmT3t', 'atmBEtrig', 'atmBEoff', 'atmTrailTrig', 'atmTrailDist']
+  ['atmSL', 'atmT1t', 'atmT2t', 'atmT3t', 'atmBEtrig', 'atmBEoff', 'atmTrailTrig', 'atmTrailDist', 'slInput', 'tpInput']
     .forEach(id => { const el = $(id); if (el) el.step = step; });
-  const sel = $('atmUnit'); if (sel && sel.value !== atmUnit) sel.value = atmUnit;
+  set('lblSlU', u); set('lblTpU', u);
+  [$('atmUnit'), $('ordUnit')].forEach(sel => { if (sel && sel.value !== atmUnit) sel.value = atmUnit; });   // the editor's and the order panel's unit pickers are one setting
 }
-function setAtmUnit(u) { atmUnit = (u === 'pts' ? 'pts' : 'ticks'); saveJSON('rt_atm_unit', atmUnit); applyAtmUnitUI(); loadAtmIntoEditor($('atmSelect').value || activeAtm); renderRiskReadout(); }
+function setAtmUnit(u) { atmUnit = (u === 'pts' ? 'pts' : 'ticks'); saveJSON('rt_atm_unit', atmUnit); applyAtmUnitUI(); loadAtmIntoEditor($('atmSelect').value || activeAtm); syncRrField(); renderRiskReadout(); }
 function buildAtmSelect() { $('atmSelect').innerHTML = Object.keys(atm).map(k => `<option ${k === activeAtm ? 'selected' : ''}>${k}</option>`).join(''); applyAtmUnitUI(); loadAtmIntoEditor(activeAtm); syncRrField(); }
-function syncRrField() {   // show the Target-R dial only for structural ATMs; it drives the active preset's reward multiple (rr)
+function syncRrField() {   // show the Target-R dial for structural ATMs, or the inline Stop/Target boxes for the custom one
   const f = $('rrField'); if (!f) return; const a = atm[activeAtm] || {};
   if (a.struct) { f.style.display = ''; $('rrInput').value = a.rr || 1; } else f.style.display = 'none';
+  const show = !!a.custom;
+  ['ordUnitField', 'slField', 'tpField'].forEach(id => { const el = $(id); if (el) el.style.display = show ? '' : 'none'; });
+  if (show) { $('slInput').value = tkToDisp(a.sl || 0); $('tpInput').value = tkToDisp((a.targets && a.targets[0]) ? a.targets[0].ticks : 0); }
+}
+function setCustomBracket() {   // write the inline boxes back into the Custom SL/TP preset (stored in ticks, as every ATM is)
+  const a = atm[activeAtm]; if (!a || !a.custom) return;
+  a.sl = Math.max(0, dispToTk($('slInput').value));
+  const tp = Math.max(0, dispToTk($('tpInput').value));
+  a.targets = tp > 0 ? [{ ticks: tp, qty: (a.targets && a.targets[0] ? a.targets[0].qty : 1) || 1 }] : [];
+  saveJSON('rt_atm', atm); renderRiskReadout(); drawLines(); repaintOverlays();
 }
 function setRr(v) { const a = atm[activeAtm]; if (!a || !a.struct) return; a.rr = Math.max(0.25, Math.round(v * 4) / 4); $('rrInput').value = a.rr; saveJSON('rt_atm', atm); renderRiskReadout(); }
 function loadAtmIntoEditor(name) {
@@ -3073,6 +3092,8 @@ function wire() {
   $('rrMinus').onclick = () => setRr((+$('rrInput').value || 1) - 0.25);
   $('rrPlus').onclick = () => setRr((+$('rrInput').value || 1) + 0.25);
   $('atmUnit').value = atmUnit; $('atmUnit').onchange = (e) => setAtmUnit(e.target.value);
+  $('ordUnit').value = atmUnit; $('ordUnit').onchange = (e) => setAtmUnit(e.target.value);
+  $('slInput').oninput = setCustomBracket; $('tpInput').oninput = setCustomBracket;
   $('btnAtmSave').onclick = saveAtm;
   $('btnAtmDel').onclick = delAtm;
 
