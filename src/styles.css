@@ -5,11 +5,11 @@
 
 :root{
   /* surfaces — TradingView dark theme */
-  --bg:#131722;          /* chart canvas (TV dark navy)  */
-  --panel:#1e222d;       /* toolbar / card / bar surface */
-  --panel2:#2a2e39;      /* elevated control / inset     */
-  --line:#2a2e39;        /* hairline border              */
-  --hover:#2a2e39;       /* hover surface                */
+  --bg:#000000;          /* chart canvas (TV dark navy)  */
+  --panel:#101010;       /* toolbar / card / bar surface */
+  --panel2:#1c1c1c;      /* elevated control / inset     */
+  --line:#262626;        /* hairline border              */
+  --hover:#262626;       /* hover surface                */
   /* text */
   --txt:#d1d4dc;         /* body text                    */
   --dim:#9aa0ad;         /* muted / labels — ≥4.5:1 on every surface (was #787b86 @3.2:1) */
@@ -59,7 +59,7 @@ select,input{
   transition:border-color .12s ease,background .12s ease;
 }
 select:hover,input:hover{border-color:#363a45}
-select:focus,input:focus{outline:none;border-color:var(--brand);background:#2a2e39}
+select:focus,input:focus{outline:none;border-color:var(--brand);background:#262626}
 button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
 input[type=number]{width:72px}
 input[type=checkbox]{
@@ -278,7 +278,7 @@ button.active:hover:not(:disabled){background:var(--brand-hi);border-color:var(-
   font-weight:500;
   transition:background .12s ease,color .12s ease;
 }
-.tab:hover{color:var(--txt);background:#2a2e39}
+.tab:hover{color:var(--txt);background:#262626}
 .tab.active{
   background:var(--panel2);color:var(--txt);border-color:var(--line);
   box-shadow:inset 0 -2px 0 var(--brand);
@@ -304,7 +304,7 @@ th,td{
   border-bottom:1px solid var(--line);white-space:nowrap;
 }
 tbody tr:last-child td{border-bottom:none}
-tbody tr:hover td{background:#2a2e39}
+tbody tr:hover td{background:#262626}
 th:nth-child(1),td:nth-child(1),
 th:nth-child(2),td:nth-child(2){text-align:left}
 th{
@@ -408,7 +408,7 @@ td.neg{color:var(--red)}
 .dd-trow{font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .dd-trow .pos{color:var(--green)} .dd-trow .neg{color:var(--red)}
 .dd-sub{font-size:11px;color:var(--dim);margin-top:3px;font-variant-numeric:tabular-nums}
-.dd-chart{display:block;width:100%;height:260px;background:#131722;border:1px solid var(--line);border-radius:6px}
+.dd-chart{display:block;width:100%;height:260px;background:#000000;border:1px solid var(--line);border-radius:6px}
 /* saved trade logs modal */
 .log-row{display:flex;align-items:center;gap:12px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
 .log-info{flex:1;min-width:0}
@@ -434,7 +434,7 @@ td.neg{color:var(--red)}
    ========================================================================= */
 .toast{
   position:fixed;bottom:18px;left:50%;transform:translateX(-50%) translateY(6px);
-  background:#1e222d;color:var(--txt);
+  background:#161616;color:var(--txt);
   border:1px solid var(--line);
   padding:9px 16px;border-radius:var(--r-box);
   font-size:13px;
@@ -615,8 +615,8 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
         pointer-events:none}
 #oscBar > *{pointer-events:auto}
 #oscBar .osc-tag{font-size:10px;font-weight:700;letter-spacing:.4px;color:var(--dim);
-        text-transform:uppercase;background:#1e222dcc;padding:2px 6px;border-radius:5px}
-#oscSelect{padding:2px 6px;font-size:11px;background:#1e222dcc;border:1px solid var(--line);
+        text-transform:uppercase;background:#161616cc;padding:2px 6px;border-radius:5px}
+#oscSelect{padding:2px 6px;font-size:11px;background:#161616cc;border:1px solid var(--line);
         border-radius:5px;color:var(--txt)}
 
 /* ===================== Left drawing toolbar (TradingView-style vertical strip) ===================== */
@@ -662,7 +662,7 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 #oscClose.osc-x{
   display:inline-flex; align-items:center; justify-content:center;
   width:26px; height:26px; padding:0; line-height:1;
-  background:#1e222dcc; border:1px solid var(--line); border-radius:5px; color:var(--dim);
+  background:#161616cc; border:1px solid var(--line); border-radius:5px; color:var(--dim);
 }
 #oscClose.osc-x:hover{ background:#2a1418; border-color:#7a3640; color:var(--red); }
 #oscClose .material-symbols-outlined{ font-size:16px; }
@@ -841,3 +841,27 @@ button.bs-stop.sell:hover:not(:disabled){ background:#33262a; border-color:var(-
 .qz-chip.good{ background:rgba(38,166,154,.28); color:var(--green); }
 .qz-chip.bad{ background:rgba(239,83,80,.28); color:var(--red); }
 .qz-chip.miss{ background:rgba(240,185,11,.24); color:#f0b90b; }
+
+/* ===================== Multiple-timeframe view ===================== */
+/* #chartsRow holds the main #chart plus #mtfWrap's aux panes. Its flex-direction
+   is what "stacked" vs "side by side" actually means; #oscPane stays below both. */
+#chartsRow{flex:1 1 auto;min-height:0;min-width:0;display:flex;flex-direction:row}
+#chartsRow > #chart{flex:1 1 0;min-width:0;min-height:0;position:relative;inset:auto}
+#mtfWrap{display:none;min-width:0;min-height:0}
+/* display:contents dissolves #mtfWrap so the main chart and the aux panes are SIBLING flex
+   items and share the space equally — nested, #mtfWrap would take half and its 3 panes a
+   sixth each (~92px tall), which is too thin to read. */
+#chartwrap.mtf-on #mtfWrap{display:contents}
+#chartwrap.mtf-stack #chartsRow{flex-direction:column}
+#chartwrap.mtf-side  #chartsRow{flex-direction:row}
+.mtf-pane{flex:1 1 0;min-width:0;min-height:0;position:relative;border-left:1px solid var(--line)}
+#chartwrap.mtf-stack .mtf-pane{border-left:none;border-top:1px solid var(--line)}
+.mtf-pane > .mtf-chart{position:absolute;inset:0}
+.mtf-tag{position:absolute;top:4px;left:8px;z-index:3;font-size:10px;font-weight:700;letter-spacing:.4px;
+         color:var(--dim);text-shadow:0 1px 3px #000a;pointer-events:none}
+.mtf-tag b{color:var(--txt);font-size:11px}
+/* Grid 2x2: display:contents dissolves #mtfWrap so its panes become direct grid
+   items alongside #chart — main chart lands top-left, aux panes fill the rest in order. */
+#chartwrap.mtf-grid #chartsRow{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:0}
+#chartwrap.mtf-grid #mtfWrap{display:contents}
+#chartwrap.mtf-grid .mtf-pane{border-left:1px solid var(--line);border-top:1px solid var(--line)}

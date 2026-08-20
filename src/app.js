@@ -69,6 +69,10 @@ const RENDER_WINDOW = 4000, WINDOW_SLACK = 1500;
 let seriesFrom = 0;          // first absolute bar index currently in the candle/vol series (logical 0)
 // Tradovate-style tick replay: one day's real prints as the base resolution
 let tickMode = false, tickMs = [], availTickDays = [], curTickDay = null, simMs = 0, speedUIBase = null;
+// multiple-timeframe view — declared up here with the other mode state, NOT next to its functions:
+// init() runs early and hardReveal() reads these on the first paint (the TDZ trap seriesFrom and
+// deepMode both fell into). mtfPanes holds one {tf, chart, series, bars} per extra chart.
+let mtfLayout = loadJSON('rt_mtf_layout', 'off'), mtfTfs = loadJSON('rt_mtf_tfs', [1, 0, 0]), mtfPanes = [];
 let deepMode = false, deepSym = null, deepIndex = [], deepAllDays = new Set(), deepMonth = null;   // declared up here (not near enterDeepMode below) — init() runs early and loadDataset() reads deepMode on its first line; a late `let` here is the exact TDZ trap seriesFrom/RENDER_WINDOW already hit once
 let fO = 0, fH = 0, fL = 0, fC = 0, fV = 0, fBucket = -1;   // live-forming candle accumulator
 
@@ -123,8 +127,8 @@ function normalizeAtms(obj) { // migrate v1 {tp,qty} -> {targets:[...]}
 
 // ---------- chart ----------
 const chart = LightweightCharts.createChart($('chart'), {
-  layout: { background: { color: '#131722' }, textColor: '#d1d4dc', attributionLogo: false },
-  grid: { vertLines: { color: '#1e222d' }, horzLines: { color: '#1e222d' } },
+  layout: { background: { color: '#000000' }, textColor: '#d1d4dc', attributionLogo: false },
+  grid: { vertLines: { color: '#161616' }, horzLines: { color: '#161616' } },
   crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
   rightPriceScale: { borderColor: '#2a2e39' },
   localization: { timeFormatter: etCrosshairFmt },                 // crosshair label in ET
@@ -133,7 +137,11 @@ const chart = LightweightCharts.createChart($('chart'), {
 let candle = chart.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
 let vol = chart.addHistogramSeries({ priceScaleId: 'vol', priceFormat: { type: 'volume' } });
 chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
-function sizeChart() { const el = $('chart'); const w = el.clientWidth, h = el.clientHeight; if (!w || !h) return; chart.resize(w - 1, h, true); chart.resize(w, h, true); } // double-resize: LWC no-ops a resize to the same size, so nudge then set
+function sizeChart() {
+  const el = $('chart'); const w = el.clientWidth, h = el.clientHeight; if (!w || !h) return;
+  chart.resize(w - 1, h, true); chart.resize(w, h, true); // double-resize: LWC no-ops a resize to the same size, so nudge then set
+  mtfPanes.forEach(p => { const pw = p.cv.clientWidth, ph = p.cv.clientHeight; if (pw && ph) { p.chart.resize(pw - 1, ph, true); p.chart.resize(pw, ph, true); } });
+}
 new ResizeObserver(sizeChart).observe($('chartwrap'));
 window.addEventListener('resize', sizeChart);
 // ---- price-axis vertical zoom (wheel over the right axis) + auto-fit ----
@@ -466,7 +474,7 @@ function ripsterRepaint() { if (ripsterPrimitive._req) ripsterPrimitive._req(); 
 
 // ---- palette (must be literal hex — a 2nd chart can't read CSS vars) ----
 const OSC_COL = {
-  bg:    '#131722', grid: '#1e222d', border: '#2a2e39', txt: '#787b86',
+  bg:    '#000000', grid: '#161616', border: '#2a2e39', txt: '#787b86',
   rsi:   '#c026d3',                       // RSI line (magenta, distinct from Ripster)
   guide: '#3a4150',                       // 30/70/50 guide lines
   macd:  '#2962ff', signal: '#fcd535',    // MACD line / signal line
@@ -998,7 +1006,7 @@ const drawingsPrimitive = {
             if (d.type === 'hl' || d.type === 'measure' || d.type === 'rr') continue;   // these draw their own grab points / lines
             const hs = [d.p1]; if (d.p2) hs.push(d.p2);
             if (d.type === 'box' && d.p2) { hs.push({ t: d.p2.t, p: d.p1.p }, { t: d.p1.t, p: d.p2.p }); }
-            for (const pt of hs) { const hx = X(pt.t), hy = Y(pt.p); if (hx == null || hy == null) continue; ctx.beginPath(); ctx.arc(hx, hy, 3.5, 0, 7); ctx.fillStyle = '#131722'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = d.color || '#d1d4dc'; ctx.stroke(); }
+            for (const pt of hs) { const hx = X(pt.t), hy = Y(pt.p); if (hx == null || hy == null) continue; ctx.beginPath(); ctx.arc(hx, hy, 3.5, 0, 7); ctx.fillStyle = '#000000'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = d.color || '#d1d4dc'; ctx.stroke(); }
           }
           // selected drawing: emphasise its anchors in brand amber (signals selected + draggable + deletable)
           if (selDrawing && drawings.includes(selDrawing)) {
@@ -1006,7 +1014,7 @@ const drawingsPrimitive = {
             if (d.type === 'hl') hpts.push({ t: null, p: d.p1.p });
             else if (d.type === 'rr') { hpts.push({ t: d.p1.t, p: d.p1.p }, { t: d.p1.t, p: d.stop }, { t: d.p1.t, p: d.target }); }
             else { if (d.p1) hpts.push(d.p1); if (d.p2) hpts.push(d.p2); }
-            for (const pt of hpts) { const hx = pt.t == null ? W / 2 : X(pt.t), hy = Y(pt.p); if (hx == null || hy == null) continue; ctx.beginPath(); ctx.arc(hx, hy, 5, 0, 7); ctx.fillStyle = '#fcd535'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = '#131722'; ctx.stroke(); }
+            for (const pt of hpts) { const hx = pt.t == null ? W / 2 : X(pt.t), hy = Y(pt.p); if (hx == null || hy == null) continue; ctx.beginPath(); ctx.arc(hx, hy, 5, 0, 7); ctx.fillStyle = '#fcd535'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = '#000000'; ctx.stroke(); }
           }
           if (pendingPt) { const x = X(pendingPt.t), y = Y(pendingPt.p); if (x != null && y != null) { ctx.fillStyle = '#2962ff'; ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fill(); } }
         });
@@ -1146,7 +1154,7 @@ function drawMeasure(ctx, d, X, Y) {
   ctx.font = '600 12px ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif'; ctx.textBaseline = 'middle';
   const padX = 7, tw = ctx.measureText(label).width, pillW = tw + padX * 2, pillH = 20;
   let px = Math.max(2, (x1 + x2) / 2 - pillW / 2), py = Math.max(2, (y1 + y2) / 2 - pillH / 2);
-  ctx.fillStyle = '#1e222d'; ctx.globalAlpha = 0.92;
+  ctx.fillStyle = '#161616'; ctx.globalAlpha = 0.92;
   if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(px, py, pillW, pillH, 5); ctx.fill(); } else ctx.fillRect(px, py, pillW, pillH);
   ctx.globalAlpha = 1; ctx.strokeStyle = col; ctx.lineWidth = 1;
   if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(px, py, pillW, pillH, 5); ctx.stroke(); } else ctx.strokeRect(px, py, pillW, pillH);
@@ -1181,8 +1189,8 @@ function drawRR(ctx, d, X, Y, W) {
   hline(yt, '#26a69a'); hline(ys, '#ef5350');
   ctx.setLineDash([5, 3]); hline(ye, '#d1d4dc'); ctx.setLineDash([]);
   // blue handles — squares at the 4 box corners, circles at the entry edges
-  const sq = (x, y) => { ctx.fillStyle = '#3b82f6'; ctx.strokeStyle = '#131722'; ctx.lineWidth = 1.5; ctx.fillRect(x - 3.5, y - 3.5, 7, 7); ctx.strokeRect(x - 3.5, y - 3.5, 7, 7); };
-  const ci = (x, y) => { ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fillStyle = '#3b82f6'; ctx.fill(); ctx.strokeStyle = '#131722'; ctx.lineWidth = 1.5; ctx.stroke(); };
+  const sq = (x, y) => { ctx.fillStyle = '#3b82f6'; ctx.strokeStyle = '#000000'; ctx.lineWidth = 1.5; ctx.fillRect(x - 3.5, y - 3.5, 7, 7); ctx.strokeRect(x - 3.5, y - 3.5, 7, 7); };
+  const ci = (x, y) => { ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fillStyle = '#3b82f6'; ctx.fill(); ctx.strokeStyle = '#000000'; ctx.lineWidth = 1.5; ctx.stroke(); };
   sq(xa, yt); sq(xb, yt); sq(xa, ys); sq(xb, ys); ci(xa, ye); ci(xb, ye);
   // metrics + centered label pills — matches TradingView's Long/Short position tool
   const qty = Math.max(1, parseInt(($('qty') || {}).value, 10) || 1);
@@ -1205,7 +1213,7 @@ function drawRR(ctx, d, X, Y, W) {
     lines.forEach((ln, i) => ctx.fillText(ln, px + pw / 2, py + 4 + lh / 2 + i * lh));
   };
   pill(`Target: ${f2(d.target)} (${sgn(tPct)}${tPct.toFixed(2)}%) ${tPts.toFixed(2)}, Amount: ${usd(rewT * INSTR.tickValue * qty)}`, yt, '#0b3b2a', '#26a69a');
-  pill(`Open PnL: ${usd(openPnl)}, Qty: ${qty}\nRisk/reward ratio: ${rr.toFixed(2)}`, ye, '#1e222d', '#d1d4dc');
+  pill(`Open PnL: ${usd(openPnl)}, Qty: ${qty}\nRisk/reward ratio: ${rr.toFixed(2)}`, ye, '#161616', '#d1d4dc');
   pill(`Stop: ${f2(d.stop)} (${sgn(sPct)}${sPct.toFixed(2)}%) ${sPts.toFixed(2)}, Amount: ${usd(riskT * INSTR.tickValue * qty)}`, ys, '#3b1418', '#ef5350');
   ctx.restore();
 }
@@ -1684,7 +1692,7 @@ function wireCalendar() {
   });
   document.addEventListener('mousedown', (e) => { const p = $('datePopover'); if (p && p.classList.contains('open') && !p.contains(e.target) && !$('dateBtn').contains(e.target)) closeCal(); });
 }
-function buildTfSelect() { $('tfSelect').innerHTML = TF_OPTIONS.map(m => `<option value="${m}" ${m === tf ? 'selected' : ''}>${m < 1 ? Math.round(m * 60) + 's' : m + 'm'}</option>`).join(''); setSpeedOptions(); }   // setSpeedOptions here too: BASE_TF is final by now, and the sub-bar labels quote it
+function buildTfSelect() { $('tfSelect').innerHTML = TF_OPTIONS.map(m => `<option value="${m}" ${m === tf ? 'selected' : ''}>${m < 1 ? Math.round(m * 60) + 's' : m + 'm'}</option>`).join(''); setSpeedOptions(); buildMtfSelects(); }   // setSpeedOptions here too: BASE_TF is final by now, and the sub-bar labels quote it
 function buildDataSelect() { $('dataSelect').innerHTML = DATASETS.map((ds, i) => ds.hidden ? '' : `<option value="${i}" ${i === dataIdx ? 'selected' : ''}>${ds.label}</option>`).join(''); }   // hidden entries stay in DATASETS (still loadable) but never render in the dropdown
 
 // ---------- timeframe / index bookkeeping ----------
@@ -1726,14 +1734,14 @@ function maybeReWindow() {                            // trim once the series ha
   feedWindow(true); refreshMarkers(); oscHardReveal();
   return true;
 }
-function hardReveal() { feedWindow(false); refreshMarkers(); drawLines(); renderLegend(null); oscHardReveal(); resetForming(); setAlertBaseline(); rndPrevMin = null; }   // rndPrevMin reset: a jump must re-seed the settle-crossing baseline
+function hardReveal() { feedWindow(false); refreshMarkers(); drawLines(); renderLegend(null); oscHardReveal(); mtfSync(true); resetForming(); setAlertBaseline(); rndPrevMin = null; }   // rndPrevMin reset: a jump must re-seed the settle-crossing baseline
 // Advance exactly ONE base sub-bar (15s on the deep datasets, one print on tick). revealTick() rolls
 // the display bar over when the bucket changes AND runs processSub() on the bar, so a stop/target
 // sitting inside a 3m candle fires on the 15s slice that actually reached it — not at the bar close.
 function stepSub() {
   if (baseIdx >= baseBars.length - 1) { pause(); return; }
   baseIdx++; revealTick(baseIdx);
-  maybeReWindow(); commitForming();
+  maybeReWindow(); commitForming(); mtfSync();
   renderLive(); renderLegend(null); alertCheck(); settleCheck();
 }
 function stepAny() { return subStepMode() ? stepSub() : stepFwd(); }
@@ -1745,7 +1753,7 @@ function stepFwd() {
     for (let i = baseIdx + 1; i <= cur.subEnd; i++) processSub(baseBars[i]);
     baseIdx = cur.subEnd;
     candle.update(cd(cur)); vol.update(vd(cur));
-    resetForming(); renderLive(); renderLegend(null); alertCheck(); settleCheck();
+    resetForming(); mtfSync(); renderLive(); renderLegend(null); alertCheck(); settleCheck();
     return;
   }
   if (idx >= bars.length - 1) { pause(); return; }
@@ -1754,7 +1762,7 @@ function stepFwd() {
   else { candle.update(cd(bars[idx])); vol.update(vd(bars[idx])); oscStepFwd(); }
   for (let i = bars[idx].subStart; i <= bars[idx].subEnd; i++) { processSub(baseBars[i]); }
   baseIdx = bars[idx].subEnd;
-  resetForming();
+  resetForming(); mtfSync();
   renderLive(); renderLegend(null); alertCheck(); settleCheck();
 }
 function stepBack() {
@@ -1837,7 +1845,7 @@ function subStepMode() { return String($('speedSelect').value).indexOf('sub:') =
 function setSpeedOptions() {   // Sub-bar · Realtime (clock-paced) · steady display-bars/sec. Rebuilt whenever the base resolution changes so the sub-bar labels never lie about it.
   const key = (tickMode ? 'tick' : String(BASE_TF)), first = speedUIBase === null;
   if (speedUIBase === key) return; speedUIBase = key;
-  const keep = first ? '' : $('speedSelect').value, u = subUnit();   // first build ignores index.html's static "1 bar/s" so the sub-bar rate is the out-of-the-box default
+  const keep = first ? loadJSON('rt_speed', '1') : $('speedSelect').value, u = subUnit();   // remembered pick; default "1 bar/s" = Step advances ONE bar of the timeframe you have selected
   const sub = [0.5, 1, 2, 4, 10].map(n => [`sub:${n}`, `${u} × ${n}/s`]);
   const rt = [['rt:1', 'Realtime 1×'], ['rt:10', 'Realtime 10×'], ['rt:60', 'Realtime 60×'], ['rt:300', 'Realtime 300×']];
   const bs = [0.5, 1, 2, 5, 10, 30].map(n => [String(n), `${n} bar/s`]);
@@ -1846,9 +1854,9 @@ function setSpeedOptions() {   // Sub-bar · Realtime (clock-paced) · steady di
     grp(`Sub-bar — ${u} at a time (step + play)`, sub) +
     grp('Real-time (clock-paced)', rt) +
     grp('Steady rate (whole display bars)', bs);
-  // keep the user's pick across a dataset switch; otherwise default to one sub-bar per second, so
-  // stepping and playing both advance by the BASE resolution (a 3m candle forms over 12 × 15s)
-  $('speedSelect').value = [...$('speedSelect').options].some(o => o.value === keep) ? keep : 'sub:1';
+  // keep the pick across a dataset switch; fall back to "1 bar/s" = one WHOLE bar of the selected
+  // timeframe per Step (pick a Sub-bar rate instead to crawl through a bar 15s at a time)
+  $('speedSelect').value = [...$('speedSelect').options].some(o => o.value === keep) ? keep : '1';
 }
 async function enterTickMode(ds) {
   // Probe availability BEFORE mutating any mode flag or INSTR: data/tick/ is gitignored (~554MB), so
@@ -1913,7 +1921,7 @@ function playFrame() {   // steady display-bars/sec reveal; each base sub-bar = 
     if (playBudget < cost) break;
     playBudget -= cost; baseIdx++; revealTick(baseIdx); if (++n > 500000) break;
   }
-  if (n) { maybeReWindow(); commitForming(); renderLive(); renderLegend(null); alertCheck(); settleCheck(); }
+  if (n) { maybeReWindow(); commitForming(); mtfSync(); renderLive(); renderLegend(null); alertCheck(); settleCheck(); }
   if (baseIdx >= baseBars.length - 1) pause();
 }
 function playSubFrame() {   // steady SUB-BAR rate: N base bars/sec regardless of the display timeframe, so on 15s base a 3m candle builds over 12 reveals and every intrabar stop/target lands on its real slice
@@ -1921,7 +1929,7 @@ function playSubFrame() {   // steady SUB-BAR rate: N base bars/sec regardless o
   playBudget += rate * (TICK_FRAME_MS / 1000);
   let n = 0;
   while (playBudget >= 1 && baseIdx < baseBars.length - 1) { playBudget -= 1; baseIdx++; revealTick(baseIdx); if (++n > 500000) break; }
-  if (n) { maybeReWindow(); commitForming(); renderLive(); renderLegend(null); alertCheck(); settleCheck(); }
+  if (n) { maybeReWindow(); commitForming(); mtfSync(); renderLive(); renderLegend(null); alertCheck(); settleCheck(); }
   if (baseIdx >= baseBars.length - 1) pause();
 }
 function baseMs(i) { return tickMode ? tickMs[i] : baseBars[i].time * 1000; }   // absolute ms of base bar i (tick OR normal sub-bar)
@@ -1930,8 +1938,84 @@ function playRtFrame() {   // Realtime: advance a sim clock at mult × real mark
   simMs += mult * TICK_FRAME_MS;
   let n = 0;
   while (baseIdx < baseBars.length - 1 && baseMs(baseIdx + 1) <= simMs) { baseIdx++; revealTick(baseIdx); if (++n > 500000) break; }
-  if (n) { maybeReWindow(); commitForming(); renderLive(); renderLegend(null); alertCheck(); settleCheck(); }
+  if (n) { maybeReWindow(); commitForming(); mtfSync(); renderLive(); renderLegend(null); alertCheck(); settleCheck(); }
   if (baseIdx >= baseBars.length - 1) pause();
+}
+// ---------- multiple-timeframe view ----------
+// Extra read-only candle charts of the SAME baseBars at other timeframes, pinned to the replay
+// position: they never show a bar the main chart hasn't reached, and the newest one is drawn partial
+// from the sub-bars revealed so far — exactly like the main chart's forming candle. Trading stays on
+// the main chart; these are for reading structure, so they carry no orders, markers or primitives.
+const MTF_WINDOW = 1500, MTF_FIT = 120;
+function mtfSrcKey() { return baseBars.length ? `${baseBars.length}:${baseBars[0].time}:${baseBars[baseBars.length - 1].time}` : ''; }   // identifies the loaded day/month without threading a counter through every loader
+function buildMtfSelects() {
+  const opts = (sel) => `<option value="0">— off —</option>` + TF_OPTIONS.map(m => `<option value="${m}" ${Math.abs(m - sel) < 1e-9 ? 'selected' : ''}>${m < 1 ? Math.round(m * 60) + 's' : m + 'm'}</option>`).join('');
+  ['mtfTf1', 'mtfTf2', 'mtfTf3'].forEach((id, i) => { const el = $(id); if (el) el.innerHTML = opts(mtfTfs[i] || 0); });
+  const l = $('mtfLayout'); if (l) l.value = mtfLayout;
+}
+function destroyMtf() { mtfPanes.forEach(p => { try { p.chart.remove(); } catch (e) {} p.el.remove(); }); mtfPanes = []; }
+function rebuildMtf() {
+  destroyMtf();
+  const wrap = $('chartwrap'), host = $('mtfWrap'); if (!wrap || !host) return;
+  wrap.classList.toggle('mtf-on', mtfLayout !== 'off');
+  wrap.classList.toggle('mtf-stack', mtfLayout === 'stack');
+  wrap.classList.toggle('mtf-side', mtfLayout === 'side');
+  wrap.classList.toggle('mtf-grid', mtfLayout === 'grid');
+  if (mtfLayout === 'off') { sizeChart(); return; }
+  mtfTfs.filter(m => m > 0).forEach(m => {
+    const el = document.createElement('div'); el.className = 'mtf-pane';
+    const cv = document.createElement('div'); cv.className = 'mtf-chart';
+    const tag = document.createElement('div'); tag.className = 'mtf-tag';
+    tag.innerHTML = `<b>${m < 1 ? Math.round(m * 60) + 's' : m + 'm'}</b>`;
+    el.appendChild(cv); el.appendChild(tag); host.appendChild(el);
+    const c = LightweightCharts.createChart(cv, {
+      layout: { background: { color: '#000000' }, textColor: '#d1d4dc', fontSize: 10, attributionLogo: false },
+      grid: { vertLines: { color: '#161616' }, horzLines: { color: '#161616' } },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+      rightPriceScale: { borderColor: '#2a2e39', scaleMargins: { top: 0.12, bottom: 0.12 } },
+      localization: { timeFormatter: etCrosshairFmt },
+      timeScale: { borderColor: '#2a2e39', timeVisible: true, secondsVisible: m < 1, rightOffset: 4, tickMarkFormatter: etTickFmt },
+    });
+    const s = c.addCandlestickSeries({ upColor: CT_UP, downColor: CT_DOWN, borderVisible: false, wickUpColor: CT_UP, wickDownColor: CT_DOWN });
+    mtfPanes.push({ tf: m, el, cv, chart: c, series: s, bars: null, srcKey: '', lastJ: -1 });
+  });
+  sizeChart(); mtfSync(true);
+}
+function mtfBarAt(p, bi) {   // index of p.bars containing base index bi (binary search on the sub-bar span)
+  const a = p.bars; let lo = 0, hi = a.length - 1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (bi < a[m].subStart) hi = m - 1; else if (bi > a[m].subEnd) lo = m + 1; else return m; }
+  return Math.max(0, Math.min(a.length - 1, hi));
+}
+function mtfPartial(p, j) {   // the newest bar, built only from sub-bars up to baseIdx — never leaks the rest of the bar
+  const b = p.bars[j], s = b.subStart, e = Math.min(baseIdx, b.subEnd);
+  let o = baseBars[s].open, h = baseBars[s].high, l = baseBars[s].low, c = baseBars[s].close;
+  for (let i = s + 1; i <= e; i++) { const x = baseBars[i]; if (x.high > h) h = x.high; if (x.low < l) l = x.low; c = x.close; }
+  return { time: b.time, open: o, high: h, low: l, close: c };
+}
+function mtfSync(hard) {
+  if (mtfLayout === 'off' || !mtfPanes.length || !baseBars.length) return;
+  const key = mtfSrcKey();
+  mtfPanes.forEach(p => {
+    if (!p.bars || p.srcKey !== key) { p.bars = aggregate(baseBars, p.tf); p.srcKey = key; p.lastJ = -1; hard = true; }
+    if (!p.bars.length) return;
+    const j = mtfBarAt(p, baseIdx);
+    if (hard || j < p.lastJ) {                                   // load / jump / step-back → re-feed the window
+      const from = Math.max(0, j - MTF_WINDOW + 1);
+      const d = p.bars.slice(from, j).map(b => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close }));
+      d.push(mtfPartial(p, j)); p.series.setData(d);
+      const li = d.length - 1;
+      try { p.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, li - MTF_FIT), to: li + 4 }); } catch (e) {}
+    } else {
+      for (let k = p.lastJ; k >= 0 && k < j; k++) { const b = p.bars[k]; p.series.update({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close }); }   // close out any bars completed since last sync
+      p.series.update(mtfPartial(p, j));
+    }
+    p.lastJ = j;
+  });
+}
+function setMtf(layout, tfs) {
+  if (layout != null) { mtfLayout = layout; saveJSON('rt_mtf_layout', mtfLayout); }
+  if (tfs) { mtfTfs = tfs; saveJSON('rt_mtf_tfs', mtfTfs); }
+  rebuildMtf();
 }
 function rthOpenIdx(s) { for (let i = s.start; i <= s.end; i++) { const m = etMinutes(baseBars[i].time); if (m >= 570 && m < 960) return i; } return s.start; }  // first bar in 09:30–15:59 ET = US cash open (skips the 18:00 ET Globex open)
 function gotoSession(i) {
@@ -3012,7 +3096,7 @@ function wire() {
   wireCalendar();
   $('tfSelect').onchange = (e) => setTf(+e.target.value);
   $('dataSelect').onchange = async (e) => { if (locked()) { $('dataSelect').value = dataIdx; return toast("Can't switch dataset while in a position / working order"); } const i = +e.target.value; const ok = await loadDataset(DATASETS[i]); if (ok) { if (rndMode) exitRnd(); dataIdx = i; } else $('dataSelect').value = dataIdx; };
-  $('speedSelect').onchange = () => { if (playing) { pause(); play(); } };
+  $('speedSelect').onchange = () => { saveJSON('rt_speed', $('speedSelect').value); if (playing) { pause(); play(); } };   // remember the pick across reloads
   $('startSlider').oninput = (e) => setStart(+e.target.value);
   $('btnPickStart').onclick = () => { if (locked()) { return toast("Can't set start while in a position / working order"); } setTool('start'); };
   $('btnFit').onclick = fitChart;
@@ -3058,6 +3142,12 @@ function wire() {
   $('emaPeriods').value = emaPeriods.join(','); $('emaPeriods').onchange = (e) => setEmaPeriods(e.target.value);
   wireOsc();
   $('chartTypeSelect').value = chartType; $('chartTypeSelect').onchange = (e) => setChartType(e.target.value);
+  // MTF dropdown (top toolbar)
+  $('btnMtf').onclick = (e) => { e.stopPropagation(); $('mtfPopover').classList.toggle('open'); $('btnMtf').classList.toggle('active'); };
+  document.addEventListener('mousedown', (e) => { const p = $('mtfPopover'), b = $('btnMtf'); if (p && p.classList.contains('open') && !p.contains(e.target) && !b.contains(e.target)) { p.classList.remove('open'); b.classList.remove('active'); } });
+  const readMtfTfs = () => ['mtfTf1', 'mtfTf2', 'mtfTf3'].map(id => +$(id).value || 0);
+  $('mtfLayout').onchange = (e) => setMtf(e.target.value, readMtfTfs());
+  ['mtfTf1', 'mtfTf2', 'mtfTf3'].forEach(id => { $(id).onchange = () => setMtf(mtfLayout === 'off' ? 'stack' : mtfLayout, readMtfTfs()); });   // picking a timeframe while Off turns the view on instead of silently doing nothing
   // Indicators dropdown (top toolbar) + oscillator pane close button
   $('btnIndicators').onclick = (e) => { e.stopPropagation(); $('indPopover').classList.toggle('open'); $('btnIndicators').classList.toggle('active'); };
   document.addEventListener('mousedown', (e) => { const p = $('indPopover'), b = $('btnIndicators'); if (p && p.classList.contains('open') && !p.contains(e.target) && !b.contains(e.target)) { p.classList.remove('open'); b.classList.remove('active'); } });
@@ -3127,6 +3217,7 @@ function wire() {
     else if ((e.key === 'Delete' || e.key === 'Backspace') && selDrawing) { e.preventDefault(); deleteSelectedDrawing(); }
     else if (e.key === 'Escape') { if (tool) setTool(''); else if (selDrawing) { selDrawing = null; repaintOverlays(); } }
   });
+  buildMtfSelects(); rebuildMtf();   // restore a saved multi-timeframe layout on boot (no-op when Off)
 }
 function switchTab(t) { $('tabTrades').classList.toggle('active', t); $('tabDash').classList.toggle('active', !t); $('panelTrades').classList.toggle('hidden', !t); $('panelDash').classList.toggle('hidden', t); if (!t) renderDash(); }
 
