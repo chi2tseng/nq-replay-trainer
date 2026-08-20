@@ -99,6 +99,10 @@ if (loadJSON('rt_atm_v', 0) < 4) {   // merge the inline Custom SL/TP preset in 
   if (!atm['Custom SL/TP']) atm['Custom SL/TP'] = defaultAtms()['Custom SL/TP'];
   saveJSON('rt_atm', atm); saveJSON('rt_atm_v', 4);
 }
+if (loadJSON('rt_atm_v', 0) < 5) {   // merge the bar-open structural stop in, same rule: never clobber user-made ATMs
+  if (!atm['Struct SL · bar OPEN']) atm['Struct SL · bar OPEN'] = defaultAtms()['Struct SL · bar OPEN'];
+  saveJSON('rt_atm', atm); saveJSON('rt_atm_v', 5);
+}
 let activeAtm = Object.keys(atm)[0];
 let riskOn = loadJSON('rt_risk_on', false), riskUsd = loadJSON('rt_risk_usd', 200);   // fixed-$ position sizing: contracts derived from $risk ÷ stop
 
@@ -107,6 +111,11 @@ function defaultAtms() {
     'Struct SL · 1:1':    { struct: true, rr: 1, sl: 0, targets: [], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },   // stop at current bar's high(short)/low(long) ±1tick; target = 1× risk
     'Struct SL · 1:2':    { struct: true, rr: 2, sl: 0, targets: [], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },   // structural stop; target = 2× risk
     'Struct SL · Custom R': { struct: true, rr: 1.5, sl: 0, targets: [], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } }, // structural stop; dial the R multiple with the Target-R input
+    // Stop parked at the SIGNAL BAR'S OPEN rather than its wick — on a big breakout bar the low can
+    // be 40+ ticks away while the open sits right under the trigger, so this is the tight version of
+    // the same idea. Meant for Buy/Sell Stop entries (entry = bar high/low ±1 tick, so the open is
+    // always on the correct side), but it works for market and limit entries too.
+    'Struct SL · bar OPEN':  { struct: true, openStop: true, rr: 1, sl: 0, targets: [], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },
     // Driven by the Stop/Target boxes in the order panel (see syncRrField) instead of the template
     // editor — type a distance, trade. It is an ordinary ATM otherwise, so bracketFromAtm,
     // plannedStopTicks, fixed-$ sizing, Buy/Sell Stop and the right-click menu all use it unchanged.
@@ -230,7 +239,16 @@ function bracketFromAtm(name) {   // snapshot an ATM template's stop + targets (
   if (a.struct) return { slTicks: 0, tgts: [], struct: true, rr: a.rr || 1 };   // structural stop is computed from the fill bar
   return { slTicks: a.sl || 0, tgts: (a.targets || []).filter(t => t.ticks > 0 && t.qty > 0).map(t => ({ ticks: t.ticks, qty: t.qty })) };
 }
-function curBarExtreme() { const b = bars[Math.min(idx, bars.length - 1)]; return b ? { hi: b.high, lo: b.low } : { hi: 0, lo: 0 }; }   // current K-bar high/low for structural stops
+function curBarExtreme() { const b = bars[Math.min(idx, bars.length - 1)]; return b ? { hi: b.high, lo: b.low, op: b.open } : { hi: 0, lo: 0, op: 0 }; }   // current K-bar high/low/open for structural stops
+// THE one place a structural stop price is decided. Sizing, the working-order preview lines and the
+// bracket that actually gets placed all call this, so they can never disagree about where the stop is.
+// a.openStop -> park it at the signal bar's OPEN (tighter than the wick on a big breakout bar);
+// otherwise the classic opposite extreme +-1 tick. Both are clamped to stay >=1 tick beyond entry.
+function structStopPx(side, entryRef, a) {
+  const ext = curBarExtreme(), long = side === 'long';
+  if (a && a.openStop) return rnd(long ? Math.min(ext.op, entryRef - TICK) : Math.max(ext.op, entryRef + TICK));
+  return rnd(long ? Math.min(ext.lo, entryRef) - TICK : Math.max(ext.hi, entryRef) + TICK);
+}
 
 // ---- fixed-risk position sizing: contracts = floor($risk ÷ (stopTicks × $/tick)) ----
 function plannedStopTicks(side, kind, price) {   // stop distance (ticks) the active ATM would apply to this prospective order
@@ -239,8 +257,7 @@ function plannedStopTicks(side, kind, price) {   // stop distance (ticks) the ac
     const ext = curBarExtreme();
     const entryRef = kind === 'stop' ? rnd(side === 'long' ? ext.hi + TICK : ext.lo - TICK)   // breakout level
                    : kind === 'limit' ? (price || curPx()) : curPx();
-    const oppExtreme = side === 'long' ? Math.min(ext.lo, entryRef) - TICK : Math.max(ext.hi, entryRef) + TICK;   // same clamp as structBracket → sizing matches the actual bracket
-    return Math.max(1, Math.round(Math.abs(entryRef - oppExtreme) / TICK));
+    return Math.max(1, Math.round(Math.abs(entryRef - structStopPx(side, entryRef, a)) / TICK));   // one shared stop-price rule => sizing always matches the bracket that gets placed
   }
   return a.sl > 0 ? a.sl : 0;                    // fixed SL ticks (0 = template has no stop → can't size)
 }
@@ -262,8 +279,7 @@ function renderRiskReadout() {
 }
 function structBracket(side, kind, price, name) {   // R-based bracket AT ORDER TIME for struct ATMs: stop beyond the signal bar / entry structure, target = rr × risk
   const a = atm[name || activeAtm] || {}; if (!a.struct) return null;
-  const ext = curBarExtreme(), long = side === 'long';
-  const stopPx = rnd(long ? Math.min(ext.lo, price) - TICK : Math.max(ext.hi, price) + TICK);   // clamp: a deep pullback limit keeps the stop on the correct side of entry
+  const stopPx = structStopPx(side, price, a);
   const slT = Math.max(1, Math.round(Math.abs(price - stopPx) / TICK));
   return { slTicks: slT, tgts: [{ ticks: Math.max(1, Math.round(slT * (a.rr || 1))), qty: 1 }] };
 }
@@ -1036,7 +1052,7 @@ function orderLines() {   // single source for drawing AND dragging (entry / sto
     out.push({ price: entryOrder.price, color: '#2962ff', label: `${long ? 'BUY' : 'SELL'} ${entryOrder.kind === 'limit' ? 'LMT' : 'STP'}`, qty: q, cancel: 'entry',
                drag: { get: () => entryOrder.price, set: p => entryOrder.price = p } });
     if (entryOrder.struct) {   // structural preview (computed from the current bar; not independently draggable)
-      const ext = curBarExtreme(), sp = rnd(long ? ext.lo - TICK : ext.hi + TICK), risk = Math.abs(entryOrder.price - sp);
+      const sp = structStopPx(side, entryOrder.price, atm[entryOrder.atm] || atm[activeAtm] || {}), risk = Math.abs(entryOrder.price - sp);
       out.push({ price: sp, color: '#ef5350', label: 'STOP', qty: q, ref: entryOrder.price });
       out.push({ price: rnd(long ? entryOrder.price + risk : entryOrder.price - risk), color: '#26a69a', label: 'TGT', qty: q, ref: entryOrder.price });
     } else {
@@ -2387,8 +2403,8 @@ function onEntryButton(side) {
       const ext = curBarExtreme();
       price = rnd(side === 'long' ? ext.hi + TICK : ext.lo - TICK);
       const inp = $('entryPrice'); if (inp) inp.value = f2(price);   // show the auto-computed level
-      if (a.struct) {   // snapshot structural stop to THIS (signal) bar: opposite extreme; target = rr×risk
-        const stopPx = side === 'long' ? ext.lo - TICK : ext.hi + TICK;
+      if (a.struct) {   // snapshot the structural stop to THIS (signal) bar; target = rr×risk
+        const stopPx = structStopPx(side, price, a);
         const slT = Math.max(1, Math.round(Math.abs(price - stopPx) / TICK));
         bracket = { slTicks: slT, tgts: [{ ticks: Math.max(1, Math.round(slT * (a.rr || 1))), qty: 1 }] };
       }
@@ -2416,8 +2432,7 @@ function openPosition(side, px, t, atmName, mult, bracket) {
   const a = atm[atmName] || {}; entryOrder = null;
   let sl, srcT;
   if (a.struct && (!bracket || !bracket.slTicks)) {   // struct + no snapshot (market entry) → stop from CURRENT bar's extreme
-    const ext = curBarExtreme();
-    const stopPx = side === 'long' ? ext.lo - TICK : ext.hi + TICK;
+    const stopPx = structStopPx(side, px, a);
     sl = Math.max(1, Math.round(Math.abs(px - stopPx) / TICK));
     srcT = [{ ticks: Math.max(1, Math.round(sl * (a.rr || 1))), qty: 1 }];   // target = rr × risk (1:1)
   } else {
@@ -2447,8 +2462,8 @@ function placeBreakout(side) {   // Buy/Sell Stop: stop-entry at the current bar
   const long = side === 'long', a = atm[activeAtm] || {}, ext = curBarExtreme();
   const price = rnd(long ? ext.hi + TICK : ext.lo - TICK);
   let bracket;
-  if (a.struct) {   // structural stop = opposite extreme of THIS bar; target = rr × risk (fixed now, not recomputed at fill)
-    const stopPx = rnd(long ? ext.lo - TICK : ext.hi + TICK);
+  if (a.struct) {   // structural stop snapshotted from THIS bar; target = rr × risk (fixed now, not recomputed at fill)
+    const stopPx = structStopPx(side, price, a);
     const slT = Math.max(1, Math.round(Math.abs(price - stopPx) / TICK));
     bracket = { slTicks: slT, tgts: [{ ticks: Math.max(1, Math.round(slT * (a.rr || 1))), qty: 1 }] };
   } else {
