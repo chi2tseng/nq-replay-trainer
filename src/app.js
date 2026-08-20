@@ -313,6 +313,8 @@ function showCtx(clientX, clientY) {
     it.push({ l: `Buy Stop @ ${p}`, cls: 'buy', f: () => placeEntryAt('long', 'stop', price) });
     it.push({ l: `Sell Stop @ ${p}`, cls: 'sell', f: () => placeEntryAt('short', 'stop', price) });
   }
+  const nDrw = drawings.length + annotations.length;   // always-available: wipe every drawing in one go
+  if (nDrw) { it.push({ sep: 1 }); it.push({ l: `Clear all drawings (${nDrw})`, f: () => clearDrawings() }); }
   ctxEl.innerHTML = '';
   it.forEach(x => {
     const d = document.createElement('div');
@@ -3214,6 +3216,7 @@ function wire() {
     else if (e.key === '[' || e.key === 'ArrowLeft') { e.preventDefault(); prevDay(); }
     else if (e.key === ']' || e.key === 'ArrowRight') { e.preventDefault(); nextDay(); }
     else if (e.key === '0') { e.preventDefault(); fitChart(); }
+    else if (e.key === 'Delete' && e.shiftKey) { e.preventDefault(); clearDrawings(); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && selDrawing) { e.preventDefault(); deleteSelectedDrawing(); }
     else if (e.key === 'Escape') { if (tool) setTool(''); else if (selDrawing) { selDrawing = null; repaintOverlays(); } }
   });
