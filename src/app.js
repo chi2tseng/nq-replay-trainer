@@ -276,6 +276,9 @@ function structStopPx(side, entryRef, a, bar) {
   // 'body' = the edge of the candle BODY facing the stop, i.e. direction-aware: a long stops at the
   // body's bottom (an up bar's open, a down bar's close) and a short at its top. One rule, both cases.
   else if (src === 'body') raw = long ? Math.min(ext.op, ext.cl) : Math.max(ext.op, ext.cl);
+  // 'half' = the bar's 50% level. Unlike 'body' this is one price for both sides; a Buy Stop enters
+  // at high+1t and a Sell Stop at low-1t, so the midpoint is always beyond entry either way.
+  else if (src === 'half') raw = (ext.hi + ext.lo) / 2;
   if (raw != null && (long ? raw < entryRef : raw > entryRef)) return rnd(raw);
   // Either 'extreme' was picked, or the chosen price sits on the WRONG side of entry — e.g. a market
   // long filled at the close of a down bar, where the open is above it. Clamping to entry∓1 tick would
@@ -3019,7 +3022,7 @@ function repriceStructOrders() {
 }
 function setStopSrc(v) {   // Open / High-Low / Close, applied to the ACTIVE struct preset
   const a = atm[activeAtm]; if (!a || !a.struct) return;
-  a.stopSrc = (v === 'open' || v === 'close' || v === 'body') ? v : 'extreme';
+  a.stopSrc = (v === 'open' || v === 'close' || v === 'body' || v === 'half') ? v : 'extreme';
   delete a.openStop;                                              // superseded by stopSrc
   saveJSON('rt_atm', atm);
   syncStopSrcSeg(); repriceStructOrders();
