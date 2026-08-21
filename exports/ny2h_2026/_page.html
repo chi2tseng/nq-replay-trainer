@@ -1,0 +1,43 @@
+<!doctype html><html><head><meta charset="utf-8"><title>NQ NY 2h</title>
+<script src="../../lib/lightweight-charts.standalone.production.js"></script>
+<style>
+ html,body{margin:0;height:100%;background:#000;font:12px Inter,system-ui,-apple-system,sans-serif;color:#d1d4dc}
+ #cap{height:36px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;
+      background:#000;border-bottom:1px solid #262626;font-weight:700;letter-spacing:.3px}
+ #cap .sub{color:#8a8a8a;font-weight:500}
+ #wrap{position:relative;height:calc(100% - 36px)}
+ #cv{position:absolute;inset:0}
+ #tag{position:absolute;top:8px;left:12px;z-index:3;font-weight:800;font-size:15px;color:#e6e6e6;
+      text-shadow:0 1px 4px #000c;pointer-events:none}
+</style></head><body>
+<div id="cap"><span id="capL">NQ</span><span class="sub">09:30 – 11:30 ET</span></div>
+<div id="wrap"><div id="cv"></div><div id="tag"></div></div>
+<script>
+let DATA = null, chart = null, series = null;
+const UP='#26a69a', DN='#ef5350';
+const etFmt = (ts) => { const p=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour12:false,hour:'2-digit',minute:'2-digit'}).formatToParts(new Date(ts*1000)); const o={}; p.forEach(x=>o[x.type]=x.value); return o.hour+':'+o.minute; };
+window.boot = async () => {
+  DATA = await (await fetch('_data.json')).json();
+  chart = LightweightCharts.createChart(document.getElementById('cv'), {
+    layout:{background:{color:'#000000'},textColor:'#d1d4dc',fontSize:12,attributionLogo:false},
+    grid:{vertLines:{color:'#161616'},horzLines:{color:'#161616'}},
+    crosshair:{mode:LightweightCharts.CrosshairMode.Normal},
+    rightPriceScale:{borderColor:'#262626',scaleMargins:{top:0.06,bottom:0.06}},
+    timeScale:{borderColor:'#262626',timeVisible:true,secondsVisible:false,tickMarkFormatter:(t)=>etFmt(t)},
+    localization:{timeFormatter:(t)=>etFmt(t)},
+    handleScroll:false, handleScale:false,
+  });
+  series = chart.addCandlestickSeries({upColor:UP,downColor:DN,borderVisible:false,wickUpColor:UP,wickDownColor:DN});
+  return Object.keys(DATA).length;
+};
+window.render = (day, tf) => {
+  const d = DATA[day], bars = d.tf[String(tf)];
+  series.applyOptions({ autoscaleInfoProvider: () => ({ priceRange: { minValue: d.lo, maxValue: d.hi } }) });
+  series.setData(bars);
+  document.getElementById('capL').textContent = 'NQ  ' + day;
+  document.getElementById('tag').textContent = tf + 'm';
+  const n = bars.length, pad = Math.max(2, Math.round(n * 0.06));
+  chart.timeScale().setVisibleLogicalRange({ from: -pad, to: n - 1 + pad });
+  return n;
+};
+</script></body></html>

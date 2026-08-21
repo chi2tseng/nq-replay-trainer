@@ -103,6 +103,10 @@ if (loadJSON('rt_atm_v', 0) < 5) {   // merge the bar-open structural stop in, s
   if (!atm['Struct SL · bar OPEN']) atm['Struct SL · bar OPEN'] = defaultAtms()['Struct SL · bar OPEN'];
   saveJSON('rt_atm', atm); saveJSON('rt_atm_v', 5);
 }
+if (loadJSON('rt_atm_v', 0) < 6) {   // merge the 3R preset in, same rule
+  if (!atm['Struct SL · 3R']) atm['Struct SL · 3R'] = defaultAtms()['Struct SL · 3R'];
+  saveJSON('rt_atm', atm); saveJSON('rt_atm_v', 6);
+}
 let activeAtm = Object.keys(atm)[0];
 let riskOn = loadJSON('rt_risk_on', false), riskUsd = loadJSON('rt_risk_usd', 200);   // fixed-$ position sizing: contracts derived from $risk ÷ stop
 
@@ -116,6 +120,10 @@ function defaultAtms() {
     // the same idea. Meant for Buy/Sell Stop entries (entry = bar high/low ±1 tick, so the open is
     // always on the correct side), but it works for market and limit entries too.
     'Struct SL · bar OPEN':  { struct: true, openStop: true, rr: 1, sl: 0, targets: [], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },
+    // The requested one: stop at the signal bar's OPEN, target 3R. Both halves are live-editable from
+    // the order panel — "Stop from" swaps open <-> bar high/low, "Target R" dials the multiple — so
+    // this single preset covers every combination rather than needing one preset per pairing.
+    'Struct SL · 3R':        { struct: true, openStop: true, rr: 3, sl: 0, targets: [], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },
     // Driven by the Stop/Target boxes in the order panel (see syncRrField) instead of the template
     // editor — type a distance, trade. It is an ordinary ATM otherwise, so bracketFromAtm,
     // plannedStopTicks, fixed-$ sizing, Buy/Sell Stop and the right-click menu all use it unchanged.
@@ -2931,9 +2939,11 @@ function applyAtmUnitUI() {
 }
 function setAtmUnit(u) { atmUnit = (u === 'pts' ? 'pts' : 'ticks'); saveJSON('rt_atm_unit', atmUnit); applyAtmUnitUI(); loadAtmIntoEditor($('atmSelect').value || activeAtm); syncRrField(); renderRiskReadout(); }
 function buildAtmSelect() { $('atmSelect').innerHTML = Object.keys(atm).map(k => `<option ${k === activeAtm ? 'selected' : ''}>${k}</option>`).join(''); applyAtmUnitUI(); loadAtmIntoEditor(activeAtm); syncRrField(); }
-function syncRrField() {   // show the Target-R dial for structural ATMs, or the inline Stop/Target boxes for the custom one
+function syncRrField() {   // show the Target-R dial + stop-source picker for structural ATMs, or the inline Stop/Target boxes for the custom one
   const f = $('rrField'); if (!f) return; const a = atm[activeAtm] || {};
   if (a.struct) { f.style.display = ''; $('rrInput').value = a.rr || 1; } else f.style.display = 'none';
+  const sf = $('stopSrcField');
+  if (sf) { sf.style.display = a.struct ? '' : 'none'; if (a.struct) $('stopSrc').value = a.openStop ? 'open' : 'extreme'; }
   const show = !!a.custom;
   ['ordUnitField', 'slField', 'tpField'].forEach(id => { const el = $(id); if (el) el.style.display = show ? '' : 'none'; });
   if (show) { $('slInput').value = tkToDisp(a.sl || 0); $('tpInput').value = tkToDisp((a.targets && a.targets[0]) ? a.targets[0].ticks : 0); }
@@ -2944,6 +2954,11 @@ function setCustomBracket() {   // write the inline boxes back into the Custom S
   const tp = Math.max(0, dispToTk($('tpInput').value));
   a.targets = tp > 0 ? [{ ticks: tp, qty: (a.targets && a.targets[0] ? a.targets[0].qty : 1) || 1 }] : [];
   saveJSON('rt_atm', atm); renderRiskReadout(); drawLines(); repaintOverlays();
+}
+function setStopSrc(v) {   // flip the ACTIVE struct preset between an open-price stop and the classic wick stop
+  const a = atm[activeAtm]; if (!a || !a.struct) return;
+  a.openStop = (v === 'open'); saveJSON('rt_atm', atm);
+  renderRiskReadout(); drawLines(); repaintOverlays();   // sizing + the working-order preview lines follow immediately
 }
 function setRr(v) { const a = atm[activeAtm]; if (!a || !a.struct) return; a.rr = Math.max(0.25, Math.round(v * 4) / 4); $('rrInput').value = a.rr; saveJSON('rt_atm', atm); renderRiskReadout(); }
 function loadAtmIntoEditor(name) {
@@ -3196,6 +3211,7 @@ function wire() {
 
   $('atmSelect').onchange = (e) => { activeAtm = e.target.value; loadAtmIntoEditor(activeAtm); syncRrField(); renderRiskReadout(); };
   $('rrInput').oninput = (e) => setRr(parseFloat(e.target.value) || 1);
+  $('stopSrc').onchange = (e) => setStopSrc(e.target.value);
   $('rrMinus').onclick = () => setRr((+$('rrInput').value || 1) - 0.25);
   $('rrPlus').onclick = () => setRr((+$('rrInput').value || 1) + 0.25);
   $('atmUnit').value = atmUnit; $('atmUnit').onchange = (e) => setAtmUnit(e.target.value);

@@ -159,6 +159,7 @@
           <div class="ord-field"><label>Qty</label><div class="stepper"><button type="button" id="qtyMinus" tabindex="-1">&minus;</button><input id="qty" type="number" min="1" step="1" value="1" /><button type="button" id="qtyPlus" tabindex="-1">+</button></div></div>
           <div class="ord-field"><label>ATM template</label><select id="atmSelect"></select></div>
           <div class="ord-field" id="rrField" style="display:none"><label>Target R <span class="rr-hint">(struct)</span></label><div class="stepper"><button type="button" id="rrMinus" tabindex="-1">&minus;</button><input id="rrInput" type="number" min="0.25" step="0.25" value="2" /><button type="button" id="rrPlus" tabindex="-1">+</button></div></div>
+          <div class="ord-field" id="stopSrcField" style="display:none"><label>Stop from</label><select id="stopSrc"><option value="open">Bar open</option><option value="extreme">Bar high / low</option></select></div>
           <div class="ord-field" id="ordUnitField" style="display:none"><label>Unit</label><select id="ordUnit"><option value="ticks">Ticks</option><option value="pts">Points</option></select></div>
           <div class="ord-field" id="slField" style="display:none"><label>Stop <span class="rr-hint" id="lblSlU">ticks</span></label><input id="slInput" type="number" min="0" step="1" value="40" /></div>
           <div class="ord-field" id="tpField" style="display:none"><label>Target <span class="rr-hint" id="lblTpU">ticks</span></label><input id="tpInput" type="number" min="0" step="1" value="40" /></div>
@@ -258,6 +259,6 @@
 <div id="logModal" class="day-detail"></div>
 <div id="settleModal" class="day-detail"></div>
 <div id="quizModal" class="day-detail"></div>
-<script src="src/app.js?v=94"></script>
+<script src="src/app.js?v=95"></script>
 </body>
 </html>
