@@ -262,14 +262,17 @@ function structStopPx(side, entryRef, a, bar) {
   // silently re-anchoring to whatever bar the replay has since walked to.
   const ext = bar || curBarExtreme(), long = side === 'long';
   const src = stopSrcOf(a);
-  if (src === 'open' || src === 'close') {
-    const raw = src === 'open' ? ext.op : ext.cl;
-    if (long ? raw < entryRef : raw > entryRef) return rnd(raw);
-    // The chosen price sits on the WRONG side of entry — e.g. a market long filled at the close of a
-    // down bar, where the open is above it. Clamping to entry∓1 tick would hand back a 1-tick stop
-    // (and, with fixed-$ sizing, an absurd contract count), so fall back to the bar's extreme, which
-    // is always on the correct side. Stop entries never hit this: entry is the bar's high/low ±1 tick.
-  }
+  let raw = null;
+  if (src === 'open') raw = ext.op;
+  else if (src === 'close') raw = ext.cl;
+  // 'body' = the edge of the candle BODY facing the stop, i.e. direction-aware: a long stops at the
+  // body's bottom (an up bar's open, a down bar's close) and a short at its top. One rule, both cases.
+  else if (src === 'body') raw = long ? Math.min(ext.op, ext.cl) : Math.max(ext.op, ext.cl);
+  if (raw != null && (long ? raw < entryRef : raw > entryRef)) return rnd(raw);
+  // Either 'extreme' was picked, or the chosen price sits on the WRONG side of entry — e.g. a market
+  // long filled at the close of a down bar, where the open is above it. Clamping to entry∓1 tick would
+  // hand back a 1-tick stop (and, with fixed-$ sizing, an absurd contract count), so use the bar's
+  // extreme, always on the correct side. Stop entries never hit that: entry is the high/low ±1 tick.
   return rnd(long ? Math.min(ext.lo, entryRef) - TICK : Math.max(ext.hi, entryRef) + TICK);
 }
 
@@ -3008,7 +3011,7 @@ function repriceStructOrders() {
 }
 function setStopSrc(v) {   // Open / High-Low / Close, applied to the ACTIVE struct preset
   const a = atm[activeAtm]; if (!a || !a.struct) return;
-  a.stopSrc = (v === 'open' || v === 'close') ? v : 'extreme';
+  a.stopSrc = (v === 'open' || v === 'close' || v === 'body') ? v : 'extreme';
   delete a.openStop;                                              // superseded by stopSrc
   saveJSON('rt_atm', atm);
   syncStopSrcSeg(); repriceStructOrders();

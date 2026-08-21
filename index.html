@@ -164,8 +164,9 @@
               <button type="button" data-src="open" class="seg-btn">Open</button>
               <button type="button" data-src="extreme" class="seg-btn">High / Low</button>
               <button type="button" data-src="close" class="seg-btn">Close</button>
+              <button type="button" data-src="body" class="seg-btn" title="Edge of the candle body facing the stop — long stops at the body's bottom (up bar = open, down bar = close), short at its top">Body</button>
             </div>
-            <select id="stopSrc" class="hidden-select"><option value="open">Open</option><option value="extreme">High / Low</option><option value="close">Close</option></select>
+            <select id="stopSrc" class="hidden-select"><option value="open">Open</option><option value="extreme">High / Low</option><option value="close">Close</option><option value="body">Body</option></select>
           </div>
           <div class="ord-field" id="ordUnitField" style="display:none"><label>Unit</label><select id="ordUnit"><option value="ticks">Ticks</option><option value="pts">Points</option></select></div>
           <div class="ord-field" id="slField" style="display:none"><label>Stop <span class="rr-hint" id="lblSlU">ticks</span></label><input id="slInput" type="number" min="0" step="1" value="40" /></div>
@@ -266,6 +267,6 @@
 <div id="logModal" class="day-detail"></div>
 <div id="settleModal" class="day-detail"></div>
 <div id="quizModal" class="day-detail"></div>
-<script src="src/app.js?v=97"></script>
+<script src="src/app.js?v=98"></script>
 </body>
 </html>
