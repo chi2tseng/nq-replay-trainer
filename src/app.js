@@ -199,6 +199,11 @@ $('chart').addEventListener('dblclick', (e) => { if (overPriceAxis(e.clientX)) f
 // Single source of truth = two CSS vars (--side-w, --bottom-h) the grid reads; JS just sets them.
 const LAYOUT_DEFAULTS = { side: 320, bottom: 252 }, LAYOUT_MIN = { side: 240, bottom: 130 }, SIDE_MIN_CHART = 420, BOTTOM_MIN_MAIN = 240, TOOLBAR_H = 46, GUTTER = 6;
 let layout = Object.assign({}, LAYOUT_DEFAULTS, loadJSON('rt_layout2', {}));   // rt_layout2: fresh key (old saved values were degenerate)
+// A hard 320px side panel is 25% of a 1280 laptop and 8% of a 4K screen. Until the user drags the
+// gutter themselves (layout.sideUser), the panel tracks the viewport instead — and goes back to
+// tracking it if they double-click the gutter to reset.
+function autoSideW() { return Math.round(Math.min(430, Math.max(300, window.innerWidth * 0.20))); }
+function autoBottomH() { return Math.round(Math.min(300, Math.max(170, window.innerHeight * 0.24))); }   // same idea vertically: 252px is a third of a 768-tall laptop
 function clampLayout(L) {
   const vw = window.innerWidth, vh = window.innerHeight;
   const maxSide = Math.max(LAYOUT_MIN.side, vw - SIDE_MIN_CHART - GUTTER);
@@ -209,11 +214,13 @@ function clampLayout(L) {
 }
 let _rzRAF = 0;
 function applyLayout(persist) {
+  if (!layout.sideUser) layout.side = autoSideW();
+  if (!layout.bottomUser) layout.bottom = autoBottomH();
   clampLayout(layout);
   const r = document.documentElement.style;
   r.setProperty('--side-w', layout.side + 'px');
   r.setProperty('--bottom-h', layout.bottom + 'px');
-  if (persist) saveJSON('rt_layout2', { side: layout.side, bottom: layout.bottom });
+  if (persist) saveJSON('rt_layout2', { side: layout.side, bottom: layout.bottom, sideUser: !!layout.sideUser, bottomUser: !!layout.bottomUser });
   // resize the chart bitmaps on the next frame — coalesces rapid drag moves (LWC resize is heavy)
   if (!_rzRAF) _rzRAF = requestAnimationFrame(() => { _rzRAF = 0; if (typeof sizeChart === 'function') sizeChart(); if (typeof oscResize === 'function') oscResize(); });
 }
@@ -225,6 +232,7 @@ function attachGutter(el, axis) {
     if (!active) return;
     const cur = axis === 'x' ? e.clientX : e.clientY;
     layout[key] = startVal + (startPos - cur);     // side/bottom grow as you drag toward them (left / up)
+    layout[key === 'side' ? 'sideUser' : 'bottomUser'] = true;   // an explicit drag wins over the viewport-proportional default from here on
     applyLayout(false); e.preventDefault();
   }
   function onUp() {
@@ -240,7 +248,7 @@ function attachGutter(el, axis) {
     window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp);
     e.preventDefault();
   });
-  el.addEventListener('dblclick', () => { layout[key] = LAYOUT_DEFAULTS[key]; applyLayout(true); });
+  el.addEventListener('dblclick', () => { layout[key] = LAYOUT_DEFAULTS[key]; layout[key === 'side' ? 'sideUser' : 'bottomUser'] = false; applyLayout(true); });   // reset = hand the size back to the viewport
 }
 function initLayout() { applyLayout(false); attachGutter($('gutterCol'), 'x'); attachGutter($('gutterRow'), 'y'); window.addEventListener('resize', () => applyLayout(false)); }
 

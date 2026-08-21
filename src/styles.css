@@ -869,3 +869,47 @@ button.bs-stop.sell:hover:not(:disabled){ background:#33262a; border-color:var(-
 .ord-field.span2{ grid-column:1 / -1; }
 .seg.seg-tight{ margin:0; }
 .seg.seg-tight .seg-btn{ padding:6px 0; font-size:11px; }
+
+/* ===================== Responsive containment ===================== */
+/* The trades table is ~12 nowrap columns => ~1780px of min-content. `.panel` is a flex item and
+   `#bottom` a grid item, both of which default to min-width:auto, so that min-content propagated
+   all the way up and stretched #app to 1803px inside a 1280px viewport — pushing the chart's right
+   edge and the whole order panel off-screen. Letting these shrink makes the table scroll in its own
+   .tablewrap instead, which is what it was always meant to do. */
+/* #app is a single-column grid whose column was IMPLICIT, i.e. `auto` = max-content: every row got
+   sized to the widest thing in it (the trades table), so #main inherited that width too. Pinning the
+   column to minmax(0,1fr) is what actually holds the layout to the viewport. */
+#app{ overflow:hidden; grid-template-columns:minmax(0,1fr); }
+#main, #bottom, #tabs, .panel, .tablewrap{ min-width:0; }
+
+/* Short screens (laptops): reclaim vertical room in the order panel so BUY/SELL stay above the fold */
+@media (max-height: 900px){
+  #side{ padding:8px; gap:7px; }
+  .ord-grid{ gap:6px; margin:6px 0; }
+  .seg{ margin:6px 0; }
+  .bs{ padding:9px 0; }
+  .row{ margin:5px 0; }
+}
+
+/* ---- toolbar: wrap instead of clipping ---------------------------------- */
+/* At 1366 the single nowrap row ran 282px past the viewport, so Fit / Random / Quiz / Hide-trades /
+   the alert clock were simply unreachable. Let it wrap and let the app's first grid row size to its
+   content (it was pinned at 46px, which would have clipped the second line vertically). The slider
+   is the one elastic item, so it gives up width first and wrapping only kicks in when it must. */
+#app{ grid-template-rows:auto minmax(0,1fr) 6px var(--bottom-h,252px); }
+#toolbar{ flex-wrap:wrap; row-gap:4px; min-height:46px; padding-top:2px; padding-bottom:2px; }
+#toolbar .grp{ min-width:0; flex-wrap:wrap; row-gap:4px; }
+#toolbar .center{ flex:1 1 420px; }
+#startSlider{ flex:1 1 90px; min-width:70px; }
+
+/* Narrow screens: shed chrome so the toolbar stays 1-2 rows instead of 3 (it was stealing ~120px
+   of chart height at 1366). Icons stay, the MTF/Indicators word labels go — the icons carry them. */
+@media (max-width:1500px){
+  #toolbar{ gap:8px; padding-left:8px; padding-right:8px; }
+  #toolbar .grp{ gap:6px; }
+  #toolbar .right{ gap:8px; }
+  #btnMtf, #btnIndicators{ font-size:0; }
+  #btnMtf .material-symbols-outlined, #btnIndicators .material-symbols-outlined{ font-size:20px; }
+  #toolbar select{ font-size:11px; padding:4px 6px; }
+  #startSlider{ min-width:56px; }
+}
