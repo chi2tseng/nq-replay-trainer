@@ -107,6 +107,10 @@ if (loadJSON('rt_atm_v', 0) < 6) {   // merge the 3R preset in, same rule
   if (!atm['Struct SL · 3R']) atm['Struct SL · 3R'] = defaultAtms()['Struct SL · 3R'];
   saveJSON('rt_atm', atm); saveJSON('rt_atm_v', 6);
 }
+if (loadJSON('rt_atm_v', 0) < 7) {   // openStop boolean -> stopSrc ('open' | 'extreme' | 'close')
+  for (const k in atm) { const a = atm[k]; if (a.struct && !a.stopSrc) { a.stopSrc = a.openStop ? 'open' : 'extreme'; delete a.openStop; } }
+  saveJSON('rt_atm', atm); saveJSON('rt_atm_v', 7);
+}
 let activeAtm = Object.keys(atm)[0];
 let riskOn = loadJSON('rt_risk_on', false), riskUsd = loadJSON('rt_risk_usd', 200);   // fixed-$ position sizing: contracts derived from $risk ÷ stop
 
@@ -119,11 +123,11 @@ function defaultAtms() {
     // be 40+ ticks away while the open sits right under the trigger, so this is the tight version of
     // the same idea. Meant for Buy/Sell Stop entries (entry = bar high/low ±1 tick, so the open is
     // always on the correct side), but it works for market and limit entries too.
-    'Struct SL · bar OPEN':  { struct: true, openStop: true, rr: 1, sl: 0, targets: [], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },
+    'Struct SL · bar OPEN':  { struct: true, stopSrc: 'open', rr: 1, sl: 0, targets: [], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },
     // The requested one: stop at the signal bar's OPEN, target 3R. Both halves are live-editable from
     // the order panel — "Stop from" swaps open <-> bar high/low, "Target R" dials the multiple — so
     // this single preset covers every combination rather than needing one preset per pairing.
-    'Struct SL · 3R':        { struct: true, openStop: true, rr: 3, sl: 0, targets: [], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },
+    'Struct SL · 3R':        { struct: true, stopSrc: 'open', rr: 3, sl: 0, targets: [], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },
     // Driven by the Stop/Target boxes in the order panel (see syncRrField) instead of the template
     // editor — type a distance, trade. It is an ordinary ATM otherwise, so bracketFromAtm,
     // plannedStopTicks, fixed-$ sizing, Buy/Sell Stop and the right-click menu all use it unchanged.
@@ -247,14 +251,25 @@ function bracketFromAtm(name) {   // snapshot an ATM template's stop + targets (
   if (a.struct) return { slTicks: 0, tgts: [], struct: true, rr: a.rr || 1 };   // structural stop is computed from the fill bar
   return { slTicks: a.sl || 0, tgts: (a.targets || []).filter(t => t.ticks > 0 && t.qty > 0).map(t => ({ ticks: t.ticks, qty: t.qty })) };
 }
-function curBarExtreme() { const b = bars[Math.min(idx, bars.length - 1)]; return b ? { hi: b.high, lo: b.low, op: b.open } : { hi: 0, lo: 0, op: 0 }; }   // current K-bar high/low/open for structural stops
+function curBarExtreme() { const b = bars[Math.min(idx, bars.length - 1)]; return b ? { hi: b.high, lo: b.low, op: b.open, cl: b.close } : { hi: 0, lo: 0, op: 0, cl: 0 }; }   // current K-bar OHLC for structural stops
 // THE one place a structural stop price is decided. Sizing, the working-order preview lines and the
 // bracket that actually gets placed all call this, so they can never disagree about where the stop is.
 // a.openStop -> park it at the signal bar's OPEN (tighter than the wick on a big breakout bar);
 // otherwise the classic opposite extreme +-1 tick. Both are clamped to stay >=1 tick beyond entry.
-function structStopPx(side, entryRef, a) {
-  const ext = curBarExtreme(), long = side === 'long';
-  if (a && a.openStop) return rnd(long ? Math.min(ext.op, entryRef - TICK) : Math.max(ext.op, entryRef + TICK));
+function stopSrcOf(a) { return (a && a.stopSrc) || (a && a.openStop ? 'open' : 'extreme'); }   // .openStop is the pre-v7 boolean; keep reading it so old saved ATMs still work
+function structStopPx(side, entryRef, a, bar) {
+  // `bar` pins the calculation to the SIGNAL bar so a live order can be re-priced later without
+  // silently re-anchoring to whatever bar the replay has since walked to.
+  const ext = bar || curBarExtreme(), long = side === 'long';
+  const src = stopSrcOf(a);
+  if (src === 'open' || src === 'close') {
+    const raw = src === 'open' ? ext.op : ext.cl;
+    if (long ? raw < entryRef : raw > entryRef) return rnd(raw);
+    // The chosen price sits on the WRONG side of entry — e.g. a market long filled at the close of a
+    // down bar, where the open is above it. Clamping to entry∓1 tick would hand back a 1-tick stop
+    // (and, with fixed-$ sizing, an absurd contract count), so fall back to the bar's extreme, which
+    // is always on the correct side. Stop entries never hit this: entry is the bar's high/low ±1 tick.
+  }
   return rnd(long ? Math.min(ext.lo, entryRef) - TICK : Math.max(ext.hi, entryRef) + TICK);
 }
 
@@ -287,9 +302,10 @@ function renderRiskReadout() {
 }
 function structBracket(side, kind, price, name) {   // R-based bracket AT ORDER TIME for struct ATMs: stop beyond the signal bar / entry structure, target = rr × risk
   const a = atm[name || activeAtm] || {}; if (!a.struct) return null;
-  const stopPx = structStopPx(side, price, a);
+  const sigBar = curBarExtreme();
+  const stopPx = structStopPx(side, price, a, sigBar);
   const slT = Math.max(1, Math.round(Math.abs(price - stopPx) / TICK));
-  return { slTicks: slT, tgts: [{ ticks: Math.max(1, Math.round(slT * (a.rr || 1))), qty: 1 }] };
+  return { slTicks: slT, tgts: [{ ticks: Math.max(1, Math.round(slT * (a.rr || 1))), qty: 1 }], sigBar };
 }
 const CTX_BRACKET_PTS = 40;   // the "±40pt fixed" option for right-click orders (SL & TP distance in points)
 let ctxAtm = loadJSON('rt_ctx_atm', '40pt');   // ATM used by right-click orders: '40pt' sentinel or any template name (selector inside the context menu)
@@ -2412,7 +2428,8 @@ function onEntryButton(side) {
       price = rnd(side === 'long' ? ext.hi + TICK : ext.lo - TICK);
       const inp = $('entryPrice'); if (inp) inp.value = f2(price);   // show the auto-computed level
       if (a.struct) {   // snapshot the structural stop to THIS (signal) bar; target = rr×risk
-        const stopPx = structStopPx(side, price, a);
+        const sigBar = curBarExtreme();
+        const stopPx = structStopPx(side, price, a, sigBar);
         const slT = Math.max(1, Math.round(Math.abs(price - stopPx) / TICK));
         bracket = { slTicks: slT, tgts: [{ ticks: Math.max(1, Math.round(slT * (a.rr || 1))), qty: 1 }] };
       }
@@ -2438,9 +2455,10 @@ function cancelOrder(spec) {   // × on a working order: 'entry' cancels the pen
 
 function openPosition(side, px, t, atmName, mult, bracket) {
   const a = atm[atmName] || {}; entryOrder = null;
-  let sl, srcT;
+  let sl, srcT, sigBar = bracket && bracket.sigBar;   // the bar the stop was derived from, kept so the source can be switched later
   if (a.struct && (!bracket || !bracket.slTicks)) {   // struct + no snapshot (market entry) → stop from CURRENT bar's extreme
-    const stopPx = structStopPx(side, px, a);
+    sigBar = curBarExtreme();
+    const stopPx = structStopPx(side, px, a, sigBar);
     sl = Math.max(1, Math.round(Math.abs(px - stopPx) / TICK));
     srcT = [{ ticks: Math.max(1, Math.round(sl * (a.rr || 1))), qty: 1 }];   // target = rr × risk (1:1)
   } else {
@@ -2453,7 +2471,7 @@ function openPosition(side, px, t, atmName, mult, bracket) {
   tgts.sort((x, y) => x.ticks - y.ticks);
   const stopPrice = sl > 0 ? rnd(side === 'long' ? px - sl * TICK : px + sl * TICK) : null;   // planned stop + target prices (kept for the journal/CSV)
   const tps = tgts.map(tg => ({ ticks: tg.ticks, qty: tg.qty, price: rnd(side === 'long' ? px + tg.ticks * TICK : px - tg.ticks * TICK) }));
-  position = { side, qty: totalQty, entry: px, entryTime: t, atm: atmName, slTicks: sl, maxFav: px, beDone: false, stopPrice, tps };
+  position = { side, qty: totalQty, entry: px, entryTime: t, atm: atmName, slTicks: sl, maxFav: px, beDone: false, stopPrice, tps, sigBar };
   orders = [];
   if (sl > 0) orders.push({ type: 'stop', price: stopPrice, qty: totalQty });
   tps.forEach(tg => orders.push({ type: 'target', ticks: tg.ticks, qty: tg.qty, price: tg.price }));
@@ -2471,14 +2489,15 @@ function placeBreakout(side) {   // Buy/Sell Stop: stop-entry at the current bar
   const price = rnd(long ? ext.hi + TICK : ext.lo - TICK);
   let bracket;
   if (a.struct) {   // structural stop snapshotted from THIS bar; target = rr × risk (fixed now, not recomputed at fill)
-    const stopPx = structStopPx(side, price, a);
+    const sigBar = curBarExtreme();
+    const stopPx = structStopPx(side, price, a, sigBar);
     const slT = Math.max(1, Math.round(Math.abs(price - stopPx) / TICK));
-    bracket = { slTicks: slT, tgts: [{ ticks: Math.max(1, Math.round(slT * (a.rr || 1))), qty: 1 }] };
+    bracket = { slTicks: slT, tgts: [{ ticks: Math.max(1, Math.round(slT * (a.rr || 1))), qty: 1 }], sigBar };
   } else {
     bracket = bracketFromAtm(activeAtm);   // fixed SL/TP ticks straight from the ATM template
   }
   const mult = (riskOn && sizeForRisk(bracket.slTicks)) ? sizeForRisk(bracket.slTicks) : Math.max(1, parseInt($('qty').value, 10) || 1);
-  entryOrder = { side, kind: 'stop', price, atm: activeAtm, mult, slTicks: bracket.slTicks, tgts: bracket.tgts };
+  entryOrder = { side, kind: 'stop', price, atm: activeAtm, mult, slTicks: bracket.slTicks, tgts: bracket.tgts, sigBar: bracket.sigBar };
   const inp = $('entryPrice'); if (inp) inp.value = f2(price);
   toast(`${long ? 'Buy' : 'Sell'} Stop @ ${f2(price)} · ${activeAtm}`);
   drawLines(); renderLive();
@@ -2943,7 +2962,7 @@ function syncRrField() {   // show the Target-R dial + stop-source picker for st
   const f = $('rrField'); if (!f) return; const a = atm[activeAtm] || {};
   if (a.struct) { f.style.display = ''; $('rrInput').value = a.rr || 1; } else f.style.display = 'none';
   const sf = $('stopSrcField');
-  if (sf) { sf.style.display = a.struct ? '' : 'none'; if (a.struct) $('stopSrc').value = a.openStop ? 'open' : 'extreme'; }
+  if (sf) { sf.style.display = a.struct ? '' : 'none'; if (a.struct) syncStopSrcSeg(); }
   const show = !!a.custom;
   ['ordUnitField', 'slField', 'tpField'].forEach(id => { const el = $(id); if (el) el.style.display = show ? '' : 'none'; });
   if (show) { $('slInput').value = tkToDisp(a.sl || 0); $('tpInput').value = tkToDisp((a.targets && a.targets[0]) ? a.targets[0].ticks : 0); }
@@ -2955,12 +2974,51 @@ function setCustomBracket() {   // write the inline boxes back into the Custom S
   a.targets = tp > 0 ? [{ ticks: tp, qty: (a.targets && a.targets[0] ? a.targets[0].qty : 1) || 1 }] : [];
   saveJSON('rt_atm', atm); renderRiskReadout(); drawLines(); repaintOverlays();
 }
-function setStopSrc(v) {   // flip the ACTIVE struct preset between an open-price stop and the classic wick stop
-  const a = atm[activeAtm]; if (!a || !a.struct) return;
-  a.openStop = (v === 'open'); saveJSON('rt_atm', atm);
-  renderRiskReadout(); drawLines(); repaintOverlays();   // sizing + the working-order preview lines follow immediately
+// Re-derive the structural stop (and its R target) for whatever is LIVE right now, so flipping the
+// stop source or the R dial moves a working order / an open position's bracket immediately instead
+// of only affecting the next trade. Anchored to the stored signal bar, never to the current bar.
+function repriceStructOrders() {
+  if (entryOrder) {
+    const ea = atm[entryOrder.atm] || {};
+    if (ea.struct) {
+      const sp = structStopPx(entryOrder.side, entryOrder.price, ea, entryOrder.sigBar);
+      const sl = Math.max(1, Math.round(Math.abs(entryOrder.price - sp) / TICK));
+      entryOrder.slTicks = sl;
+      entryOrder.tgts = [{ ticks: Math.max(1, Math.round(sl * (ea.rr || 1))), qty: 1 }];
+    }
+  }
+  if (position) {
+    const pa = atm[position.atm] || {};
+    if (pa.struct) {
+      const long = position.side === 'long';
+      const sp = structStopPx(position.side, position.entry, pa, position.sigBar);
+      const sl = Math.max(1, Math.round(Math.abs(position.entry - sp) / TICK));
+      position.slTicks = sl;
+      position.stopPrice = rnd(long ? position.entry - sl * TICK : position.entry + sl * TICK);
+      const st = orders.find(o => o.type === 'stop');
+      if (st) st.price = position.stopPrice;
+      const tk = Math.max(1, Math.round(sl * (pa.rr || 1)));       // struct brackets carry a single R-based target
+      orders.filter(o => o.type === 'target').forEach(o => {
+        o.ticks = tk; o.price = rnd(long ? position.entry + tk * TICK : position.entry - tk * TICK);
+      });
+      position.tps = orders.filter(o => o.type === 'target').map(o => ({ ticks: o.ticks, qty: o.qty, price: o.price }));
+    }
+  }
+  renderRiskReadout(); drawLines(); repaintOverlays(); renderLive();
 }
-function setRr(v) { const a = atm[activeAtm]; if (!a || !a.struct) return; a.rr = Math.max(0.25, Math.round(v * 4) / 4); $('rrInput').value = a.rr; saveJSON('rt_atm', atm); renderRiskReadout(); }
+function setStopSrc(v) {   // Open / High-Low / Close, applied to the ACTIVE struct preset
+  const a = atm[activeAtm]; if (!a || !a.struct) return;
+  a.stopSrc = (v === 'open' || v === 'close') ? v : 'extreme';
+  delete a.openStop;                                              // superseded by stopSrc
+  saveJSON('rt_atm', atm);
+  syncStopSrcSeg(); repriceStructOrders();
+}
+function syncStopSrcSeg() {
+  const a = atm[activeAtm] || {}, cur = stopSrcOf(a), seg = $('stopSrcSeg'); if (!seg) return;
+  [...seg.querySelectorAll('.seg-btn')].forEach(btn => btn.classList.toggle('active', btn.dataset.src === cur));
+  const sel = $('stopSrc'); if (sel) sel.value = cur;
+}
+function setRr(v) { const a = atm[activeAtm]; if (!a || !a.struct) return; a.rr = Math.max(0.25, Math.round(v * 4) / 4); $('rrInput').value = a.rr; saveJSON('rt_atm', atm); repriceStructOrders(); }   // live orders re-price too, same as the stop-source buttons
 function loadAtmIntoEditor(name) {
   const a = atm[name]; if (!a) return; const t = a.targets || [];
   $('atmName').value = name; $('atmSL').value = tkToDisp(a.sl);
@@ -3211,7 +3269,7 @@ function wire() {
 
   $('atmSelect').onchange = (e) => { activeAtm = e.target.value; loadAtmIntoEditor(activeAtm); syncRrField(); renderRiskReadout(); };
   $('rrInput').oninput = (e) => setRr(parseFloat(e.target.value) || 1);
-  $('stopSrc').onchange = (e) => setStopSrc(e.target.value);
+  $('stopSrcSeg').addEventListener('click', (e) => { const b = e.target.closest('.seg-btn'); if (b) setStopSrc(b.dataset.src); });
   $('rrMinus').onclick = () => setRr((+$('rrInput').value || 1) - 0.25);
   $('rrPlus').onclick = () => setRr((+$('rrInput').value || 1) + 0.25);
   $('atmUnit').value = atmUnit; $('atmUnit').onchange = (e) => setAtmUnit(e.target.value);

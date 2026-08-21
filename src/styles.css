@@ -865,3 +865,7 @@ button.bs-stop.sell:hover:not(:disabled){ background:#33262a; border-color:var(-
 #chartwrap.mtf-grid #chartsRow{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:0}
 #chartwrap.mtf-grid #mtfWrap{display:contents}
 #chartwrap.mtf-grid .mtf-pane{border-left:1px solid var(--line);border-top:1px solid var(--line)}
+/* "Stop from" segmented control — full width of the order grid, tighter than the entry-type seg */
+.ord-field.span2{ grid-column:1 / -1; }
+.seg.seg-tight{ margin:0; }
+.seg.seg-tight .seg-btn{ padding:6px 0; font-size:11px; }
