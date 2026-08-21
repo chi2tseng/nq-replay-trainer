@@ -2612,7 +2612,17 @@ function clearLines() { lines.forEach(l => candle.removePriceLine(l)); lines = [
 function pl(price, color, style, title) { return candle.createPriceLine({ price, color, lineWidth: 1, lineStyle: style, axisLabelVisible: true, title }); }
 function drawLines() { clearLines(); orderRepaint(); }   // order bracket now rendered by orderPrimitive (Tradovate tags + lines)
 function addMarker(baseTime, position_, color, shape, text) { markers.push({ baseTime, position: position_, color, shape, text }); refreshMarkers(); }
-function refreshMarkers() { const ms = (showTrades ? markers : []).concat(annotations); candle.setMarkers(ms.map(m => ({ time: mBucket(m.baseTime), position: m.position, color: m.color, shape: m.shape, text: m.text })).sort((a, b) => a.time - b.time)); }
+function refreshMarkers() {
+  const ms = (showTrades ? markers : []).concat(annotations);
+  // Only hand LWC markers whose bar is actually IN the fed series. A marker with a time the series
+  // doesn't contain — a trade from another session, or one scrolled out of the RENDER_WINDOW — gets
+  // clamped to the nearest edge, which stacked every such arrow onto the newest candle in one column.
+  const lo = Math.max(0, seriesFrom), hi = Math.min(idx, bars.length - 1), inSeries = new Set();
+  for (let i = lo; i <= hi; i++) inSeries.add(bars[i].time);
+  candle.setMarkers(ms.map(m => ({ time: mBucket(m.baseTime), position: m.position, color: m.color, shape: m.shape, text: m.text }))
+                      .filter(m => inSeries.has(m.time))
+                      .sort((a, b) => a.time - b.time));
+}
 function setShowTrades(on) {
   showTrades = on; saveJSON('rt_show_trades', showTrades); refreshMarkers();
   document.querySelectorAll('.hidetrades-btn').forEach(b => {   // sync every hide-trades button (top toolbar + trades panel)
