@@ -1790,14 +1790,14 @@ function maybeReWindow() {                            // trim once the series ha
   feedWindow(true); refreshMarkers(); oscHardReveal();
   return true;
 }
-function hardReveal() { feedWindow(false); refreshMarkers(); drawLines(); renderLegend(null); oscHardReveal(); mtfSync(true); resetForming(); setAlertBaseline(); rndPrevMin = null; }   // rndPrevMin reset: a jump must re-seed the settle-crossing baseline
+function hardReveal() { feedWindow(false); refreshMarkers(true); drawLines(); renderLegend(null); oscHardReveal(); mtfSync(true); resetForming(); setAlertBaseline(); rndPrevMin = null; }   // rndPrevMin reset: a jump must re-seed the settle-crossing baseline
 // Advance exactly ONE base sub-bar (15s on the deep datasets, one print on tick). revealTick() rolls
 // the display bar over when the bucket changes AND runs processSub() on the bar, so a stop/target
 // sitting inside a 3m candle fires on the 15s slice that actually reached it — not at the bar close.
 function stepSub() {
   if (baseIdx >= baseBars.length - 1) { pause(); return; }
   baseIdx++; revealTick(baseIdx);
-  maybeReWindow(); commitForming(); mtfSync();
+  maybeReWindow(); commitForming(); mtfSync(); refreshMarkers();
   renderLive(); renderLegend(null); alertCheck(); settleCheck();
 }
 function stepAny() { return subStepMode() ? stepSub() : stepFwd(); }
@@ -1809,7 +1809,7 @@ function stepFwd() {
     for (let i = baseIdx + 1; i <= cur.subEnd; i++) processSub(baseBars[i]);
     baseIdx = cur.subEnd;
     candle.update(cd(cur)); vol.update(vd(cur));
-    resetForming(); mtfSync(); renderLive(); renderLegend(null); alertCheck(); settleCheck();
+    resetForming(); mtfSync(); refreshMarkers(); renderLive(); renderLegend(null); alertCheck(); settleCheck();
     return;
   }
   if (idx >= bars.length - 1) { pause(); return; }
@@ -1818,7 +1818,7 @@ function stepFwd() {
   else { candle.update(cd(bars[idx])); vol.update(vd(bars[idx])); oscStepFwd(); }
   for (let i = bars[idx].subStart; i <= bars[idx].subEnd; i++) { processSub(baseBars[i]); }
   baseIdx = bars[idx].subEnd;
-  resetForming(); mtfSync();
+  resetForming(); mtfSync(); refreshMarkers();
   renderLive(); renderLegend(null); alertCheck(); settleCheck();
 }
 function stepBack() {
@@ -1977,7 +1977,7 @@ function playFrame() {   // steady display-bars/sec reveal; each base sub-bar = 
     if (playBudget < cost) break;
     playBudget -= cost; baseIdx++; revealTick(baseIdx); if (++n > 500000) break;
   }
-  if (n) { maybeReWindow(); commitForming(); mtfSync(); renderLive(); renderLegend(null); alertCheck(); settleCheck(); }
+  if (n) { maybeReWindow(); commitForming(); mtfSync(); refreshMarkers(); renderLive(); renderLegend(null); alertCheck(); settleCheck(); }
   if (baseIdx >= baseBars.length - 1) pause();
 }
 function playSubFrame() {   // steady SUB-BAR rate: N base bars/sec regardless of the display timeframe, so on 15s base a 3m candle builds over 12 reveals and every intrabar stop/target lands on its real slice
@@ -1985,7 +1985,7 @@ function playSubFrame() {   // steady SUB-BAR rate: N base bars/sec regardless o
   playBudget += rate * (TICK_FRAME_MS / 1000);
   let n = 0;
   while (playBudget >= 1 && baseIdx < baseBars.length - 1) { playBudget -= 1; baseIdx++; revealTick(baseIdx); if (++n > 500000) break; }
-  if (n) { maybeReWindow(); commitForming(); mtfSync(); renderLive(); renderLegend(null); alertCheck(); settleCheck(); }
+  if (n) { maybeReWindow(); commitForming(); mtfSync(); refreshMarkers(); renderLive(); renderLegend(null); alertCheck(); settleCheck(); }
   if (baseIdx >= baseBars.length - 1) pause();
 }
 function baseMs(i) { return tickMode ? tickMs[i] : baseBars[i].time * 1000; }   // absolute ms of base bar i (tick OR normal sub-bar)
@@ -1994,7 +1994,7 @@ function playRtFrame() {   // Realtime: advance a sim clock at mult × real mark
   simMs += mult * TICK_FRAME_MS;
   let n = 0;
   while (baseIdx < baseBars.length - 1 && baseMs(baseIdx + 1) <= simMs) { baseIdx++; revealTick(baseIdx); if (++n > 500000) break; }
-  if (n) { maybeReWindow(); commitForming(); mtfSync(); renderLive(); renderLegend(null); alertCheck(); settleCheck(); }
+  if (n) { maybeReWindow(); commitForming(); mtfSync(); refreshMarkers(); renderLive(); renderLegend(null); alertCheck(); settleCheck(); }
   if (baseIdx >= baseBars.length - 1) pause();
 }
 // ---------- multiple-timeframe view ----------
@@ -2612,16 +2612,28 @@ function clearLines() { lines.forEach(l => candle.removePriceLine(l)); lines = [
 function pl(price, color, style, title) { return candle.createPriceLine({ price, color, lineWidth: 1, lineStyle: style, axisLabelVisible: true, title }); }
 function drawLines() { clearLines(); orderRepaint(); }   // order bracket now rendered by orderPrimitive (Tradovate tags + lines)
 function addMarker(baseTime, position_, color, shape, text) { markers.push({ baseTime, position: position_, color, shape, text }); refreshMarkers(); }
-function refreshMarkers() {
+function barIdxAtTime(t) {   // exact-match binary search over bars[] (sorted by time)
+  let lo = 0, hi = bars.length - 1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; const bt = bars[m].time; if (bt === t) return m; if (bt < t) lo = m + 1; else hi = m - 1; }
+  return -1;
+}
+let _mkSig = null;
+function refreshMarkers(force) {
   const ms = (showTrades ? markers : []).concat(annotations);
   // Only hand LWC markers whose bar is actually IN the fed series. A marker with a time the series
   // doesn't contain — a trade from another session, or one scrolled out of the RENDER_WINDOW — gets
   // clamped to the nearest edge, which stacked every such arrow onto the newest candle in one column.
-  const lo = Math.max(0, seriesFrom), hi = Math.min(idx, bars.length - 1), inSeries = new Set();
-  for (let i = lo; i <= hi; i++) inSeries.add(bars[i].time);
-  candle.setMarkers(ms.map(m => ({ time: mBucket(m.baseTime), position: m.position, color: m.color, shape: m.shape, text: m.text }))
-                      .filter(m => inSeries.has(m.time))
-                      .sort((a, b) => a.time - b.time));
+  const lo = Math.max(0, seriesFrom), hi = Math.min(idx, bars.length - 1);
+  const out = ms.map(m => ({ time: mBucket(m.baseTime), position: m.position, color: m.color, shape: m.shape, text: m.text }))
+                .filter(m => { const i = barIdxAtTime(m.time); return i >= lo && i <= hi; })
+                .sort((a, b) => a.time - b.time);
+  // Visibility now depends on idx, so this has to re-run as the replay advances (a marker revealed
+  // again after a jump would otherwise stay hidden forever). Signature check keeps that cheap: only
+  // touch the chart when the visible set actually changed, not on every frame of playback.
+  const sig = out.length + '|' + (out.length ? out[0].time + '-' + out[out.length - 1].time : '') + '|' + ms.length;
+  if (!force && sig === _mkSig) return;
+  _mkSig = sig;
+  candle.setMarkers(out);
 }
 function setShowTrades(on) {
   showTrades = on; saveJSON('rt_show_trades', showTrades); refreshMarkers();
