@@ -3335,12 +3335,16 @@ function wire() {
 
   document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;   // letter shortcuts stay live with caps lock / shift
     if (e.code === 'Space') { e.preventDefault(); pause(); stepAny(); }
-    else if (e.key === 'p') play(); else if (e.key === 'b') onEntryButton('long');
-    else if (e.key === 's') onEntryButton('short'); else if (e.key === 'f') flatten();
-    else if (e.key === '[' || e.key === 'ArrowLeft') { e.preventDefault(); prevDay(); }
-    else if (e.key === ']' || e.key === 'ArrowRight') { e.preventDefault(); nextDay(); }
-    else if (e.key === '0') { e.preventDefault(); fitChart(); }
+    else if (k === 'p') play(); else if (k === 'b') onEntryButton('long');
+    else if (k === 's') onEntryButton('short');
+    else if (k === 'f') { e.preventDefault(); placeBreakout('long'); }    // F / J sit under the index fingers
+    else if (k === 'j') { e.preventDefault(); placeBreakout('short'); }
+    else if (k === 'x') flatten();                                       // moved off F, which is now Buy Stop
+    else if (k === '[' || k === 'ArrowLeft') { e.preventDefault(); prevDay(); }
+    else if (k === ']' || k === 'ArrowRight') { e.preventDefault(); nextDay(); }
+    else if (k === '0') { e.preventDefault(); fitChart(); }
     else if (e.key === 'Delete' && e.shiftKey) { e.preventDefault(); clearDrawings(); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && selDrawing) { e.preventDefault(); deleteSelectedDrawing(); }
     else if (e.key === 'Escape') { if (tool) setTool(''); else if (selDrawing) { selDrawing = null; repaintOverlays(); } }
