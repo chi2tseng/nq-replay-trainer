@@ -44,8 +44,9 @@ function etMinutes(ts) { const p = etHM.formatToParts(new Date(ts * 1000)); let 
 // ET formatters for the LWC time axis (tick labels) + crosshair label — timestamps are UTC epoch s
 const _TM = (window.LightweightCharts && LightweightCharts.TickMarkType) || { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 };
 const blindDate = () => rndMode || quizMode;   // random + quiz modes hide the calendar date so the practice stays honest
-function etTickFmt(ts, type) { const o = etP(ts); if (type === _TM.Year || type === _TM.Month || type === _TM.DayOfMonth) return blindDate() ? '·' : `${o.month}/${o.day}`; if (type === _TM.TimeWithSeconds) return `${o.hour}:${o.minute}:${o.second}`; return `${o.hour}:${o.minute}`; }
-const etCrosshairFmt = (ts) => { const o = etP(ts); return blindDate() ? `${o.hour}:${o.minute} ET` : `${o.month}/${o.day} ${o.hour}:${o.minute} ET`; };
+function etTickFmt(ts, type) { const o = etP(ts); if (type === _TM.Year || type === _TM.Month || type === _TM.DayOfMonth) return blindDate() ? '·' : `${o.month}/${o.day}`; if (type === _TM.TimeWithSeconds || tfTicks) return `${o.hour}:${o.minute}:${o.second}`; return `${o.hour}:${o.minute}`; }   // tick bars: irregular spacing keeps LWC from ever picking TimeWithSeconds itself, so force seconds
+const etCrosshairFmtImpl = (ts) => { const o = etP(ts); const t = tfTicks ? `${o.hour}:${o.minute}:${o.second}` : `${o.hour}:${o.minute}`; return blindDate() ? `${t} ET` : `${o.month}/${o.day} ${t} ET`; };
+const etCrosshairFmt = (ts) => etCrosshairFmtImpl(ts);
 const loadJSON = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const saveJSON = (k, v) => localStorage.setItem(k, JSON.stringify(v));
 
