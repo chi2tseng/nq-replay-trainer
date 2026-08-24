@@ -67,6 +67,7 @@ let seriesFrom = 0;          // first absolute bar index currently in the candle
 // Tradovate-style tick replay: one day's real prints as the base resolution
 let tickMode = false, tickMs = [], availTickDays = [], curTickDay = null, simMs = 0, speedUIBase = null;
 let tickBid = null, tickAsk = null;   // per-print BBO from TBBO files (null on trades-only days)
+let tickEv = null;                    // per-print match-event start flags (1 = first print of a CME match event)
 let TF_TICKS = [], tfTicks = 0;       // tick-count bar sizes offered, and the one in use (0 = time bars)
 // multiple-timeframe view — declared up here with the other mode state, NOT next to its functions:
 // init() runs early and hardReveal() reads these on the first paint (the TDZ trap seriesFrom and
@@ -1474,14 +1475,29 @@ $('chart').addEventListener('mousemove', e => {
 // Bars stay contiguous and fixed-width in print count, so bar index === floor(printIndex / N) —
 // that identity is what lets revealTick and mBucket stay O(1) below.
 function aggregateTicks(base, n) {
-  const out = [];
-  for (let i = 0; i < base.length; i += n) {
-    const e = Math.min(i + n, base.length) - 1;
-    let hi = base[i].high, lo = base[i].low, v = 0;
-    for (let k = i; k <= e; k++) { const b = base[k]; if (b.high > hi) hi = b.high; if (b.low < lo) lo = b.low; v += b.volume; }
-    out.push({ time: base[i].time, open: base[i].open, high: hi, low: lo, close: base[e].close, volume: v, subStart: i, subEnd: e });
+  // One "tick" = one CME MATCH EVENT (all fills of one aggressor order — tickEv marks the first
+  // print of each), which is how CME feeds and Tradovate count since the 2009 aggregation change:
+  // a sweep through three price levels is ONE tick. A bar closes after n events, and only at an
+  // event boundary, so an event's prints are never split across bars — which also means bars are
+  // NOT fixed print-width and lookups must go through tickBarAt(), not floor(i / n).
+  const out = []; let cur = null, evs = 0;
+  for (let i = 0; i < base.length; i++) {
+    const b = base[i], newEv = !tickEv || i === 0 || tickEv[i] === 1;
+    if (!cur || (newEv && evs >= n)) {
+      let t = b.time;
+      if (out.length && t <= out[out.length - 1].time) t = out[out.length - 1].time + 1;   // LWC needs strictly increasing times; an opening burst can close several bars in one second
+      cur = { time: t, open: b.open, high: b.high, low: b.low, close: b.close, volume: 0, subStart: i, subEnd: i }; out.push(cur); evs = 0;
+    }
+    if (b.high > cur.high) cur.high = b.high; if (b.low < cur.low) cur.low = b.low;
+    cur.close = b.close; cur.volume += b.volume; cur.subEnd = i;
+    if (newEv) evs++;
   }
   return out;
+}
+function tickBarAt(i) {   // bar containing base print i (binary search over subStart/subEnd)
+  let lo = 0, hi = bars.length - 1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (i < bars[m].subStart) hi = m - 1; else if (i > bars[m].subEnd) lo = m + 1; else return m; }
+  return Math.max(0, Math.min(bars.length - 1, hi));
 }
 function aggregate(base, m) {
   if (!tickMode && m === BASE_TF) return base.map((b, i) => ({ ...b, subStart: i, subEnd: i }));   // tick mode always buckets (base = individual prints → never 1:1, would collide on shared seconds)
@@ -1722,7 +1738,7 @@ async function loadDeepMonth(month) {
     for (const m of months) { const r = await fetch(`data/chunks/${deepSym}/${m}.json?v=` + Date.now()); if (!r.ok) throw 0; bars = bars.concat(await r.json()); }
   } catch (e) { showLoading(false); toast('Month not available locally: ' + month); return false; }
   pause(); position = null; entryOrder = null; orders = []; markers = []; tool = ''; pendingPt = null;
-  tickMode = false; tfTicks = 0; TF_TICKS = []; tickBid = tickAsk = null; deepMode = true; deepMonth = month; setSpeedOptions(false);   // tick bars/BBO only exist on per-print data
+  tickMode = false; tfTicks = 0; TF_TICKS = []; tickBid = tickAsk = tickEv = null; deepMode = true; deepMonth = month; setSpeedOptions(false);   // tick bars/BBO only exist on per-print data
   finishLoad(bars, null);
   showLoading(false);
   toast(`Deep history · ${month} · ${bars.length.toLocaleString()} bars`);
@@ -1803,7 +1819,7 @@ function tfIndexAtBase(bi) { // TF-bar index whose bucket contains baseBars[bi]
   return ans;
 }
 function syncIdxFromBase() {
-  idx = tfIndexAtBase(baseIdx);
+  idx = tfTicks ? tickBarAt(baseIdx) : tfIndexAtBase(baseIdx);   // tick bars can share/bump epoch seconds, so locate by print span, not time
   // tfIndexAtBase returns the TF bar that *contains* baseIdx, which can run past it (an
   // incomplete current bar after a TF switch / jump). Showing that bar would leak future
   // sub-bars, and curPx() would read a sub-bar that isn't the displayed candle's close.
@@ -1988,10 +2004,12 @@ async function loadTickDay(day) {
   const tk = d.tick || TICK;
   tickBid = d.bo ? d.bo.map((o, i) => rnd(d.p[i] + o * tk)) : null;
   tickAsk = d.ao ? d.ao.map((o, i) => rnd(d.p[i] + o * tk)) : null;
+  tickEv = d.ev || null;                                       // absent on old trades-only files -> every print counts as its own event
   for (let i = 0; i < n; i++) { const p = d.p[i], ms = d.t0 + d.dt[i]; tickMs[i] = ms; baseBars[i] = { time: Math.floor(ms / 1000), open: p, high: p, low: p, close: p, volume: d.s[i] }; }
   BASE_TF = 1 / 60;                                            // nominal; tick mode always buckets
   TF_OPTIONS = [1 / 60, 1 / 12, 0.25, 0.5, 1, 2, 3, 5];        // 1s 5s 15s 30s 1m 2m 3m 5m
-  TF_TICKS = [100, 500, 1000, 2000].filter(k => k * 3 <= n);   // tick-count bars, only where the day has enough prints to draw a few
+  const nEvents = tickEv ? tickEv.reduce((a, x) => a + x, 0) : n;
+  TF_TICKS = [100, 500, 1000, 2000].filter(k => k * 3 <= nEvents);   // tick-count bars, only where the day has enough EVENTS to draw a few
   tf = 1;                                                      // default 1-min view (candle forms live)
   sessions = [{ key: day, start: 0, end: n - 1 }];            // one day; calendar lists all fetched days
   dayIdx = {}; (deepAllDays.size ? [...deepAllDays] : availTickDays).forEach(k => { dayIdx[k] = 0; });   // whole union: every day stays clickable while a single tick day is loaded
@@ -2017,7 +2035,7 @@ function commitForming() { const bar = { time: fBucket, open: fO, high: fH, low:
 function revealTick(i) {
   const b = baseBars[i];
   // tick bars are fixed-width in prints, so the bar a print belongs to is just floor(i / N)
-  const bucket = tfTicks ? (bars[Math.floor(i / tfTicks)] || bars[bars.length - 1]).time
+  const bucket = tfTicks ? bars[tickBarAt(i)].time
                          : Math.floor(b.time / Math.round(tf * 60)) * Math.round(tf * 60);
   if (bucket !== fBucket) { if (idx < bars.length) { candle.update(cd(bars[idx])); vol.update(vd(bars[idx])); } idx = Math.min(idx + 1, bars.length - 1); fBucket = bucket; fO = b.close; fH = b.close; fL = b.close; fC = b.close; fV = 0; }
   const p = b.close; if (p > fH) fH = p; if (p < fL) fL = p; fC = p; fV += b.volume;

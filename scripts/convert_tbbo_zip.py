@@ -49,7 +49,7 @@ def flush(day):
         skipped.append((day, f"only {n} trades — holiday/half day")); return
     t0 = int(c['ms'][0])
     rec = {"day": day, "sym": "NQ", "contract": c['sym'], "tick": TICK, "t0": t0,
-           "dt": [int(m - t0) for m in c['ms']], "p": c['p'], "s": c['s'], "bo": c['bo'], "ao": c['ao']}
+           "dt": [int(m - t0) for m in c['ms']], "p": c['p'], "s": c['s'], "bo": c['bo'], "ao": c['ao'], "ev": c['ev']}
     path = os.path.join(OUT, f"NQ_{day}.json")
     json.dump(rec, open(path, "w"))
     written.append(day)
@@ -67,6 +67,11 @@ for k, name in enumerate(days, 1):
     et = d.index.tz_convert(ET)
     tday = (et + datetime.timedelta(hours=6)).strftime('%Y-%m-%d')   # 18:00 ET boundary -> midnight
     ms = (d.index.view('int64') // 1_000_000)
+    # ev[i]=1 marks the first print of a CME match event (all prints of one aggressor order share
+    # ts_event). Counting EVENTS, not prints, is how CME/Tradovate-style tick charts count: a sweep
+    # filling at 3 price levels is one tick. On 2026-03-04: 427,956 prints but 372,974 events.
+    tev = d['ts_event'].values.astype('int64')
+    evarr = np.ones(len(tev), dtype=int); evarr[1:] = (tev[1:] != tev[:-1]).astype(int)
     px = d['price'].to_numpy(); bid = d['bid_px_00'].to_numpy(); ask = d['ask_px_00'].to_numpy()
     bo = np.where(np.isnan(bid), 0, np.round((bid - px) / TICK)).astype(int)
     ao = np.where(np.isnan(ask), 0, np.round((ask - px) / TICK)).astype(int)
@@ -74,12 +79,13 @@ for k, name in enumerate(days, 1):
 
     for day in dict.fromkeys(tday):                                  # preserves order, dedupes
         m = (tday == day)
-        c = buf.setdefault(day, {'sym': sym, 'ms': [], 'p': [], 's': [], 'bo': [], 'ao': []})
+        c = buf.setdefault(day, {'sym': sym, 'ms': [], 'p': [], 's': [], 'bo': [], 'ao': [], 'ev': []})
         c['ms'] += ms[m].tolist()
         c['p']  += [round(float(x), 2) for x in px[m]]
         c['s']  += sz[m].tolist()
         c['bo'] += bo[m].tolist()
         c['ao'] += ao[m].tolist()
+        c['ev'] += evarr[m].tolist()
 
     newest = max(buf)
     for day in sorted([x for x in buf if x < newest]):
