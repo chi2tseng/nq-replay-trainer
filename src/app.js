@@ -16,10 +16,6 @@ let INSTR = { symbol: 'NQ', tickSize: 0.25, tickValue: 5 }; // active contract s
 const DATASETS = [
   { id: 'nqdeep', label: 'NQ', deep: true, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
   { id: 'esdeep', label: 'ES', deep: true, instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } },
-  // Every individual print as a base bar -> fills happen on the real tape (true slippage), and the
-  // candle grows print-by-print on Realtime. Days live in data/tick/ (gitignored, ~10MB each), so this
-  // one is LOCAL-ONLY: on GitHub Pages the index fetch 404s and it falls back to the "no tick days" toast.
-  { id: 'nqtick', label: 'NQ tick', tick: true, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
   { id: 'nq1m', label: 'NQ · multi-res (finest available · daily-updated)', url: 'data/NQ_multi.json', hidden: true, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },   // $20/pt
   { id: 'es1m', label: 'ES · multi-res (finest available · daily-updated)', url: 'data/ES_multi.json', hidden: true, instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
 ];
@@ -69,11 +65,13 @@ const RENDER_WINDOW = 4000, WINDOW_SLACK = 1500;
 let seriesFrom = 0;          // first absolute bar index currently in the candle/vol series (logical 0)
 // Tradovate-style tick replay: one day's real prints as the base resolution
 let tickMode = false, tickMs = [], availTickDays = [], curTickDay = null, simMs = 0, speedUIBase = null;
+let tickBid = null, tickAsk = null;   // per-print BBO from TBBO files (null on trades-only days)
+let TF_TICKS = [], tfTicks = 0;       // tick-count bar sizes offered, and the one in use (0 = time bars)
 // multiple-timeframe view — declared up here with the other mode state, NOT next to its functions:
 // init() runs early and hardReveal() reads these on the first paint (the TDZ trap seriesFrom and
 // deepMode both fell into). mtfPanes holds one {tf, chart, series, bars} per extra chart.
 let mtfLayout = loadJSON('rt_mtf_layout', 'off'), mtfTfs = loadJSON('rt_mtf_tfs', [1, 0, 0]), mtfPanes = [];
-let deepMode = false, deepSym = null, deepIndex = [], deepAllDays = new Set(), deepMonth = null;   // declared up here (not near enterDeepMode below) — init() runs early and loadDataset() reads deepMode on its first line; a late `let` here is the exact TDZ trap seriesFrom/RENDER_WINDOW already hit once
+let deepMode = false, deepSym = null, deepIndex = [], deepAllDays = new Set(), deepMonth = null, deepTickDays = new Set();   // declared up here (not near enterDeepMode below) — init() runs early and loadDataset() reads deepMode on its first line; a late `let` here is the exact TDZ trap seriesFrom/RENDER_WINDOW already hit once
 let fO = 0, fH = 0, fL = 0, fC = 0, fV = 0, fBucket = -1;   // live-forming candle accumulator
 
 let position = null;         // {side,qty,entry,entryTime,atm,slTicks,maxFav,beDone}
@@ -1470,6 +1468,20 @@ $('chart').addEventListener('mousemove', e => {
 });
 
 // ---------- timeframe aggregation ----------
+// Tick bars: a new bar every N trades instead of every N minutes. Only meaningful when the base
+// resolution IS individual prints (tick mode), which is why TF_TICKS is populated in loadTickDay.
+// Bars stay contiguous and fixed-width in print count, so bar index === floor(printIndex / N) —
+// that identity is what lets revealTick and mBucket stay O(1) below.
+function aggregateTicks(base, n) {
+  const out = [];
+  for (let i = 0; i < base.length; i += n) {
+    const e = Math.min(i + n, base.length) - 1;
+    let hi = base[i].high, lo = base[i].low, v = 0;
+    for (let k = i; k <= e; k++) { const b = base[k]; if (b.high > hi) hi = b.high; if (b.low < lo) lo = b.low; v += b.volume; }
+    out.push({ time: base[i].time, open: base[i].open, high: hi, low: lo, close: base[e].close, volume: v, subStart: i, subEnd: e });
+  }
+  return out;
+}
 function aggregate(base, m) {
   if (!tickMode && m === BASE_TF) return base.map((b, i) => ({ ...b, subStart: i, subEnd: i }));   // tick mode always buckets (base = individual prints → never 1:1, would collide on shared seconds)
   const out = []; let cur = null; const span = Math.round(m * 60);   // integer seconds — avoids float drift on 20s (=1/3 min)
@@ -1614,7 +1626,12 @@ function stampBarIndices() { for (let i = 0; i < bars.length; i++) bars[i].__i =
 
 function updateChartTypeUI() { const s = $('chartTypeSelect'); if (s && s.value !== chartType) s.value = chartType; }
 function vd(b) { return { time: b.time, value: b.volume, color: b.close >= b.open ? 'rgba(38,166,154,.5)' : 'rgba(239,83,80,.5)' }; }
-const mBucket = (ts) => { const sp = Math.round(tf * 60); return Math.floor(ts / sp) * sp; };
+const mBucket = (ts) => {
+  if (!tfTicks) { const sp = Math.round(tf * 60); return Math.floor(ts / sp) * sp; }
+  let lo = 0, hi = bars.length - 1, r = -1;      // tick bars: the last bar starting at or before ts
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (bars[m].time <= ts) { r = m; lo = m + 1; } else hi = m - 1; }
+  return r >= 0 ? bars[r].time : ts;
+};
 
 // ---------- init ----------
 init();
@@ -1680,7 +1697,11 @@ async function enterDeepMode(ds) {
   let idx;
   try { const r = await fetch(`data/chunks/${deepSym}/index.json?v=` + Date.now()); idx = r.ok ? await r.json() : []; } catch (e) { idx = []; }
   deepIndex = (Array.isArray(idx) ? idx : []).slice().sort((a, b) => a.month < b.month ? -1 : 1);
-  deepAllDays = new Set(deepIndex.flatMap(m => m.days));
+  // NQ serves the FINEST data each day has: a per-print tick file when one exists, the 15s month
+  // chunk otherwise. The calendar offers the union, so a day covered only by ticks is still clickable.
+  try { const r = await fetch('data/tick/index.json?v=' + Date.now()); const t = r.ok ? await r.json() : []; deepTickDays = new Set(Array.isArray(t) ? t : (t.days || [])); }
+  catch (e) { deepTickDays = new Set(); }
+  deepAllDays = new Set(deepIndex.flatMap(m => m.days).concat([...deepTickDays]));
   if (!deepIndex.length) { deepMode = true; toast('No deep-history months yet — run fetch_15s_bulk.py + split_monthly.py'); if (!wired) { wire(); wired = true; } return true; }
   return loadDeepMonth(deepIndex[deepIndex.length - 1].month);   // default: most recent available month
 }
@@ -1693,16 +1714,24 @@ async function loadDeepMonth(month) {
     for (const m of months) { const r = await fetch(`data/chunks/${deepSym}/${m}.json?v=` + Date.now()); if (!r.ok) throw 0; bars = bars.concat(await r.json()); }
   } catch (e) { showLoading(false); toast('Month not available locally: ' + month); return false; }
   pause(); position = null; entryOrder = null; orders = []; markers = []; tool = ''; pendingPt = null;
-  tickMode = false; deepMode = true; deepMonth = month; setSpeedOptions(false);
+  tickMode = false; tfTicks = 0; TF_TICKS = []; tickBid = tickAsk = null; deepMode = true; deepMonth = month; setSpeedOptions(false);   // tick bars/BBO only exist on per-print data
   finishLoad(bars, null);
   showLoading(false);
   toast(`Deep history · ${month} · ${bars.length.toLocaleString()} bars`);
   return true;
 }
-async function jumpToDeepDay(key) {   // calendar click on a day whose month isn't loaded yet
+async function jumpToDeepDay(key) {   // calendar click: ticks if that day has them, else its month chunk
   closeCal();
+  if (deepTickDays.has(key)) return loadTickDay(key);
   const ok = await loadDeepMonth(key.slice(0, 7));
   if (ok && dayIdx[key] != null) gotoSession(dayIdx[key]);
+}
+function deepDayList() { return [...deepAllDays].sort(); }
+async function stepDeepDay(dir) {   // [ / ] across the union list — a tick day holds one session, so
+  const list = deepDayList(), cur = tickMode ? curTickDay : (sessions[currentSessionIdx()] || {}).key;
+  const i = list.indexOf(cur); if (i < 0) return false;
+  const nxt = list[i + dir]; if (!nxt) return false;
+  return jumpToDeepDay(nxt);
 }
 
 // ---------- sessions (computed on base) ----------
@@ -1748,11 +1777,18 @@ function wireCalendar() {
   });
   document.addEventListener('mousedown', (e) => { const p = $('datePopover'); if (p && p.classList.contains('open') && !p.contains(e.target) && !$('dateBtn').contains(e.target)) closeCal(); });
 }
-function buildTfSelect() { $('tfSelect').innerHTML = TF_OPTIONS.map(m => `<option value="${m}" ${m === tf ? 'selected' : ''}>${m < 1 ? Math.round(m * 60) + 's' : m + 'm'}</option>`).join(''); setSpeedOptions(); buildMtfSelects(); }   // setSpeedOptions here too: BASE_TF is final by now, and the sub-bar labels quote it
+function buildTfSelect() {
+  const time = TF_OPTIONS.map(m => `<option value="${m}" ${!tfTicks && m === tf ? 'selected' : ''}>${m < 1 ? Math.round(m * 60) + 's' : m + 'm'}</option>`).join('');
+  // TF_TICKS is filled in loadTickDay and already filtered to sizes this day has the prints for, so a
+  // 2000-tick bar never appears on a session that could only draw a couple of them.
+  const cnt = TF_TICKS.map(k => `<option value="t${k}" ${tfTicks === k ? 'selected' : ''}>${k} ticks</option>`).join('');
+  $('tfSelect').innerHTML = time + (cnt ? `<optgroup label="Tick bars">${cnt}</optgroup>` : '');
+  setSpeedOptions(); buildMtfSelects();
+}   // setSpeedOptions here too: BASE_TF is final by now, and the sub-bar labels quote it
 function buildDataSelect() { $('dataSelect').innerHTML = DATASETS.map((ds, i) => ds.hidden ? '' : `<option value="${i}" ${i === dataIdx ? 'selected' : ''}>${ds.label}</option>`).join(''); }   // hidden entries stay in DATASETS (still loadable) but never render in the dropdown
 
 // ---------- timeframe / index bookkeeping ----------
-function rebuildTf() { bars = aggregate(baseBars, tf); computeRipster(); computeIndicators(); oscCompute(); stampBarIndices(); rebuildHA(); vpPKey = null; vpOKey = null; vpDEdge = -1; }
+function rebuildTf() { bars = tfTicks ? aggregateTicks(baseBars, tfTicks) : aggregate(baseBars, tf); computeRipster(); computeIndicators(); oscCompute(); stampBarIndices(); rebuildHA(); vpPKey = null; vpOKey = null; vpDEdge = -1; }
 function tfIndexAtBase(bi) { // TF-bar index whose bucket contains baseBars[bi]
   const t = baseBars[bi].time; let lo = 0, hi = bars.length - 1, ans = 0;
   while (lo <= hi) { const mid = (lo + hi) >> 1; if (bars[mid].time <= t) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
@@ -1806,7 +1842,7 @@ function stepFwd() {
   // next one — otherwise its remaining sub-bars would never be processed and their fills would vanish.
   const cur = bars[idx];
   if (cur && baseIdx < cur.subEnd) {
-    for (let i = baseIdx + 1; i <= cur.subEnd; i++) processSub(baseBars[i]);
+    for (let i = baseIdx + 1; i <= cur.subEnd; i++) processSub(baseBars[i], i);
     baseIdx = cur.subEnd;
     candle.update(cd(cur)); vol.update(vd(cur));
     resetForming(); mtfSync(); refreshMarkers(); renderLive(); renderLegend(null); alertCheck(); settleCheck();
@@ -1816,7 +1852,7 @@ function stepFwd() {
   idx++;
   if (maybeReWindow()) {}                             // grew past window → re-fed (incl. the new bar) + osc
   else { candle.update(cd(bars[idx])); vol.update(vd(bars[idx])); oscStepFwd(); }
-  for (let i = bars[idx].subStart; i <= bars[idx].subEnd; i++) { processSub(baseBars[i]); }
+  for (let i = bars[idx].subStart; i <= bars[idx].subEnd; i++) { processSub(baseBars[i], i); }
   baseIdx = bars[idx].subEnd;
   resetForming(); mtfSync(); refreshMarkers();
   renderLive(); renderLegend(null); alertCheck(); settleCheck();
@@ -1934,14 +1970,23 @@ async function loadTickDay(day) {
   catch (e) { toast('Tick day not available locally: ' + day); return false; }
   pause(); position = null; entryOrder = null; orders = []; markers = []; tool = ''; pendingPt = null;
   tickMode = true; curTickDay = day; setSpeedOptions(true);
+  // Loading a tick day does NOT leave the NQ dataset — deepMode/deepIndex/deepAllDays stay put so the
+  // calendar still lists every day and [ / ] can walk back onto a 15s-only one.
   if (d.tick) { TICK = d.tick; INSTR = { ...INSTR, tickSize: d.tick }; }
   const n = d.p.length; baseBars = new Array(n); tickMs = new Array(n);
+  // TBBO files carry bo/ao: the best bid and offer immediately BEFORE each trade, as a signed count
+  // of ticks from that trade's price. Keeping them per-print lets a market order pay the real spread
+  // instead of pretending it fills at the last print. Older trades-only files simply have neither.
+  const tk = d.tick || TICK;
+  tickBid = d.bo ? d.bo.map((o, i) => rnd(d.p[i] + o * tk)) : null;
+  tickAsk = d.ao ? d.ao.map((o, i) => rnd(d.p[i] + o * tk)) : null;
   for (let i = 0; i < n; i++) { const p = d.p[i], ms = d.t0 + d.dt[i]; tickMs[i] = ms; baseBars[i] = { time: Math.floor(ms / 1000), open: p, high: p, low: p, close: p, volume: d.s[i] }; }
   BASE_TF = 1 / 60;                                            // nominal; tick mode always buckets
   TF_OPTIONS = [1 / 60, 1 / 12, 0.25, 0.5, 1, 2, 3, 5];        // 1s 5s 15s 30s 1m 2m 3m 5m
+  TF_TICKS = [100, 500, 1000, 2000].filter(k => k * 3 <= n);   // tick-count bars, only where the day has enough prints to draw a few
   tf = 1;                                                      // default 1-min view (candle forms live)
   sessions = [{ key: day, start: 0, end: n - 1 }];            // one day; calendar lists all fetched days
-  dayIdx = {}; availTickDays.forEach(k => { dayIdx[k] = 0; });
+  dayIdx = {}; (deepAllDays.size ? [...deepAllDays] : availTickDays).forEach(k => { dayIdx[k] = 0; });   // whole union: every day stays clickable while a single tick day is loaded
   $('sessionSelect').innerHTML = `<option value="0">${day}</option>`;
   buildTfSelect(); buildAtmSelect();
   $('startSlider').max = n - 1;
@@ -1962,10 +2007,13 @@ function resetForming() {
 }
 function commitForming() { const bar = { time: fBucket, open: fO, high: fH, low: fL, close: fC, volume: fV, __i: idx }; candle.update(cd(bar)); vol.update(vd(bar)); }
 function revealTick(i) {
-  const b = baseBars[i], sp = Math.round(tf * 60), bucket = Math.floor(b.time / sp) * sp;
+  const b = baseBars[i];
+  // tick bars are fixed-width in prints, so the bar a print belongs to is just floor(i / N)
+  const bucket = tfTicks ? (bars[Math.floor(i / tfTicks)] || bars[bars.length - 1]).time
+                         : Math.floor(b.time / Math.round(tf * 60)) * Math.round(tf * 60);
   if (bucket !== fBucket) { if (idx < bars.length) { candle.update(cd(bars[idx])); vol.update(vd(bars[idx])); } idx = Math.min(idx + 1, bars.length - 1); fBucket = bucket; fO = b.close; fH = b.close; fL = b.close; fC = b.close; fV = 0; }
   const p = b.close; if (p > fH) fH = p; if (p < fL) fL = p; fC = p; fV += b.volume;
-  processSub(b);
+  processSub(b, i);
 }
 function playFrame() {   // steady display-bars/sec reveal; each base sub-bar = 1/S of a display bar, so the candle forms smoothly on any base (1m=whole bars, 5s/tick=live forming)
   const rate = Number($('speedSelect').value) || 1;          // display bars per second
@@ -2096,19 +2144,32 @@ function jumpDay(dir) {
   const sel = $('sessionSelect'); if (sel) sel.value = String(next);
   toast((dir > 0 ? '▶ ' : '◀ ') + sessions[next].key + ' 09:30 ET');
 }
-function nextDay() { jumpDay(1); }
-function prevDay() { jumpDay(-1); }
+function nextDay() { if (deepMode && sessions.length <= 1) return stepDeepDay(1); jumpDay(1); }
+function prevDay() { if (deepMode && sessions.length <= 1) return stepDeepDay(-1); jumpDay(-1); }
 function setStart(biVal) {
   if (locked()) return;
   pause(); baseIdx = Math.max(0, Math.min(baseBars.length - 1, biVal)); syncIdxFromBase(); hardReveal(); renderLive();
 }
 function setTf(m) {
   if (locked()) { buildTfSelect(); return toast("Can't change timeframe while in a position / working order"); }
-  pause(); tf = m; rebuildTf(); syncIdxFromBase(); hardReveal(); fitRecent(150); renderLive();
+  pause();
+  const v = String(m);
+  if (v[0] === 't') tfTicks = +v.slice(1) || 0;          // "t500" = a bar every 500 trades
+  else { tfTicks = 0; tf = +v; }
+  rebuildTf(); syncIdxFromBase(); hardReveal(); fitRecent(150); renderLive();
 }
 
 // ---------- order helpers ----------
 function curPx() { return baseBars[baseIdx].close; }
+// TBBO days carry the BBO in force just before each print, so an order can pay the real spread
+// instead of pretending both sides fill at the last trade. NQ's quoted spread runs 2-4 ticks, i.e.
+// $10-20 a round trip per contract, which is not noise against a 3R target. Days without BBO
+// (the older trades-only files, and every 15s/1m dataset) fall through unchanged.
+function bboAt(bi) { return (tickBid && bi >= 0 && bi < tickBid.length && tickAsk) ? [tickBid[bi], tickAsk[bi]] : null; }
+function crossFill(buying, px, bi) {   // a buy lifts the offer, a sell hits the bid
+  const q = bboAt(bi == null ? baseIdx : bi); if (!q) return px;
+  return buying ? Math.max(px, q[1]) : Math.min(px, q[0]);
+}
 function curBaseT() { return baseBars[baseIdx].time; }
 function locked() { return !!position || !!entryOrder; }
 
@@ -2433,7 +2494,7 @@ function closeQuizScore() { const el = $('quizModal'); if (el) { el.classList.re
 function onEntryButton(side) {
   if (position) { if (position.side !== side) return flatten('reverse'); return toast('Already in a position — FLATTEN first'); }
   const kind = $('entryType').value;
-  if (kind === 'market') { openPosition(side, curPx(), curBaseT(), activeAtm, resolveQty(side, 'market')); }
+  if (kind === 'market') { openPosition(side, crossFill(side === 'long', curPx()), curBaseT(), activeAtm, resolveQty(side, 'market')); }   // market orders cross the spread
   else {
     const a = atm[activeAtm] || {};
     let price, bracket;
@@ -2495,7 +2556,7 @@ function openPosition(side, px, t, atmName, mult, bracket) {
 
 function flatten() { if (position) exitQty(position.qty, curPx(), curBaseT(), 'manual'); else cancelEntry(); }
 function reverse() { if (!position) return; const s = position.side; exitQty(position.qty, curPx(), curBaseT(), 'reverse'); onEntryButtonDirect(s === 'long' ? 'short' : 'long'); }
-function onEntryButtonDirect(side) { openPosition(side, curPx(), curBaseT(), activeAtm, resolveQty(side, 'market')); }
+function onEntryButtonDirect(side) { openPosition(side, crossFill(side === 'long', curPx()), curBaseT(), activeAtm, resolveQty(side, 'market')); }
 function placeBreakout(side) {   // Buy/Sell Stop: stop-entry at the current bar high +1t (buy) / low -1t (sell). SL/TP come from the active ATM, SNAPSHOTTED to this signal bar so they never jump to a later (fill) bar.
   if (position) return toast('Already in a position — flatten first');
   if (!baseBars.length) return;
@@ -2525,11 +2586,11 @@ function postEntryBar(b) {
               : { time: b.time, open: E, high: b.close > E ? b.high : E, low: b.low, close: b.close, volume: b.volume };
 }
 // ---------- per-(1-min) bar processing ----------
-function processSub(b) {
+function processSub(b, bi) {   // bi = index of this print, when the base IS prints (tick days)
   // 1) pending entry — a STOP entry that fills now also checks SL/TP on the SAME bar (no waiting for the next)
   if (!position && entryOrder) {
     const wasStop = entryOrder.kind === 'stop';
-    if (tryEntryFill(b)) { if (wasStop) b = postEntryBar(b); else return; }
+    if (tryEntryFill(b, bi)) { if (wasStop) b = postEntryBar(b); else return; }
   }
   if (!position) return;
 
@@ -2546,7 +2607,7 @@ function processSub(b) {
     if (!stop || !position) return false;
     const sP = stop.price;
     const hit = long ? (b.open <= sP || b.low <= sP) : (b.open >= sP || b.high >= sP);
-    if (hit) { const px = long ? (b.open <= sP ? b.open : sP) : (b.open >= sP ? b.open : sP); exitQty(position.qty, px, b.time, 'stop'); return true; }
+    if (hit) { const raw = long ? (b.open <= sP ? b.open : sP) : (b.open >= sP ? b.open : sP); exitQty(position.qty, crossFill(!long, raw, bi), b.time, 'stop'); return true; }
     return false;
   };
   const doTargets = () => {
@@ -2555,7 +2616,7 @@ function processSub(b) {
       if (!position) break;
       const tP = tg.price;
       const hit = long ? (b.open >= tP || b.high >= tP) : (b.open <= tP || b.low <= tP);
-      if (hit) { const px = long ? (b.open >= tP ? b.open : tP) : (b.open <= tP ? b.open : tP); orders = orders.filter(o => o !== tg); exitQty(tg.qty, px, b.time, 'target'); }
+      if (hit) { const raw = long ? (b.open >= tP ? b.open : tP) : (b.open <= tP ? b.open : tP); orders = orders.filter(o => o !== tg); exitQty(tg.qty, crossFill(!long, raw, bi), b.time, 'target'); }
     }
   };
   if (stopFirst) { if (doStop()) return; doTargets(); }   // stop side reached first this sub-bar
@@ -2564,7 +2625,7 @@ function processSub(b) {
   if (position) updateStops(b);
 }
 
-function tryEntryFill(b) {
+function tryEntryFill(b, bi) {
   const e = entryOrder, long = e.side === 'long';
   let hit = false, px = e.price;
   if (e.kind === 'limit') {
@@ -2574,7 +2635,10 @@ function tryEntryFill(b) {
     if (long) { if (b.open >= e.price) { hit = true; px = b.open; } else if (b.high >= e.price) { hit = true; px = e.price; } }
     else { if (b.open <= e.price) { hit = true; px = b.open; } else if (b.low <= e.price) { hit = true; px = e.price; } }
   }
-  if (hit) { openPosition(e.side, rnd(px), b.time, e.atm, e.mult, { slTicks: e.slTicks, tgts: e.tgts }); return true; }
+  // a stop entry that triggers becomes a market order, so it crosses; a resting LIMIT does not —
+  // it is the passive side and gets filled at its own price.
+  if (hit) { const fp = e.kind === 'stop' ? crossFill(long, rnd(px), bi) : rnd(px);
+             openPosition(e.side, fp, b.time, e.atm, e.mult, { slTicks: e.slTicks, tgts: e.tgts }); return true; }
   return false;
 }
 
@@ -3220,7 +3284,7 @@ function wire() {
   $('btnNextDay').onclick = nextDay;
   $('sessionSelect').onchange = (e) => gotoSession(+e.target.value);
   wireCalendar();
-  $('tfSelect').onchange = (e) => setTf(+e.target.value);
+  $('tfSelect').onchange = (e) => setTf(e.target.value);   // string: may be minutes or "t<N>" tick bars
   $('dataSelect').onchange = async (e) => { if (locked()) { $('dataSelect').value = dataIdx; return toast("Can't switch dataset while in a position / working order"); } const i = +e.target.value; const ok = await loadDataset(DATASETS[i]); if (ok) { if (rndMode) exitRnd(); dataIdx = i; } else $('dataSelect').value = dataIdx; };
   $('speedSelect').onchange = () => { saveJSON('rt_speed', $('speedSelect').value); if (playing) { pause(); play(); } };   // remember the pick across reloads
   $('startSlider').oninput = (e) => setStart(+e.target.value);
