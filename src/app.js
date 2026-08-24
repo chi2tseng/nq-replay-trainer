@@ -1699,10 +1699,17 @@ async function enterDeepMode(ds) {
   deepIndex = (Array.isArray(idx) ? idx : []).slice().sort((a, b) => a.month < b.month ? -1 : 1);
   // NQ serves the FINEST data each day has: a per-print tick file when one exists, the 15s month
   // chunk otherwise. The calendar offers the union, so a day covered only by ticks is still clickable.
-  try { const r = await fetch('data/tick/index.json?v=' + Date.now()); const t = r.ok ? await r.json() : []; deepTickDays = new Set(Array.isArray(t) ? t : (t.days || [])); }
-  catch (e) { deepTickDays = new Set(); }
+  deepTickDays = new Set();
+  if (deepSym === 'NQ') {   // tick files are NQ_<day>.json only — merging them into ES's calendar offered 128 days that 404 on click
+    try { const r = await fetch('data/tick/index.json?v=' + Date.now()); const t = r.ok ? await r.json() : []; deepTickDays = new Set(Array.isArray(t) ? t : (t.days || [])); }
+    catch (e) { deepTickDays = new Set(); }
+  }
   deepAllDays = new Set(deepIndex.flatMap(m => m.days).concat([...deepTickDays]));
   if (!deepIndex.length) { deepMode = true; toast('No deep-history months yet — run fetch_15s_bulk.py + split_monthly.py'); if (!wired) { wire(); wired = true; } return true; }
+  // Boot onto the newest day OVERALL. The tick coverage runs past the 15s chunks, so defaulting to
+  // the latest month chunk landed on a 15s day and the Tick-bars timeframes never showed on boot.
+  const newest = [...deepAllDays].sort().pop();
+  if (deepTickDays.has(newest)) { deepMode = true; return loadTickDay(newest); }   // deepMode stays on so the calendar union and [ / ] day-stepping work from the first day
   return loadDeepMonth(deepIndex[deepIndex.length - 1].month);   // default: most recent available month
 }
 async function loadDeepMonth(month) {
