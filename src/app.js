@@ -39,7 +39,13 @@ const etDMHMS = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York',
 function etP(ts) { const o = {}; for (const x of etDMHMS.formatToParts(new Date(ts * 1000))) o[x.type] = x.value; return o; }
 const tFmt = (ts) => { const o = etP(ts); return `${o.month}/${o.day} ${o.hour}:${o.minute}:${o.second} ET`; };  // US cash open reads 09:30:00 ET
 const dayKey = (ts) => { const d = new Date(ts * 1000); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}`; };
-const tradingDayKey = (ts) => etFmt.format(new Date((ts + 6 * 3600) * 1000)); // futures trading day = ET date (18:00 ET boundary shifted to midnight, DST-correct)
+const _tdkCache = new Map();   // hour-bucket memo: buildSessions calls this once PER BAR — a two-month chunk load was 460k Intl.format calls (~seconds of freeze on every chunk-day switch)
+const tradingDayKey = (ts) => {
+  const k = Math.floor((ts + 6 * 3600) / 3600);          // the ET date can only change on an hour boundary, DST included
+  let v = _tdkCache.get(k);
+  if (v === undefined) { v = etFmt.format(new Date(k * 3600000)); if (_tdkCache.size > 40000) _tdkCache.clear(); _tdkCache.set(k, v); }
+  return v;
+}; // futures trading day = ET date (18:00 ET boundary shifted to midnight, DST-correct)
 const _etmCache = new Map();   // minute-bucket memo: Intl.formatToParts costs ~3µs a call, and VP/session scans ask for the same minute hundreds of times on tick data
 function etMinutes(ts) {
   const k = Math.floor(ts / 60); let v = _etmCache.get(k);
@@ -1801,8 +1807,11 @@ async function loadDeepMonth(month) {
 async function jumpToDeepDay(key) {   // calendar click: ticks if that day has them, else its month chunk
   closeCal();
   if (deepTickDays.has(key)) return loadTickDay(key);
-  const ok = await loadDeepMonth(key.slice(0, 7));
+  const month = key.slice(0, 7);
+  if (!tickMode && deepMode && deepMonth === month && dayIdx[key] != null) { gotoSession(dayIdx[key]); return true; }   // same chunk already loaded — no refetch/rebuild
+  const ok = await loadDeepMonth(month);
   if (ok && dayIdx[key] != null) gotoSession(dayIdx[key]);
+  return ok;
 }
 function deepDayList() { return [...deepAllDays].sort(); }
 async function stepDeepDay(dir) {   // [ / ] across the union list — a tick day holds one session, so

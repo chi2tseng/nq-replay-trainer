@@ -904,7 +904,7 @@ button.bs-stop.sell:hover:not(:disabled){ background:#33262a; border-color:var(-
 
 /* Narrow screens: shed chrome so the toolbar stays 1-2 rows instead of 3 (it was stealing ~120px
    of chart height at 1366). Icons stay, the MTF/Indicators word labels go — the icons carry them. */
-@media (max-width:1500px){
+@media (max-width:1999px){
   #toolbar{ gap:8px; padding-left:8px; padding-right:8px; }
   #toolbar .grp{ gap:6px; }
   #toolbar .right{ gap:8px; }
@@ -912,4 +912,7 @@ button.bs-stop.sell:hover:not(:disabled){ background:#33262a; border-color:var(-
   #btnMtf .material-symbols-outlined, #btnIndicators .material-symbols-outlined{ font-size:20px; }
   #toolbar select{ font-size:11px; padding:4px 6px; }
   #startSlider{ min-width:56px; }
+  /* the clock cluster grew a bid×ask readout — slim it so FHD keeps a single-row toolbar */
+  #toolbar .right{ gap:6px; }
+  #clock, #clockPrice, #bboTag{ font-size:11px; }
 }
