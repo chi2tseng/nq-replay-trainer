@@ -1857,9 +1857,13 @@ function wireCalendar() {
   $('datePopover').addEventListener('click', (e) => {
     const nav = e.target.closest('.cal-nav'); if (nav) { calM += +nav.dataset.mo; if (calM < 0) { calM = 11; calY--; } if (calM > 11) { calM = 0; calY++; } renderCalendar(); return; }
     const day = e.target.closest('.cal-day.has'); if (day && day.dataset.key != null) {
-      if (tickMode) { closeCal(); loadTickDay(day.dataset.key); }
-      else if (dayIdx[day.dataset.key] != null) { gotoSession(dayIdx[day.dataset.key]); }   // gotoSession() closes the popover itself
-      else if (deepMode) { jumpToDeepDay(day.dataset.key); }   // month not loaded yet — fetch it, then jump
+      // Deep-integrated NQ/ES: ALWAYS route through jumpToDeepDay — it picks the tick file when the
+      // day has one and the month chunk otherwise. The old tickMode-first branch tried a tick file
+      // for EVERY click while a tick day was loaded, so any pre-tick-coverage day (e.g. Dec 2025)
+      // 404'd and silently went nowhere.
+      if (deepMode) { jumpToDeepDay(day.dataset.key); }
+      else if (tickMode) { closeCal(); loadTickDay(day.dataset.key); }                     // legacy standalone tick mode
+      else if (dayIdx[day.dataset.key] != null) { gotoSession(dayIdx[day.dataset.key]); }  // plain datasets; gotoSession() closes the popover itself
     }
   });
   document.addEventListener('mousedown', (e) => { const p = $('datePopover'); if (p && p.classList.contains('open') && !p.contains(e.target) && !$('dateBtn').contains(e.target)) closeCal(); });
