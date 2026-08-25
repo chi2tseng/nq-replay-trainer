@@ -1802,7 +1802,7 @@ function wireCalendar() {
   document.addEventListener('mousedown', (e) => { const p = $('datePopover'); if (p && p.classList.contains('open') && !p.contains(e.target) && !$('dateBtn').contains(e.target)) closeCal(); });
 }
 function buildTfSelect() {
-  const time = TF_OPTIONS.map(m => `<option value="${m}" ${!tfTicks && m === tf ? 'selected' : ''}>${m < 1 ? Math.round(m * 60) + 's' : m + 'm'}</option>`).join('');
+  const time = TF_OPTIONS.map(m => `<option value="${m}" ${!tfTicks && m === tf ? 'selected' : ''}>${m < 1 ? Math.round(m * 60) + 's' : m >= 60 ? (m / 60) + 'h' : m + 'm'}</option>`).join('');
   // TF_TICKS is filled in loadTickDay and already filtered to sizes this day has the prints for, so a
   // 2000-tick bar never appears on a session that could only draw a couple of them.
   const cnt = TF_TICKS.map(k => `<option value="t${k}" ${tfTicks === k ? 'selected' : ''}>${k} ticks</option>`).join('');
@@ -2007,7 +2007,7 @@ async function loadTickDay(day) {
   tickEv = d.ev || null;                                       // absent on old trades-only files -> every print counts as its own event
   for (let i = 0; i < n; i++) { const p = d.p[i], ms = d.t0 + d.dt[i]; tickMs[i] = ms; baseBars[i] = { time: Math.floor(ms / 1000), open: p, high: p, low: p, close: p, volume: d.s[i] }; }
   BASE_TF = 1 / 60;                                            // nominal; tick mode always buckets
-  TF_OPTIONS = [1 / 60, 1 / 12, 0.25, 0.5, 1, 2, 3, 5];        // 1s 5s 15s 30s 1m 2m 3m 5m
+  TF_OPTIONS = [1 / 60, 1 / 12, 0.25, 0.5, 1, 2, 3, 5, 10, 15, 30, 60];   // 1s 5s 15s 30s 1m 2m 3m 5m 10m 15m 30m 1h
   const nEvents = tickEv ? tickEv.reduce((a, x) => a + x, 0) : n;
   TF_TICKS = [100, 500, 1000, 2000].filter(k => k * 3 <= nEvents);   // tick-count bars, only where the day has enough EVENTS to draw a few
   tf = 1;                                                      // default 1-min view (candle forms live)
@@ -2079,7 +2079,7 @@ function playRtFrame() {   // Realtime: advance a sim clock at mult × real mark
 const MTF_WINDOW = 1500, MTF_FIT = 120;
 function mtfSrcKey() { return baseBars.length ? `${baseBars.length}:${baseBars[0].time}:${baseBars[baseBars.length - 1].time}` : ''; }   // identifies the loaded day/month without threading a counter through every loader
 function buildMtfSelects() {
-  const opts = (sel) => `<option value="0">— off —</option>` + TF_OPTIONS.map(m => `<option value="${m}" ${Math.abs(m - sel) < 1e-9 ? 'selected' : ''}>${m < 1 ? Math.round(m * 60) + 's' : m + 'm'}</option>`).join('');
+  const opts = (sel) => `<option value="0">— off —</option>` + TF_OPTIONS.map(m => `<option value="${m}" ${Math.abs(m - sel) < 1e-9 ? 'selected' : ''}>${m < 1 ? Math.round(m * 60) + 's' : m >= 60 ? (m / 60) + 'h' : m + 'm'}</option>`).join('');
   ['mtfTf1', 'mtfTf2', 'mtfTf3'].forEach((id, i) => { const el = $(id); if (el) el.innerHTML = opts(mtfTfs[i] || 0); });
   const l = $('mtfLayout'); if (l) l.value = mtfLayout;
 }
@@ -2096,7 +2096,7 @@ function rebuildMtf() {
     const el = document.createElement('div'); el.className = 'mtf-pane';
     const cv = document.createElement('div'); cv.className = 'mtf-chart';
     const tag = document.createElement('div'); tag.className = 'mtf-tag';
-    tag.innerHTML = `<b>${m < 1 ? Math.round(m * 60) + 's' : m + 'm'}</b>`;
+    tag.innerHTML = `<b>${m < 1 ? Math.round(m * 60) + 's' : m >= 60 ? (m / 60) + 'h' : m + 'm'}</b>`;
     el.appendChild(cv); el.appendChild(tag); host.appendChild(el);
     const c = LightweightCharts.createChart(cv, {
       layout: { background: { color: '#000000' }, textColor: '#d1d4dc', fontSize: 10, attributionLogo: false },
