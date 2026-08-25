@@ -56,7 +56,7 @@ let quizMode = false;   // quiz mode: replay the user's OWN past trades up to th
 let rndSavedTrades = null, rndSavedMarkers = null;   // real trades/markers parked while the random-mode sandbox runs
 let baseBars = [];           // raw 1-min bars
 let bars = [];               // current-timeframe bars (each carries subStart/subEnd into baseBars)
-let tf = 1;                  // timeframe in minutes
+let tf = loadJSON('rt_tf', 1);   // timeframe in minutes — remembered so a day switch or reload keeps your last pick
 let idx = 0;                 // last revealed TF-bar index
 let baseIdx = 0;             // last revealed 1-min index (== bars[idx].subEnd)
 let playing = false, timer = null;
@@ -68,7 +68,7 @@ let seriesFrom = 0;          // first absolute bar index currently in the candle
 let tickMode = false, tickMs = [], availTickDays = [], curTickDay = null, simMs = 0, speedUIBase = null;
 let tickBid = null, tickAsk = null;   // per-print BBO from TBBO files (null on trades-only days)
 let tickEv = null;                    // per-print match-event start flags (1 = first print of a CME match event)
-let TF_TICKS = [], tfTicks = 0;       // tick-count bar sizes offered, and the one in use (0 = time bars)
+let TF_TICKS = [], tfTicks = loadJSON('rt_tfticks', 0);   // tick-count bar sizes offered, and the one in use (0 = time bars); remembered like rt_tf
 // multiple-timeframe view — declared up here with the other mode state, NOT next to its functions:
 // init() runs early and hardReveal() reads these on the first paint (the TDZ trap seriesFrom and
 // deepMode both fell into). mtfPanes holds one {tf, chart, series, bars} per extra chart.
@@ -1688,7 +1688,7 @@ async function loadDataset(ds) {
 function finishLoad(data, ds) {   // shared tail of loadDataset() / loadDeepMonth(): data is already fetched, INSTR/TICK already set
   baseBars = data;
   BASE_TF = (ds && ds.base) || detectBaseTf(baseBars); buildTfOptions();   // ds.base = explicit base resolution (min) for clean sub-minute sets
-  tf = BASE_TF < 1 ? 1 : BASE_TF;                 // default view: 1m when base is sub-minute, else base
+  if (!TF_OPTIONS.some(m => Math.abs(m - tf) < 1e-9)) tf = BASE_TF < 1 ? 1 : BASE_TF;   // keep the previous timeframe when this base can express it (a 1s pick from a tick day can't survive onto a 15s base)
   buildSessions(); buildTfSelect(); buildAtmSelect();
   $('startSlider').max = baseBars.length - 1;
   rebuildTf();
@@ -2010,7 +2010,8 @@ async function loadTickDay(day) {
   TF_OPTIONS = [1 / 60, 1 / 12, 0.25, 0.5, 1, 2, 3, 5, 10, 15, 30, 60];   // 1s 5s 15s 30s 1m 2m 3m 5m 10m 15m 30m 1h
   const nEvents = tickEv ? tickEv.reduce((a, x) => a + x, 0) : n;
   TF_TICKS = [100, 500, 1000, 2000].filter(k => k * 3 <= nEvents);   // tick-count bars, only where the day has enough EVENTS to draw a few
-  tf = 1;                                                      // default 1-min view (candle forms live)
+  if (!TF_OPTIONS.some(m => Math.abs(m - tf) < 1e-9)) tf = 1;   // keep the previous timeframe across a day switch; 1m only if it isn't offered here
+  if (tfTicks && !TF_TICKS.includes(tfTicks)) tfTicks = 0;       // e.g. a 2000t pick landing on a short holiday session that can't draw it
   sessions = [{ key: day, start: 0, end: n - 1 }];            // one day; calendar lists all fetched days
   dayIdx = {}; (deepAllDays.size ? [...deepAllDays] : availTickDays).forEach(k => { dayIdx[k] = 0; });   // whole union: every day stays clickable while a single tick day is loaded
   $('sessionSelect').innerHTML = `<option value="0">${day}</option>`;
@@ -2182,6 +2183,7 @@ function setTf(m) {
   const v = String(m);
   if (v[0] === 't') tfTicks = +v.slice(1) || 0;          // "t500" = a bar every 500 trades
   else { tfTicks = 0; tf = +v; }
+  saveJSON('rt_tf', tf); saveJSON('rt_tfticks', tfTicks);
   rebuildTf(); syncIdxFromBase(); hardReveal(); fitRecent(150); renderLive();
 }
 
