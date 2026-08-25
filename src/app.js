@@ -1947,7 +1947,7 @@ function play() {
   playing = true; $('btnPlay').textContent = 'pause';
   resetForming();
   const sv = String($('speedSelect').value);
-  if (sv.indexOf('rt:') === 0) { simMs = baseMs(baseIdx); timer = setInterval(playRtFrame, TICK_FRAME_MS); }   // Realtime: clock-paced (real tape on tick)
+  if (sv.indexOf('rt:') === 0) { simMs = baseMs(baseIdx); rtLastWall = performance.now(); timer = setInterval(playRtFrame, TICK_FRAME_MS); }   // Realtime: clock-paced (real tape on tick)
   else if (sv.indexOf('sub:') === 0) { playBudget = 0; timer = setInterval(playSubFrame, TICK_FRAME_MS); }      // sub-bar/s: N base bars per second
   else { playBudget = 0; timer = setInterval(playFrame, TICK_FRAME_MS); }                                       // bars/s: steady display-bar rate
 }
@@ -2017,7 +2017,7 @@ function setSpeedOptions() {   // Sub-bar · Realtime (clock-paced) · steady di
   if (speedUIBase === key) return; speedUIBase = key;
   const keep = first ? loadJSON('rt_speed', '1') : $('speedSelect').value, u = subUnit();   // remembered pick; default "1 bar/s" = Step advances ONE bar of the timeframe you have selected
   const sub = [0.5, 1, 2, 4, 10].map(n => [`sub:${n}`, `${u} × ${n}/s`]);
-  const rt = [['rt:1', 'Realtime 1×'], ['rt:10', 'Realtime 10×'], ['rt:60', 'Realtime 60×'], ['rt:300', 'Realtime 300×']];
+  const rt = [['rt:1', 'Realtime 1×'], ['rt:2', 'Realtime 2×'], ['rt:5', 'Realtime 5×'], ['rt:10', 'Realtime 10×'], ['rt:60', 'Realtime 60×'], ['rt:300', 'Realtime 300×']];
   const bs = [0.5, 1, 2, 5, 10, 30].map(n => [String(n), `${n} bar/s`]);
   const grp = (label, rows) => `<optgroup label="${label}">` + rows.map(([v, l]) => `<option value="${v}">${l}</option>`).join('') + `</optgroup>`;
   $('speedSelect').innerHTML =
@@ -2118,9 +2118,16 @@ function playSubFrame() {   // steady SUB-BAR rate: N base bars/sec regardless o
   if (baseIdx >= baseBars.length - 1) pause();
 }
 function baseMs(i) { return tickMode ? tickMs[i] : baseBars[i].time * 1000; }   // absolute ms of base bar i (tick OR normal sub-bar)
-function playRtFrame() {   // Realtime: advance a sim clock at mult × real market time, reveal due base bars + form the candle. On tick = the real tape; on bars = a bar every (bar-duration ÷ mult).
+let rtLastWall = 0;   // wall-clock anchor for Realtime — see playRtFrame
+function playRtFrame() {   // Realtime: advance the sim clock by ACTUAL elapsed wall time × mult, reveal due base bars + form the candle. On tick = the real tape; on bars = a bar every (bar-duration ÷ mult).
   const mult = +String($('speedSelect').value).slice(3) || 1;
-  simMs += mult * TICK_FRAME_MS;
+  // The old version added a fixed 50ms per frame, i.e. it assumed the interval fires on schedule —
+  // any main-thread stall (heavy paint, GC, background-tab throttling) silently slowed market time
+  // and the drift never recovered. Measure real elapsed time instead, capped at 250ms per frame so
+  // returning from a hidden tab resumes where it paused rather than fast-forwarding the gap.
+  const now = performance.now();
+  const dw = Math.min(Math.max(now - rtLastWall, 0), 250); rtLastWall = now;
+  simMs += mult * dw;
   let n = 0;
   while (baseIdx < baseBars.length - 1 && baseMs(baseIdx + 1) <= simMs) { baseIdx++; revealTick(baseIdx); if (++n > 500000) break; }
   if (n) { maybeReWindow(); commitForming(); mtfSync(); refreshMarkers(); renderLive(); renderLegend(null); alertCheck(); settleCheck(); }
@@ -2795,6 +2802,13 @@ function renderAll() { renderLive(); renderTrades(); renderDash(); }
 function renderLive() {
   $('clock').textContent = baseBars.length ? (blindDate() ? tFmt(curBaseT()).replace(/^\d\d\/\d\d\s*/, '') : tFmt(curBaseT())) : '--:--';   // blind modes: time only, date hidden
   $('clockPrice').textContent = baseBars.length ? f2(curPx()) : '--';
+  const bt = $('bboTag');   // live BBO readout on TBBO days: the quote in force at the current print
+  if (bt) {
+    if (tickBid && tickAsk && baseIdx < tickBid.length) {
+      bt.style.display = '';
+      bt.innerHTML = `<span style="color:#26a69a">${f2(tickBid[baseIdx])}</span><span style="color:#8a8a8a"> × </span><span style="color:#ef5350">${f2(tickAsk[baseIdx])}</span>`;
+    } else bt.style.display = 'none';
+  }
   maybeUpdateVP();   // recompute the prior-day volume profile when the trading day changes
   updateAlertBar();  // keep the alert-time vertical line anchored to the current session
   updateRndHud();    // game HUD: round #, live P&L, 12:30 countdown
