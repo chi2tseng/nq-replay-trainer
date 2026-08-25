@@ -40,7 +40,18 @@ function etP(ts) { const o = {}; for (const x of etDMHMS.formatToParts(new Date(
 const tFmt = (ts) => { const o = etP(ts); return `${o.month}/${o.day} ${o.hour}:${o.minute}:${o.second} ET`; };  // US cash open reads 09:30:00 ET
 const dayKey = (ts) => { const d = new Date(ts * 1000); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}`; };
 const tradingDayKey = (ts) => etFmt.format(new Date((ts + 6 * 3600) * 1000)); // futures trading day = ET date (18:00 ET boundary shifted to midnight, DST-correct)
-function etMinutes(ts) { const p = etHM.formatToParts(new Date(ts * 1000)); let h = 0, m = 0; for (const x of p) { if (x.type === 'hour') h = +x.value; else if (x.type === 'minute') m = +x.value; } return h * 60 + m; } // minutes since midnight ET (DST-correct)
+const _etmCache = new Map();   // minute-bucket memo: Intl.formatToParts costs ~3µs a call, and VP/session scans ask for the same minute hundreds of times on tick data
+function etMinutes(ts) {
+  const k = Math.floor(ts / 60); let v = _etmCache.get(k);
+  if (v === undefined) {
+    const parts = etHM.formatToParts(new Date(k * 60000)); let h = 0, m = 0;
+    for (const x of parts) { if (x.type === 'hour') h = +x.value; else if (x.type === 'minute') m = +x.value; }
+    v = h * 60 + m;
+    if (_etmCache.size > 50000) _etmCache.clear();   // ~35 days of minutes; clearing just re-warms
+    _etmCache.set(k, v);
+  }
+  return v;
+} // minutes since midnight ET (DST-correct; cached per minute so per-print scans stay O(1) Intl-wise)
 // ET formatters for the LWC time axis (tick labels) + crosshair label — timestamps are UTC epoch s
 const _TM = (window.LightweightCharts && LightweightCharts.TickMarkType) || { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 };
 const blindDate = () => rndMode || quizMode;   // random + quiz modes hide the calendar date so the practice stays honest
@@ -970,14 +981,57 @@ function computeVPO() {   // CURRENT session's overnight profile — fixed once 
   const idxs = onIdxs(s); const prof = buildProfile(idxs); if (!prof) return;
   vpOData = Object.assign(prof, { rangeStartTime: baseBars[idxs[0]].time, key: s.key });
 }
+// The developing profile used to rebuild from the segment's first bar on EVERY advance — fine at
+// 1440 one-minute bars, catastrophic at 340k prints (a step near the close walked the whole day,
+// through Intl, twice). It now keeps a tick-keyed volume accumulator and only adds the NEW prints;
+// a jump back, a segment flip (overnight -> RTH at 09:30) or a day change trigger one full rebuild.
+let vpDState = null;
+function vpAddBar(st, i) {
+  const b = baseBars[i], a = Math.round(b.low / TICK), z = Math.round(b.high / TICK);
+  const per = (b.volume || 1) / (z - a + 1);
+  for (let k = a; k <= z; k++) st.vol.set(k, (st.vol.get(k) || 0) + per);
+  if (a < st.kLo) st.kLo = a; if (z > st.kHi) st.kHi = z;
+}
+function vpFinalize(st) {   // same bins/POC/70%-VA math as buildProfile's tick-aligned path, fed from the accumulator
+  const N = st.kHi - st.kLo + 1;
+  if (!(N >= 1) || N > VP_MAX_BINS) return null;                 // pathological range -> caller falls back to buildProfile
+  const lo = st.kLo * TICK, binVol = new Array(N).fill(0);
+  for (const [k, v] of st.vol) binVol[k - st.kLo] = v;
+  let pocIdx = 0; for (let k = 1; k < N; k++) if (binVol[k] > binVol[pocIdx]) pocIdx = k;
+  const total = binVol.reduce((x, v) => x + v, 0), target = total * 0.7;
+  let loI = pocIdx, hiI = pocIdx, acc = binVol[pocIdx];
+  while (acc < target && (loI > 0 || hiI < N - 1)) { const up = hiI < N - 1 ? binVol[hiI + 1] : -1, dn = loI > 0 ? binVol[loI - 1] : -1; if (up >= dn) acc += binVol[++hiI]; else acc += binVol[--loI]; }
+  const lo0 = lo - TICK / 2;
+  return { binVol, N, lo: lo0, hi: lo0 + N * TICK, binH: TICK, maxVol: Math.max(...binVol), vaLoIdx: loI, vaHiIdx: hiI,
+    poc: rnd(lo + pocIdx * TICK), vah: rnd(lo + hiI * TICK), val: rnd(lo + loI * TICK) };
+}
 function computeVPD() {   // DEVELOPING profile of the segment being replayed: overnight 18:00→now, or NY session 09:30→now
   vpDData = null;
-  if (!vpD.on || !sessions.length || !baseBars.length) return;
-  const ci = currentSessionIdx(); if (ci < 0) return;
+  if (!vpD.on || !sessions.length || !baseBars.length) { vpDState = null; return; }
+  const ci = currentSessionIdx(); if (ci < 0) { vpDState = null; return; }
   const s = sessions[ci];
-  const idxs = inOvernight(etMinutes(curBaseT())) ? onIdxs(s, baseIdx) : rthIdxs(s, baseIdx);
-  const prof = buildProfile(idxs); if (!prof) return;
-  vpDData = Object.assign(prof, { rangeStartTime: baseBars[idxs[0]].time });
+  const seg = inOvernight(etMinutes(curBaseT())) ? 'on' : 'rth';
+  let st = vpDState;
+  if (!(st && st.sKey === s.key && st.seg === seg && baseIdx >= st.last)) {   // jump back / segment flip / new day -> rebuild once
+    const idxs = seg === 'on' ? onIdxs(s, baseIdx) : rthIdxs(s, baseIdx);
+    if (!idxs.length) { vpDState = null; return; }
+    st = vpDState = { sKey: s.key, seg, vol: new Map(), kLo: Infinity, kHi: -Infinity, startI: idxs[0], last: idxs[idxs.length - 1] };
+    for (const i of idxs) vpAddBar(st, i);
+  } else if (baseIdx > st.last) {
+    const e = Math.min(baseIdx, s.end);
+    for (let i = st.last + 1; i <= e; i++) {                     // only the prints revealed since last time
+      const m = etMinutes(baseBars[i].time);
+      if (seg === 'on' ? (m >= 1080 || m < 570) : (m >= 570 && m < 960)) vpAddBar(st, i);
+    }
+    st.last = e;
+  }
+  const prof = vpFinalize(st);
+  if (!prof) {                                                   // >4000-tick range: uniform-bin fallback via the old full path
+    const idxs = seg === 'on' ? onIdxs(s, baseIdx) : rthIdxs(s, baseIdx);
+    const p2 = buildProfile(idxs); if (!p2) return;
+    vpDData = Object.assign(p2, { rangeStartTime: baseBars[idxs[0]].time }); return;
+  }
+  vpDData = Object.assign(prof, { rangeStartTime: baseBars[st.startI].time });
 }
 function maybeUpdateVP() {   // P on day change; O on day change or crossing the open; D whenever the revealed edge moves
   let dirty = false;
