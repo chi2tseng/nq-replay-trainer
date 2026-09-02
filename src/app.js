@@ -462,10 +462,20 @@ function renderIndLegend(i) {
   add('bb', bbOn, 'BB', '20 2', `${tint('var(--dim)', fmtIndVal(bbData.up[i]))} ${tint(BB_MID, '<b>' + fmtIndVal(bbData.mid[i]) + '</b>')} ${tint('var(--dim)', fmtIndVal(bbData.lo[i]))}`);
   const emaVals = emaData.map(e => tint(e.color, fmtIndVal(e.arr[i]))).join(' ');
   add('ema', emaOn, 'EMA', emaPeriods.join(' '), emaVals);
-  if (vpP.on) add('vpp', true, 'VP prev NY', vpPData ? vpPData.key : '', vpPData ? `${tint(vpP.color, 'PPOC ' + f2(vpPData.poc))}  ${tint(vpP.color, 'PVA ' + f2(vpPData.vah) + '/' + f2(vpPData.val))}` : '–');
-  if (vpO.on) add('vpo', true, 'VP overnight', vpOData ? '18:00→09:30' : 'forming', vpOData ? `${tint(vpO.color, 'OPOC ' + f2(vpOData.poc))}  ${tint(vpO.color, 'OVA ' + f2(vpOData.vah) + '/' + f2(vpOData.val))}` : '–');
-  if (vpD.on) add('vpd', true, 'VP developing', vpDData ? 'live' : '', vpDData ? `${tint(vpD.color, 'dPOC ' + f2(vpDData.poc))}  ${tint(vpD.color, 'dVA ' + f2(vpDData.vah) + '/' + f2(vpDData.val))}` : '–');
+  // a VP row with nothing to show (no prior day on this tape) is noise over the candles — skip it; the
+  // indicator popover still shows it checked, and the row appears the moment its data exists
+  if (vpP.on && vpPData) add('vpp', true, 'VP prev NY', vpPData.key, `${tint(vpP.color, 'PPOC ' + f2(vpPData.poc))}  ${tint(vpP.color, 'PVA ' + f2(vpPData.vah) + '/' + f2(vpPData.val))}`);
+  if (vpO.on) add('vpo', true, 'VP overnight', vpOData ? '18:00→09:30' : 'forming', vpOData ? `${tint(vpO.color, 'OPOC ' + f2(vpOData.poc))}  ${tint(vpO.color, 'OVA ' + f2(vpOData.vah) + '/' + f2(vpOData.val))}` : '');
+  if (vpD.on) add('vpd', true, 'VP developing', vpDData ? 'live' : 'forming', vpDData ? `${tint(vpD.color, 'dPOC ' + f2(vpDData.poc))}  ${tint(vpD.color, 'dVA ' + f2(vpDData.vah) + '/' + f2(vpDData.val))}` : '');
   el.innerHTML = rows.join('');
+}
+let _modeBadgeTxt = null;
+function updateModeBadge() {   // what the tape really is: TBBO (trade+quote), TICK (trades only), or 15s chunks
+  const el = $('modeBadge'); if (!el) return;
+  const t = tickMode ? (tickBid ? 'TBBO' : 'TICK') : (baseBars.length ? '15s' : '');
+  if (t === _modeBadgeTxt) return; _modeBadgeTxt = t;
+  el.textContent = t; el.className = 'mode-badge ' + (tickMode ? 'live' : 'coarse');
+  el.title = tickMode ? (tickBid ? 'Every trade with the bid × ask in force before it — market orders cross the real spread' : 'Every trade; fills at the last print') : '15-second bars — no intrabar tape on this day';
 }
 function toggleInd(which) {
   if (which === 'rip') { ripsterOn = !ripsterOn; saveJSON('rt_ripster', ripsterOn); ripsterRepaint(); const c = $('ripsterToggle'); if (c) c.checked = ripsterOn; }
@@ -1841,7 +1851,8 @@ function renderCalendar() {
   for (let i = 0; i < startWd; i++) cells += '<span class="cal-day empty"></span>';
   for (let d = 1; d <= days; d++) {
     const key = `${calY}-${pad(calM + 1)}-${pad(d)}`, has = key in dayIdx || (deepMode && deepAllDays.has(key)), sel = key === curKey;
-    cells += `<button class="cal-day${has ? ' has' : ''}${sel ? ' sel' : ''}" ${has ? `data-key="${key}"` : 'disabled'}>${d}</button>`;
+    const tk = has && (deepTickDays.has(key) || (tickMode && availTickDays.includes(key)));   // dot = tick tape exists for this day
+    cells += `<button class="cal-day${has ? ' has' : ''}${sel ? ' sel' : ''}${tk ? ' tick' : ''}" ${has ? `data-key="${key}" title="${tk ? 'Tick tape' : '15-second bars'}"` : 'disabled'}>${d}</button>`;
   }
   el.innerHTML =
     `<div class="cal-h"><button class="cal-nav" data-mo="-1"><span class="material-symbols-outlined">chevron_left</span></button>` +
@@ -2057,8 +2068,9 @@ async function enterTickMode(ds) {
 }
 async function loadTickDay(day) {
   let d;
+  showLoading(true, `Loading tick tape · ${day}…`);   // a 10–15 MB fetch + parse; silence here reads as a freeze
   try { const r = await fetch(`data/tick/${INSTR.symbol}_${day}.json?v=` + Date.now()); if (!r.ok) throw 0; d = await r.json(); }
-  catch (e) { toast('Tick day not available locally: ' + day); return false; }
+  catch (e) { showLoading(false); toast('Tick day not available locally: ' + day); return false; }
   pause(); position = null; entryOrder = null; orders = []; markers = []; tool = ''; pendingPt = null;
   tickMode = true; curTickDay = day; setSpeedOptions(true);
   // Loading a tick day does NOT leave the NQ dataset — deepMode/deepIndex/deepAllDays stay put so the
@@ -2090,6 +2102,7 @@ async function loadTickDay(day) {
   if (chartType && chartType !== 'candles') { const _t = chartType; chartType = '__'; setChartType(_t); }
   if (!wired) { wire(); wired = true; }
   renderAll();
+  showLoading(false);
   toast(`Tick replay · ${day} · ${n.toLocaleString()} prints`);
   return true;
 }
@@ -2827,6 +2840,7 @@ function renderLive() {
   updateRndHud();    // game HUD: round #, live P&L, 12:30 countdown
   if (!playing) $('startSlider').value = baseIdx;
 
+  updateModeBadge();
   const box = $('posBox');
   if (!position) {
     box.className = 'posflat';
@@ -2836,8 +2850,15 @@ function renderLive() {
     const uTicks = long ? tcount(curPx(), position.entry) : tcount(position.entry, curPx());
     const uPnl = uTicks * INSTR.tickValue * position.qty;
     box.className = long ? 'long' : 'short';
-    box.innerHTML = `<div class="big">${long ? 'LONG' : 'SHORT'} ${position.qty} @ ${f2(position.entry)}</div>
-      <div>Unreal. <b class="${uPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${usd(uPnl)}</b> · ${uTicks >= 0 ? '+' : ''}${uTicks}t · ${position.atm}</div>`;
+    const px = curPx();
+    const so = orders.find(o => o.type === 'stop'), to = orders.find(o => o.type === 'target');
+    const riskT = so ? Math.abs(tcount(position.entry, so.price)) : 0;
+    const openR = riskT ? uTicks / riskT : null;
+    const dist = (o) => Math.abs(tcount(px, o.price));   // ticks between the current print and that order
+    const cls = uPnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+    box.innerHTML = `<div class="pos-top"><span class="big">${long ? 'LONG' : 'SHORT'} ${position.qty} @ ${f2(position.entry)}</span><span class="pos-atm">${position.atm}</span></div>
+      <div class="pos-pnl ${cls}">${usd(uPnl)}<span class="pos-t">${uTicks >= 0 ? '+' : ''}${uTicks}t${openR != null ? ' · ' + (openR >= 0 ? '+' : '') + openR.toFixed(2) + 'R' : ''}</span></div>
+      <div class="pos-dist">${so ? `<span class="pd stop"><span class="material-symbols-outlined">shield</span>${dist(so)}t to stop</span>` : '<span class="pd none">no stop</span>'}${to ? `<span class="pd tgt"><span class="material-symbols-outlined">flag</span>${dist(to)}t to target</span>` : ''}</div>`;
   }
   const ord = [];
   const oRow = (cls, label, price, spec, title) => `<div class="ord ${cls}"><span>${label}</span><span class="ord-r"><span class="mono">${price}</span><button class="ord-x" data-ord="${spec}" title="${title}"><span class="material-symbols-outlined">close</span></button></span></div>`;
@@ -3520,9 +3541,25 @@ function wire() {
     else if (k === '0') { e.preventDefault(); fitChart(); }
     else if (e.key === 'Delete' && e.shiftKey) { e.preventDefault(); clearDrawings(); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && selDrawing) { e.preventDefault(); deleteSelectedDrawing(); }
-    else if (e.key === 'Escape') { if (tool) setTool(''); else if (selDrawing) { selDrawing = null; repaintOverlays(); } }
+    else if (k === '?') { e.preventDefault(); toggleHelp(); }
+    else if (e.key === 'Escape') { if ($('helpModal').classList.contains('open')) toggleHelp(false); else if (tool) setTool(''); else if (selDrawing) { selDrawing = null; repaintOverlays(); } }
   });
+  $('btnHelp').onclick = () => toggleHelp();
+  $('helpModal').onclick = (e) => { if (e.target === e.currentTarget) toggleHelp(false); };
   buildMtfSelects(); rebuildMtf();   // restore a saved multi-timeframe layout on boot (no-op when Off)
+}
+const HELP_KEYS = [
+  ['Replay', [['Space', 'Next bar / sub-bar'], ['P', 'Play / pause'], ['[  ]', 'Previous / next trading day'], ['0', 'Fit chart'], ['?', 'This sheet']]],
+  ['Orders', [['B', 'Buy market'], ['S', 'Sell market'], ['F', 'Buy stop above the bar'], ['J', 'Sell stop below the bar'], ['X', 'Flatten']]],
+  ['Drawings', [['Esc', 'Drop tool / deselect'], ['Del', 'Delete selected drawing'], ['Shift+Del', 'Clear all drawings']]],
+];
+function toggleHelp(on) {
+  const el = $('helpModal'); if (!el) return;
+  const open = on == null ? !el.classList.contains('open') : on;
+  if (!open) { el.classList.remove('open'); el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="dd-card help-card"><div class="dd-h"><span class="dd-date">Keyboard shortcuts</span><button class="mini ico-btn" id="helpClose"><span class="material-symbols-outlined">close</span></button></div>` +
+    `<div class="help-body">${HELP_KEYS.map(([g, rows]) => `<div class="help-grp"><div class="help-gh">${g}</div>${rows.map(([k, d]) => `<div class="help-row"><kbd>${k}</kbd><span>${d}</span></div>`).join('')}</div>`).join('')}</div></div>`;
+  el.classList.add('open'); $('helpClose').onclick = () => toggleHelp(false);
 }
 function switchTab(t) { $('tabTrades').classList.toggle('active', t); $('tabDash').classList.toggle('active', !t); $('panelTrades').classList.toggle('hidden', !t); $('panelDash').classList.toggle('hidden', t); if (!t) renderDash(); }
 
