@@ -1,82 +1,47 @@
-"""Convert NinjaTrader TICK export(s) -> 30-second OHLCV bars -> data/NQ_30s.json.
-NT tick export line: "yyyyMMdd HHmmss fffffff;price;<bid>;<ask>;volume"  (timestamp is UTC).
-We use field1 (trade/last price) for OHLC and the last field for volume.
-Merges NQ 06-26 (front) + NQ 09-26 (post-roll tail), back-adjusting 09-26 to 06-26's level
-so the continuous series has no roll gap. Streams the files (handles 150MB+).
+"""Convert a NinjaTrader Historical Data Export (tick, *.Last.txt) into the app's per-day tick files.
+
+Row format: `yyyyMMdd HHmmss fffffff;last;bid;ask;volume`, timestamps in UTC (verified: the daily
+17:00-18:00 ET maintenance halt shows up as an empty 21:00 UTC hour). Rows are re-bucketed by ET
+trading day (18:00 -> 17:00 ET) like the Databento converter, same output schema:
+  {day, sym, contract, tick, t0, dt:[ms], p:[price], s:[size], bo:[bid offset], ao:[ask offset], ev:[event flag]}
+`ev` = 1 when the 100-ns timestamp differs from the previous row: prints that share a timestamp are one
+CME match event (a sweep), which is what Tradovate-style tick bars count.
+
+Usage: py convert_nt_tick.py "<export.txt>" [outdir]
 """
-import json, os, datetime
+import sys, os, json, datetime
+from zoneinfo import ZoneInfo
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-DL = r"C:\Users\chi2t\Downloads"
-OUT = os.path.normpath(os.path.join(HERE, "..", "data", "NQ_30s.json"))
-BUCKET = 30  # seconds per bar
+SRC = sys.argv[1]
+OUT = sys.argv[2] if len(sys.argv) > 2 else "D:/Tools/replay-trainer/data/tick"
 TICK = 0.25
-def rt(x): return round(round(x / TICK) * TICK, 2)
+ET = ZoneInfo("America/New_York"); UTC = datetime.timezone.utc
+contract = os.path.basename(SRC).split('.')[0]          # "NQ 09-26"
 
-def parse_sec(ts):
-    # "20260607 220000 0960000" -> UTC epoch seconds
-    d, hms, _frac = ts.split(" ")
-    dt = datetime.datetime(int(d[0:4]), int(d[4:6]), int(d[6:8]),
-                           int(hms[0:2]), int(hms[2:4]), int(hms[4:6]),
-                           tzinfo=datetime.timezone.utc)
-    return int(dt.timestamp())
+days = {}                                               # trading day -> columns
+prev_ts = None
+with open(SRC) as f:
+    for line in f:
+        ts, last, bid, ask, vol = line.rstrip('\n').split(';')
+        dt = datetime.datetime(int(ts[0:4]), int(ts[4:6]), int(ts[6:8]), int(ts[9:11]), int(ts[11:13]), int(ts[13:15]), int(ts[16:19]) * 1000, tzinfo=UTC)
+        tday = (dt.astimezone(ET) + datetime.timedelta(hours=6)).strftime('%Y-%m-%d')
+        c = days.setdefault(tday, {'ms': [], 'p': [], 's': [], 'bo': [], 'ao': [], 'ev': []})
+        p = float(last)
+        c['ms'].append(int(dt.timestamp() * 1000)); c['p'].append(p); c['s'].append(int(vol))
+        c['bo'].append(int(round((float(bid) - p) / TICK))); c['ao'].append(int(round((float(ask) - p) / TICK)))
+        c['ev'].append(1 if ts != prev_ts else 0); prev_ts = ts
 
-def build(path):
-    bars = {}  # bucket_epoch -> [o,h,l,c,v]
-    n = 0
-    with open(path, "r") as f:
-        for line in f:
-            p = line.rstrip("\n").split(";")
-            if len(p) < 3:
-                continue
-            try:
-                sec = parse_sec(p[0]); price = float(p[1]); vol = int(float(p[-1]))
-            except Exception:
-                continue
-            n += 1
-            b0 = sec - (sec % BUCKET)
-            b = bars.get(b0)
-            if b is None:
-                bars[b0] = [price, price, price, price, vol]
-            else:
-                if price > b[1]: b[1] = price
-                if price < b[2]: b[2] = price
-                b[3] = price; b[4] += vol
-    print(f"  {os.path.basename(path)}: {n} ticks -> {len(bars)} {BUCKET}s bars")
-    return bars
+written = []
+for day in sorted(days):
+    c = days[day]; n = len(c['p'])
+    if n < 5000: print(f"  skip {day}: only {n} rows"); continue
+    t0 = c['ms'][0]
+    rec = {"day": day, "sym": "NQ", "contract": contract, "tick": TICK, "t0": t0, "dt": [m - t0 for m in c['ms']],
+           "p": c['p'], "s": c['s'], "bo": c['bo'], "ao": c['ao'], "ev": c['ev']}
+    path = os.path.join(OUT, f"NQ_{day}.json"); json.dump(rec, open(path, "w")); written.append(day)
+    print(f"  {day} {n:,} prints, {sum(c['ev']):,} events, {os.path.getsize(path)/1e6:.1f} MB")
 
-print("parsing tick files...")
-m06 = build(os.path.join(DL, "NQ 06-26.Last.txt"))
-m09 = build(os.path.join(DL, "NQ 09-26.Last.txt"))
-
-last06 = max(m06) if m06 else 0
-off = 0.0
-if m09 and m06:
-    cand = [t for t in m09 if t <= last06]
-    if cand:
-        off = m06[last06][3] - m09[max(cand)][3]   # back-adjust 09-26 to 06-26 level
-
-merged = dict(m06)
-appended = 0
-for t in sorted(m09):
-    if t > last06:
-        o, h, l, c, v = m09[t]
-        merged[t] = [o + off, h + off, l + off, c + off, v]
-        appended += 1
-
-bars = []
-for t in sorted(merged):
-    o, h, l, c, v = merged[t]
-    bars.append({"time": t, "open": rt(o), "high": rt(h), "low": rt(l), "close": rt(c), "volume": int(v)})
-
-os.makedirs(os.path.dirname(OUT), exist_ok=True)
-with open(OUT, "w") as f:
-    json.dump(bars, f)
-
-print(f"wrote {len(bars)} 30s bars -> {OUT}")
-print(f"  back-adjust offset (09-26 -> 06-26) = {off:.2f}, appended {appended} bars from 09-26")
-if bars:
-    f0 = datetime.datetime.utcfromtimestamp(bars[0]["time"])
-    f1 = datetime.datetime.utcfromtimestamp(bars[-1]["time"])
-    lo = min(b["low"] for b in bars); hi = max(b["high"] for b in bars)
-    print(f"  range {f0} .. {f1} UTC   price {lo} .. {hi}")
+ip = os.path.join(OUT, "index.json")
+index = sorted(set(json.load(open(ip)) if os.path.exists(ip) else []) | set(written))
+json.dump(index, open(ip, "w"))
+print(f"-> index.json: {len(index)} days, {index[0]} .. {index[-1]}")
