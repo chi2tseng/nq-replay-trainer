@@ -83,6 +83,9 @@ const RENDER_WINDOW = 4000, WINDOW_SLACK = 1500;
 let seriesFrom = 0;          // first absolute bar index currently in the candle/vol series (logical 0)
 // Tradovate-style tick replay: one day's real prints as the base resolution
 let tickMode = false, tickMs = [], availTickDays = [], curTickDay = null, simMs = 0, speedUIBase = null;
+// Two tick tapes can exist for one day: Databento (NQ_<day>.json) and a NinjaTrader export
+// (NQ_<day>.nt.json). tickSrc is the user's preference; tickSrcLoaded is what the current day really is.
+let dbTickDays = new Set(), ntTickDays = new Set(), tickSrc = loadJSON('rt_ticksrc', 'db'), tickSrcLoaded = null;
 let tickBid = null, tickAsk = null;   // per-print BBO from TBBO files (null on trades-only days)
 let tickEv = null;                    // per-print match-event start flags (1 = first print of a CME match event)
 let TF_TICKS = [], tfTicks = loadJSON('rt_tfticks', 0);   // tick-count bar sizes offered, and the one in use (0 = time bars); remembered like rt_tf
@@ -472,10 +475,17 @@ function renderIndLegend(i) {
 let _modeBadgeTxt = null;
 function updateModeBadge() {   // what the tape really is: TBBO (trade+quote), TICK (trades only), or 15s chunks
   const el = $('modeBadge'); if (!el) return;
-  const t = tickMode ? (tickBid ? 'TBBO' : 'TICK') : (baseBars.length ? '15s' : '');
+  const t = tickMode ? (tickBid ? 'TBBO' : 'TICK') + (tickSrcLoaded ? ' · ' + tickSrcLoaded.toUpperCase() : '') : (baseBars.length ? '15s' : '');
   if (t === _modeBadgeTxt) return; _modeBadgeTxt = t;
   el.textContent = t; el.className = 'mode-badge ' + (tickMode ? 'live' : 'coarse');
-  el.title = tickMode ? (tickBid ? 'Every trade with the bid × ask in force before it — market orders cross the real spread' : 'Every trade; fills at the last print') : '15-second bars — no intrabar tape on this day';
+  const src = tickSrcLoaded === 'nt' ? 'NinjaTrader export' : 'Databento';
+  el.title = tickMode ? (tickBid ? `${src} — every trade with the bid × ask in force before it; market orders cross the real spread` : `${src} — every trade; fills at the last print`) : '15-second bars — no intrabar tape on this day';
+}
+function syncTickSrcUI() {   // the source picker only matters on a day that has BOTH tapes
+  const el = $('tickSrcSel'); if (!el) return;
+  const both = tickMode && curTickDay && dbTickDays.has(curTickDay) && ntTickDays.has(curTickDay);
+  el.style.display = both ? '' : 'none';
+  if (both) el.value = tickSrcLoaded || tickSrc;
 }
 function toggleInd(which) {
   if (which === 'rip') { ripsterOn = !ripsterOn; saveJSON('rt_ripster', ripsterOn); ripsterRepaint(); const c = $('ripsterToggle'); if (c) c.checked = ripsterOn; }
@@ -1788,8 +1798,9 @@ async function enterDeepMode(ds) {
   // chunk otherwise. The calendar offers the union, so a day covered only by ticks is still clickable.
   deepTickDays = new Set();
   if (deepSym === 'NQ') {   // tick files are NQ_<day>.json only — merging them into ES's calendar offered 128 days that 404 on click
-    try { const r = await fetch('data/tick/index.json?v=' + Date.now()); const t = r.ok ? await r.json() : []; deepTickDays = new Set(Array.isArray(t) ? t : (t.days || [])); }
-    catch (e) { deepTickDays = new Set(); }
+    const idxOf = async (f) => { try { const r = await fetch(`data/tick/${f}?v=` + Date.now()); const t = r.ok ? await r.json() : []; return new Set(Array.isArray(t) ? t : (t.days || [])); } catch (e) { return new Set(); } };
+    dbTickDays = await idxOf('index.json'); ntTickDays = await idxOf('index_nt.json');
+    deepTickDays = new Set([...dbTickDays, ...ntTickDays]);
   }
   deepAllDays = new Set(deepIndex.flatMap(m => m.days).concat([...deepTickDays]));
   if (!deepIndex.length) { deepMode = true; toast('No deep-history months yet — run fetch_15s_bulk.py + split_monthly.py'); if (!wired) { wire(); wired = true; } return true; }
@@ -2068,11 +2079,12 @@ async function enterTickMode(ds) {
 }
 async function loadTickDay(day) {
   let d;
-  showLoading(true, `Loading tick tape · ${day}…`);   // a 10–15 MB fetch + parse; silence here reads as a freeze
-  try { const r = await fetch(`data/tick/${INSTR.symbol}_${day}.json?v=` + Date.now()); if (!r.ok) throw 0; d = await r.json(); }
+  const useNt = ntTickDays.has(day) && (tickSrc === 'nt' || !dbTickDays.has(day));   // preference, else whichever tape exists
+  showLoading(true, `Loading tick tape · ${day}${useNt ? ' · NinjaTrader' : ''}…`);   // a 10–15 MB fetch + parse; silence here reads as a freeze
+  try { const r = await fetch(`data/tick/${INSTR.symbol}_${day}${useNt ? '.nt' : ''}.json?v=` + Date.now()); if (!r.ok) throw 0; d = await r.json(); }
   catch (e) { showLoading(false); toast('Tick day not available locally: ' + day); return false; }
   pause(); position = null; entryOrder = null; orders = []; markers = []; tool = ''; pendingPt = null;
-  tickMode = true; curTickDay = day; setSpeedOptions(true);
+  tickMode = true; curTickDay = day; tickSrcLoaded = useNt ? 'nt' : 'db'; _modeBadgeTxt = null; syncTickSrcUI(); setSpeedOptions(true);
   // Loading a tick day does NOT leave the NQ dataset — deepMode/deepIndex/deepAllDays stay put so the
   // calendar still lists every day and [ / ] can walk back onto a 15s-only one.
   if (d.tick) { TICK = d.tick; INSTR = { ...INSTR, tickSize: d.tick }; }
@@ -3416,6 +3428,7 @@ function wire() {
   wireCalendar();
   $('tfSelect').onchange = (e) => setTf(e.target.value);   // string: may be minutes or "t<N>" tick bars
   $('dataSelect').onchange = async (e) => { if (locked()) { $('dataSelect').value = dataIdx; return toast("Can't switch dataset while in a position / working order"); } const i = +e.target.value; const ok = await loadDataset(DATASETS[i]); if (ok) { if (rndMode) exitRnd(); dataIdx = i; } else $('dataSelect').value = dataIdx; };
+  $('tickSrcSel').onchange = (e) => { tickSrc = e.target.value; saveJSON('rt_ticksrc', tickSrc); if (tickMode && curTickDay) loadTickDay(curTickDay); };
   $('speedSelect').onchange = () => { saveJSON('rt_speed', $('speedSelect').value); if (playing) { pause(); play(); } };   // remember the pick across reloads
   $('startSlider').oninput = (e) => setStart(+e.target.value);
   $('btnPickStart').onclick = () => { if (locked()) { return toast("Can't set start while in a position / working order"); } setTool('start'); };

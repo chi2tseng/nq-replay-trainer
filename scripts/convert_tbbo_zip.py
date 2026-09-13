@@ -22,11 +22,14 @@ import databento as db
 ZIP = sys.argv[1]
 OUT = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith('--') else "D:/Tools/replay-trainer/data/tick"
 LIMIT = int(sys.argv[sys.argv.index('--limit') + 1]) if '--limit' in sys.argv else None
+FROM = sys.argv[sys.argv.index('--from') + 1] if '--from' in sys.argv else None   # --from 20260811: only UTC files >= that date (re-convert a slice)
 TICK = 0.25
 os.makedirs(OUT, exist_ok=True)
 
 z = zipfile.ZipFile(ZIP)
 days = sorted(x for x in z.namelist() if x.endswith('.dbn.zst'))
+if FROM:
+    days = [x for x in days if x[10:18] >= FROM]
 if LIMIT:
     days = days[:LIMIT]
 print(f"{len(days)} day files in {os.path.basename(ZIP)}", flush=True)
@@ -48,7 +51,7 @@ def flush(day):
     if n < 5000:
         skipped.append((day, f"only {n} trades — holiday/half day")); return
     t0 = int(c['ms'][0])
-    rec = {"day": day, "sym": "NQ", "contract": c['sym'], "tick": TICK, "t0": t0,
+    rec = {"day": day, "sym": "NQ", "src": "db", "contract": c['sym'], "tick": TICK, "t0": t0,
            "dt": [int(m - t0) for m in c['ms']], "p": c['p'], "s": c['s'], "bo": c['bo'], "ao": c['ao'], "ev": c['ev']}
     path = os.path.join(OUT, f"NQ_{day}.json")
     json.dump(rec, open(path, "w"))
@@ -96,7 +99,8 @@ for k, name in enumerate(days, 1):
 for day in sorted(buf):
     flush(day)
 
-index = sorted(set(written))
+ip = os.path.join(OUT, "index.json")
+index = sorted((set(json.load(open(ip))) if os.path.exists(ip) else set()) | set(written))   # merge, never clobber the other days
 json.dump(index, open(os.path.join(OUT, "index.json"), "w"))
 print(f"\n-> {len(index)} day files, {index[0]} .. {index[-1]}")
 print(f"-> index.json rewritten ({len(index)} days)")
