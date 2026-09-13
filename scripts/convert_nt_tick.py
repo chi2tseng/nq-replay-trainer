@@ -7,7 +7,7 @@ trading day (18:00 -> 17:00 ET) like the Databento converter, same output schema
 `ev` = 1 on EVERY row: NinjaTrader's own tick charts count each print of the Last stream as one tick, so
 NT-source tick bars replay what a NinjaTrader 2000-tick chart shows. (The export's timestamps are only
 ms-resolution, so grouping by timestamp would merge separate CME events and is NOT a Tradovate proxy.)
-Files are written as NQ_<day>.nt.json + index_nt.json so a Databento tape for the same day can coexist.
+Files are written as NQ_<day>.nt.json + index_NQ_nt.json so a Databento tape for the same day can coexist.
 
 Usage: py convert_nt_tick.py "<export.txt>" [outdir]
 """
@@ -43,7 +43,7 @@ for day in sorted(days):
     path = os.path.join(OUT, f"NQ_{day}.nt.json"); json.dump(rec, open(path, "w")); written.append(day)
     print(f"  {day} {n:,} prints, {sum(c['ev']):,} events, {os.path.getsize(path)/1e6:.1f} MB")
 
-ip = os.path.join(OUT, "index_nt.json")
+ip = os.path.join(OUT, "index_NQ_nt.json")
 index = sorted(set(json.load(open(ip)) if os.path.exists(ip) else []) | set(written))
 json.dump(index, open(ip, "w"))
-print(f"-> index_nt.json: {len(index)} days, {index[0]} .. {index[-1]}")
+print(f"-> index_NQ_nt.json: {len(index)} days, {index[0]} .. {index[-1]}")

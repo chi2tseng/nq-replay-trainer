@@ -99,11 +99,11 @@ for k, name in enumerate(days, 1):
 for day in sorted(buf):
     flush(day)
 
-ip = os.path.join(OUT, "index.json")
+ip = os.path.join(OUT, "index_NQ.json")
 index = sorted((set(json.load(open(ip))) if os.path.exists(ip) else set()) | set(written))   # merge, never clobber the other days
-json.dump(index, open(os.path.join(OUT, "index.json"), "w"))
+json.dump(index, open(os.path.join(OUT, "index_NQ.json"), "w"))
 print(f"\n-> {len(index)} day files, {index[0]} .. {index[-1]}")
-print(f"-> index.json rewritten ({len(index)} days)")
+print(f"-> index_NQ.json rewritten ({len(index)} days)")
 if skipped:
     print(f"-> skipped {len(skipped)}:")
     for n, why in skipped[:10]:

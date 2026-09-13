@@ -54,7 +54,7 @@ for name in files:
     for day in sorted(d for d in buf if d < newest): flush(day)
 for day in sorted(buf): flush(day)
 
-ip = os.path.join(OUT, "index.json")
+ip = os.path.join(OUT, "index_NQ.json")
 index = sorted(set(json.load(open(ip)) if os.path.exists(ip) else []) | set(written))
 json.dump(index, open(ip, "w"))
-print(f"-> index.json {len(index)} days {index[0]} .. {index[-1]}")
+print(f"-> index_NQ.json {len(index)} days {index[0]} .. {index[-1]}")

@@ -16,6 +16,10 @@ let INSTR = { symbol: 'NQ', tickSize: 0.25, tickValue: 5 }; // active contract s
 const DATASETS = [
   { id: 'nqdeep', label: 'NQ', deep: true, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },
   { id: 'esdeep', label: 'ES', deep: true, instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } },
+  // Micros: same index, same prices — they borrow the NQ/ES 15s chunks (chunks:) and only their own
+  // NinjaTrader tick tape (MNQ_<day>.nt.json) carries micro volume. Tick value $0.50 / $1.25.
+  { id: 'mnqdeep', label: 'MNQ', deep: true, chunks: 'NQ', instr: { symbol: 'MNQ', tickSize: 0.25, tickValue: 0.5 } },
+  { id: 'mesdeep', label: 'MES', deep: true, chunks: 'ES', instr: { symbol: 'MES', tickSize: 0.25, tickValue: 1.25 } },
   { id: 'nq1m', label: 'NQ · multi-res (finest available · daily-updated)', url: 'data/NQ_multi.json', hidden: true, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },   // $20/pt
   { id: 'es1m', label: 'ES · multi-res (finest available · daily-updated)', url: 'data/ES_multi.json', hidden: true, instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
 ];
@@ -1791,18 +1795,17 @@ function finishLoad(data, ds) {   // shared tail of loadDataset() / loadDeepMont
 async function enterDeepMode(ds) {
   tickMode = false;
   if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; if ($('symbol')) $('symbol').textContent = INSTR.symbol; if ($('entryPrice')) $('entryPrice').step = String(TICK); }
-  deepSym = INSTR.symbol;
+  deepSym = (ds && ds.chunks) || INSTR.symbol;   // which 15s chunk folder to read (micros share the big contract's)
   let idx;
   try { const r = await fetch(`data/chunks/${deepSym}/index.json?v=` + Date.now()); idx = r.ok ? await r.json() : []; } catch (e) { idx = []; }
   deepIndex = (Array.isArray(idx) ? idx : []).slice().sort((a, b) => a.month < b.month ? -1 : 1);
   // NQ serves the FINEST data each day has: a per-print tick file when one exists, the 15s month
   // chunk otherwise. The calendar offers the union, so a day covered only by ticks is still clickable.
-  deepTickDays = new Set();
-  if (deepSym === 'NQ') {   // tick files are NQ_<day>.json only — merging them into ES's calendar offered 128 days that 404 on click
-    const idxOf = async (f) => { try { const r = await fetch(`data/tick/${f}?v=` + Date.now()); const t = r.ok ? await r.json() : []; return new Set(Array.isArray(t) ? t : (t.days || [])); } catch (e) { return new Set(); } };
-    dbTickDays = await idxOf('index.json'); ntTickDays = await idxOf('index_nt.json');
-    deepTickDays = new Set([...dbTickDays, ...ntTickDays]);
-  }
+  // per-symbol tick manifests: index_<SYM>.json (Databento) + index_<SYM>_nt.json (NinjaTrader db); a symbol
+  // without either simply has no tick days (a missing manifest is a 404 -> empty set, never a 404 on click)
+  const idxOf = async (f) => { try { const r = await fetch(`data/tick/${f}?v=` + Date.now()); const t = r.ok ? await r.json() : []; return new Set(Array.isArray(t) ? t : (t.days || [])); } catch (e) { return new Set(); } };
+  dbTickDays = await idxOf(`index_${INSTR.symbol}.json`); ntTickDays = await idxOf(`index_${INSTR.symbol}_nt.json`);
+  deepTickDays = new Set([...dbTickDays, ...ntTickDays]);
   deepAllDays = new Set(deepIndex.flatMap(m => m.days).concat([...deepTickDays]));
   if (!deepIndex.length) { deepMode = true; toast('No deep-history months yet — run fetch_15s_bulk.py + split_monthly.py'); if (!wired) { wire(); wired = true; } return true; }
   // Boot onto the newest day OVERALL. The tick coverage runs past the 15s chunks, so defaulting to
@@ -2070,7 +2073,7 @@ async function enterTickMode(ds) {
   // returning false makes the dataSelect handler revert the dropdown. (Setting tickMode/deepMode here
   // and returning true, as this used to, left the old dataset rendered but running tick-mode logic.)
   let idxFile;
-  try { const r = await fetch('data/tick/index.json?v=' + Date.now()); idxFile = r.ok ? await r.json() : []; } catch (e) { idxFile = []; }
+  try { const r = await fetch(`data/tick/index_${INSTR.symbol}.json?v=` + Date.now()); idxFile = r.ok ? await r.json() : []; } catch (e) { idxFile = []; }
   const days = (Array.isArray(idxFile) ? idxFile : (idxFile.days || [])).slice().sort();
   if (!days.length) { toast('Tick days are local-only (data/tick/) — not published, run scripts/fetch_tick_days.py locally'); if (!wired) { wire(); wired = true; } return false; }
   availTickDays = days;

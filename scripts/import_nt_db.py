@@ -1,4 +1,4 @@
-"""Pull NQ tick days straight out of NinjaTrader 8's own tick database — no manual export needed.
+"""Pull NQ / ES / MNQ / MES tick days straight out of NinjaTrader 8's own tick database — no manual export needed.
 
 NT8 caches every tick it has downloaded/recorded in <NT8 user dir>/db/tick/<instrument>/<yyyyMMddHH>.Last.ncd
 (one file per hour). The format was reverse-engineered here and verified byte-exact against a
@@ -12,11 +12,11 @@ Historical Data export of 1,215,825 consecutive ticks (2026-09-07..09-10), zero 
     bits 6+7 both   marker byte 0x7f then signed 24-bit big-endian delta (only seen in the 09-11 08:30 flash crash)
     flags bits 3-5  bid/ask offsets from last, in ticks: 0..5 = fixed pairs (0,1)(1,0)(0,2)(2,0)(0,3)(3,0),
                     6 = one byte, high nibble bid / low nibble ask, 7 = two bytes bid, ask
-    pb bits 5-7     volume width: 0x20 = 1 byte, 0xa0 = 2 bytes
+    pb bit 7        volume width: set = 2 bytes, clear = 1 byte (bits 5-6 vary between NT writers, ignore)
 
-Output is the app's NinjaTrader tape: data/tick/NQ_<ET trading day>.nt.json + index_nt.json, same schema as
-convert_nt_tick.py (1 tick = 1 print, bid/ask as tick offsets). NT only holds what it has downloaded: keep a
-1-tick NQ chart open in NinjaTrader (or open one daily) and this script picks up whatever is new.
+Output is the app's NinjaTrader tape: data/tick/<SYM>_<ET trading day>.nt.json + index_<SYM>_nt.json, same schema
+as convert_nt_tick.py (1 tick = 1 print, bid/ask as tick offsets). NT only holds what it has downloaded: keep a
+1-tick chart of each symbol open in NinjaTrader (or open them daily) and this script picks up whatever is new.
 
 Usage: py import_nt_db.py [--force] [--days N]   (default: only days not yet converted, complete sessions only)
 """
@@ -29,7 +29,7 @@ ET = ZoneInfo("America/New_York")
 LOCAL = datetime.datetime.now().astimezone().tzinfo          # .ncd timestamps are in the machine's zone
 EPOCH = datetime.datetime(1, 1, 1)
 FORCE = '--force' in sys.argv
-VOLN = {0x00: 1, 0x20: 1, 0x80: 2, 0xa0: 2}   # bit 7 of pb = 2-byte volume; bit 5 varies between NT writers
+# pb bit 7 = 2-byte volume, else 1 byte; bits 5-6 vary between NT writers (ES files use 0x40) and carry no width
 MODES = {0: (0, 1), 1: (1, 0), 2: (0, 2), 3: (2, 0), 4: (0, 3), 5: (3, 0)}
 
 def be(b):
@@ -54,14 +54,21 @@ def decode(path):
         if mode == 7: bid, ask = b[i], b[i + 1]; i += 2
         elif mode == 6: bid, ask = b[i] >> 4, b[i] & 0xf; i += 1
         else: bid, ask = MODES[mode]
-        n = VOLN[pb & 0xe0]; vol = be(b[i:i + n]); i += n
+        n = 2 if pb & 0x80 else 1; vol = be(b[i:i + n]); i += n
         out.append((t, px, -bid, ask, vol))
     return tick, out
 
+SYMS = ['NQ', 'ES', 'MNQ', 'MES']
+
 def main():
-    ip = os.path.join(OUT, 'index_nt.json')
+    for sym in SYMS: import_symbol(sym)
+
+def import_symbol(sym):
+    ip = os.path.join(OUT, f'index_{sym}_nt.json')
     have = set(json.load(open(ip))) if os.path.exists(ip) else set()
-    folders = sorted(glob.glob(os.path.join(NTDIR, 'NQ *')))
+    folders = sorted(glob.glob(os.path.join(NTDIR, f'{sym} [0-9][0-9]-[0-9][0-9]')))   # "NQ 09-26", not "NQ" cash or spreads
+    if not folders: print(f"{sym}: no tick folder in NinjaTrader db yet (open a 1-tick {sym} chart in NT)"); return
+    print(f"{sym}: {len(folders)} contract folder(s)")
     days = collections.defaultdict(lambda: collections.defaultdict(list))   # day -> contract -> rows
     tick = 0.25
     for folder in folders:
@@ -77,19 +84,21 @@ def main():
     for day in sorted(days):
         contract = max(days[day], key=lambda c: sum(r[4] for r in days[day][c]))   # front month = the volume
         rows = days[day][contract]
-        last_et = rows[-1][5]
-        complete = last_et.hour == 16 and last_et.minute >= 59 or last_et.hour >= 17
+        first_et, last_et = rows[0][5], rows[-1][5]
+        starts_ok = first_et.hour == 18 and first_et.minute <= 5           # tape begins at the 18:00 ET Globex open
+        later_day = any(d > day for d in days)                             # NT already holds a later day -> this one won't grow
+        complete = (last_et.hour == 16 and last_et.minute >= 59) or last_et.hour >= 17 or later_day   # 16:59 close, or a holiday early close followed by more data
         if day in have and not FORCE: continue
         if len(rows) < 5000: print(f"  skip {day}: {len(rows)} ticks"); continue
-        if not complete and not FORCE: print(f"  skip {day}: session incomplete (last tick {last_et:%H:%M} ET) — NT hasn't downloaded the rest yet"); continue
+        if not (starts_ok and complete) and not FORCE: print(f"  skip {day}: incomplete in NT db (ticks {first_et:%m-%d %H:%M} .. {last_et:%m-%d %H:%M} ET) — will retry once NT has the rest"); continue
         t0 = rows[0][0]
-        rec = {"day": day, "sym": "NQ", "src": "nt", "contract": contract, "tick": tick, "t0": t0,
+        rec = {"day": day, "sym": sym, "src": "nt", "contract": contract, "tick": tick, "t0": t0,
                "dt": [r[0] - t0 for r in rows], "p": [r[1] * tick for r in rows], "s": [r[4] for r in rows],
                "bo": [r[2] for r in rows], "ao": [r[3] for r in rows], "ev": [1] * len(rows)}
-        path = os.path.join(OUT, f"NQ_{day}.nt.json"); json.dump(rec, open(path, 'w')); written.append(day)
+        path = os.path.join(OUT, f"{sym}_{day}.nt.json"); json.dump(rec, open(path, 'w')); written.append(day)
         print(f"  {day} {contract} {len(rows):,} ticks  {os.path.getsize(path)/1e6:.1f} MB")
     index = sorted(have | set(written)); json.dump(index, open(ip, 'w'))
-    print(f"-> {len(written)} new day(s); index_nt.json {len(index)} days ({index[0]} .. {index[-1]})" if index else "-> nothing")
+    print(f"-> {sym}: {len(written)} new day(s); index_{sym}_nt.json {len(index)} days ({index[0]} .. {index[-1]})" if index else f"-> {sym}: nothing")
 
 if __name__ == '__main__':
     main()
