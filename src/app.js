@@ -3268,15 +3268,19 @@ function renderDash() {
   drawEquity();
   $('panelDash').title = `Max Drawdown ${usd(dd)}`;
 }
-function drawEquity() {
+function drawEquity() {   // cumulative R (each trade's P&L divided by its own planned risk) — size-independent, so 1 lot and 66 lots weigh the same
   const c = $('equity'), ctx = c.getContext('2d'); const W = c.width = c.clientWidth || 600, H = c.height;
   ctx.clearRect(0, 0, W, H);
   if (!trades.length) { ctx.fillStyle = '#787b86'; ctx.fillText('No trades yet', 10, 20); return; }
-  const eq = []; let s = 0; trades.forEach(t => { s += t.pnl; eq.push(s); });
+  const eq = []; let s = 0; trades.forEach(t => { s += (t.R != null ? t.R : 0); eq.push(s); });
   const lo = Math.min(0, ...eq), hi = Math.max(0, ...eq), rng = (hi - lo) || 1;
-  const x = i => 4 + i * (W - 8) / Math.max(1, eq.length - 1), y = v => H - 6 - (v - lo) / rng * (H - 12);
-  ctx.strokeStyle = '#2a2e39'; ctx.beginPath(); ctx.moveTo(0, y(0)); ctx.lineTo(W, y(0)); ctx.stroke();
+  const PAD_L = 34, x = i => PAD_L + i * (W - PAD_L - 8) / Math.max(1, eq.length - 1), y = v => H - 14 - (v - lo) / rng * (H - 26);
+  ctx.font = '10px ui-monospace,monospace'; ctx.fillStyle = '#787b86'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  const step = rng <= 4 ? 1 : rng <= 10 ? 2 : rng <= 25 ? 5 : 10;   // R grid lines
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) { ctx.strokeStyle = v === 0 ? '#3a3f4b' : '#232733'; ctx.beginPath(); ctx.moveTo(PAD_L, y(v)); ctx.lineTo(W, y(v)); ctx.stroke(); ctx.fillText((v > 0 ? '+' : '') + v + 'R', PAD_L - 4, y(v)); }
   ctx.strokeStyle = s >= 0 ? '#26a69a' : '#ef5350'; ctx.lineWidth = 1.5; ctx.beginPath(); eq.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))); ctx.stroke();
+  ctx.fillStyle = s >= 0 ? '#26a69a' : '#ef5350'; ctx.textAlign = 'left'; ctx.font = '700 11px ui-monospace,monospace';
+  ctx.fillText(`${s >= 0 ? '+' : ''}${s.toFixed(2)}R · ${trades.length} trades`, PAD_L + 4, 10);
 }
 
 // ---------- ATM editor ----------
