@@ -12,7 +12,7 @@ Historical Data export of 1,215,825 consecutive ticks (2026-09-07..09-10), zero 
     bits 6+7 both   marker byte 0x7f then signed 24-bit big-endian delta (only seen in the 09-11 08:30 flash crash)
     flags bits 3-5  bid/ask offsets from last, in ticks: 0..5 = fixed pairs (0,1)(1,0)(0,2)(2,0)(0,3)(3,0),
                     6 = one byte, high nibble bid / low nibble ask, 7 = two bytes bid, ask
-    pb bit 7        volume width: set = 2 bytes, clear = 1 byte (bits 5-6 vary between NT writers, ignore)
+    pb bit 7        volume width: set = 2 bytes, clear = 1 byte;  pb bit 6: value is in hundreds (round lots)
 
 Output is the app's NinjaTrader tape: data/tick/<SYM>_<ET trading day>.nt.json + index_<SYM>_nt.json, same schema
 as convert_nt_tick.py (1 tick = 1 print, bid/ask as tick offsets). NT only holds what it has downloaded: keep a
@@ -29,7 +29,7 @@ ET = ZoneInfo("America/New_York")
 LOCAL = datetime.datetime.now().astimezone().tzinfo          # .ncd timestamps are in the machine's zone
 EPOCH = datetime.datetime(1, 1, 1)
 FORCE = '--force' in sys.argv
-# pb bit 7 = 2-byte volume, else 1 byte; bits 5-6 vary between NT writers (ES files use 0x40) and carry no width
+# pb bit 7 = 2-byte volume (else 1 byte); bit 6 = the stored value is in HUNDREDS of contracts (a 500-lot is 0x40 + 0x05)
 MODES = {0: (0, 1), 1: (1, 0), 2: (0, 2), 3: (2, 0), 4: (0, 3), 5: (3, 0)}
 
 def be(b):
@@ -54,7 +54,7 @@ def decode(path):
         if mode == 7: bid, ask = b[i], b[i + 1]; i += 2
         elif mode == 6: bid, ask = b[i] >> 4, b[i] & 0xf; i += 1
         else: bid, ask = MODES[mode]
-        n = 2 if pb & 0x80 else 1; vol = be(b[i:i + n]); i += n
+        n = 2 if pb & 0x80 else 1; vol = be(b[i:i + n]) * (100 if pb & 0x40 else 1); i += n   # bit 6: stored in hundreds (round lots)
         out.append((t, px, -bid, ask, vol))
     return tick, out
 
