@@ -982,3 +982,15 @@ button.bs-stop.sell:hover:not(:disabled){ background:#33262a; border-color:var(-
   /* portrait iPad: the chart is tall and narrow — give the bottom panel less and the side panel a little less */
   #app{ --bottom-h:230px; }
 }
+
+/* ---- WebKit / iPad Safari form controls: native spinners and grey select text look broken there ---- */
+select{
+  -webkit-appearance:none; appearance:none; -webkit-text-fill-color:var(--txt); opacity:1;
+  padding-right:24px;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path d='M1 1l5 5 5-5' fill='none' stroke='%239a9a9a' stroke-width='1.6' stroke-linecap='round'/></svg>");
+  background-repeat:no-repeat; background-position:right 8px center;
+}
+select:disabled{ -webkit-text-fill-color:var(--dim); }
+input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
+input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button{ -webkit-appearance:none; margin:0; }
+input, select, button{ -webkit-tap-highlight-color:transparent; }
