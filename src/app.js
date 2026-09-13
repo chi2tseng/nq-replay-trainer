@@ -131,6 +131,10 @@ if (loadJSON('rt_atm_v', 0) < 6) {   // merge the 3R preset in, same rule
   if (!atm['Struct SL · 3R']) atm['Struct SL · 3R'] = defaultAtms()['Struct SL · 3R'];
   saveJSON('rt_atm', atm); saveJSON('rt_atm_v', 6);
 }
+if (loadJSON('rt_atm_v', 0) < 8) {   // merge the fixed-TP structural preset in, same rule
+  if (!atm['Struct SL · fixed TP']) atm['Struct SL · fixed TP'] = defaultAtms()['Struct SL · fixed TP'];
+  saveJSON('rt_atm', atm); saveJSON('rt_atm_v', 8);
+}
 if (loadJSON('rt_atm_v', 0) < 7) {   // openStop boolean -> stopSrc ('open' | 'extreme' | 'close')
   for (const k in atm) { const a = atm[k]; if (a.struct && !a.stopSrc) { a.stopSrc = a.openStop ? 'open' : 'extreme'; delete a.openStop; } }
   saveJSON('rt_atm', atm); saveJSON('rt_atm_v', 7);
@@ -152,6 +156,8 @@ function defaultAtms() {
     // the order panel — "Stop from" swaps open <-> bar high/low, "Target R" dials the multiple — so
     // this single preset covers every combination rather than needing one preset per pairing.
     'Struct SL · 3R':        { struct: true, stopSrc: 'open', rr: 3, sl: 0, targets: [], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },
+    // Buy/Sell Stop 1 tick beyond the bar's high/low, stop 1 tick beyond the opposite extreme, target = a fixed tick count you type in
+    'Struct SL · fixed TP':  { struct: true, stopSrc: 'extreme', tpTicks: 40, rr: 1, sl: 0, targets: [], be: { on: false, trig: 80, off: 4 }, trail: { on: false, trig: 80, dist: 40 } },
     // Driven by the Stop/Target boxes in the order panel (see syncRrField) instead of the template
     // editor — type a distance, trade. It is an ordinary ATM otherwise, so bracketFromAtm,
     // plannedStopTicks, fixed-$ sizing, Buy/Sell Stop and the right-click menu all use it unchanged.
@@ -338,12 +344,15 @@ function renderRiskReadout() {
   };
   box.style.display = ''; box.innerHTML = cell('long', 'buy', 'BUY') + cell('short', 'sell', 'SELL');
 }
+function structTgtTicks(a, slTicks) {   // struct ATM target: a fixed tick count (tpTicks) when set, otherwise rr × risk
+  return a.tpTicks > 0 ? Math.round(a.tpTicks) : Math.max(1, Math.round(slTicks * (a.rr || 1)));
+}
 function structBracket(side, kind, price, name) {   // R-based bracket AT ORDER TIME for struct ATMs: stop beyond the signal bar / entry structure, target = rr × risk
   const a = atm[name || activeAtm] || {}; if (!a.struct) return null;
   const sigBar = curBarExtreme();
   const stopPx = structStopPx(side, price, a, sigBar);
   const slT = Math.max(1, Math.round(Math.abs(price - stopPx) / TICK));
-  return { slTicks: slT, tgts: [{ ticks: Math.max(1, Math.round(slT * (a.rr || 1))), qty: 1 }], sigBar };
+  return { slTicks: slT, tgts: [{ ticks: structTgtTicks(a, slT), qty: 1 }], sigBar };
 }
 const CTX_BRACKET_PTS = 40;   // the "±40pt fixed" option for right-click orders (SL & TP distance in points)
 let ctxAtm = loadJSON('rt_ctx_atm', '40pt');   // ATM used by right-click orders: '40pt' sentinel or any template name (selector inside the context menu)
@@ -2638,7 +2647,7 @@ function onEntryButton(side) {
         const sigBar = curBarExtreme();
         const stopPx = structStopPx(side, price, a, sigBar);
         const slT = Math.max(1, Math.round(Math.abs(price - stopPx) / TICK));
-        bracket = { slTicks: slT, tgts: [{ ticks: Math.max(1, Math.round(slT * (a.rr || 1))), qty: 1 }] };
+        bracket = { slTicks: slT, tgts: [{ ticks: structTgtTicks(a, slT), qty: 1 }] };
       }
     } else {
       price = rnd(parseFloat($('entryPrice').value));
@@ -2667,7 +2676,7 @@ function openPosition(side, px, t, atmName, mult, bracket) {
     sigBar = curBarExtreme();
     const stopPx = structStopPx(side, px, a, sigBar);
     sl = Math.max(1, Math.round(Math.abs(px - stopPx) / TICK));
-    srcT = [{ ticks: Math.max(1, Math.round(sl * (a.rr || 1))), qty: 1 }];   // target = rr × risk (1:1)
+    srcT = [{ ticks: structTgtTicks(a, sl), qty: 1 }];   // target = rr × risk (1:1)
   } else {
     sl = bracket ? bracket.slTicks : a.sl;                       // honor a working order's (possibly dragged) bracket
     srcT = bracket ? bracket.tgts : a.targets;
@@ -2699,7 +2708,7 @@ function placeBreakout(side) {   // Buy/Sell Stop: stop-entry at the current bar
     const sigBar = curBarExtreme();
     const stopPx = structStopPx(side, price, a, sigBar);
     const slT = Math.max(1, Math.round(Math.abs(price - stopPx) / TICK));
-    bracket = { slTicks: slT, tgts: [{ ticks: Math.max(1, Math.round(slT * (a.rr || 1))), qty: 1 }], sigBar };
+    bracket = { slTicks: slT, tgts: [{ ticks: structTgtTicks(a, slT), qty: 1 }], sigBar };
   } else {
     bracket = bracketFromAtm(activeAtm);   // fixed SL/TP ticks straight from the ATM template
   }
@@ -3207,15 +3216,21 @@ function setAtmUnit(u) { atmUnit = (u === 'pts' ? 'pts' : 'ticks'); saveJSON('rt
 function buildAtmSelect() { $('atmSelect').innerHTML = Object.keys(atm).map(k => `<option ${k === activeAtm ? 'selected' : ''}>${k}</option>`).join(''); applyAtmUnitUI(); loadAtmIntoEditor(activeAtm); syncRrField(); }
 function syncRrField() {   // show the Target-R dial + stop-source picker for structural ATMs, or the inline Stop/Target boxes for the custom one
   const f = $('rrField'); if (!f) return; const a = atm[activeAtm] || {};
-  if (a.struct) { f.style.display = ''; $('rrInput').value = a.rr || 1; } else f.style.display = 'none';
+  const fixedTp = !!(a.struct && a.tpTicks > 0);
+  if (a.struct && !fixedTp) { f.style.display = ''; $('rrInput').value = a.rr || 1; } else f.style.display = 'none';
   const sf = $('stopSrcField');
   if (sf) { sf.style.display = a.struct ? '' : 'none'; if (a.struct) syncStopSrcSeg(); }
   const show = !!a.custom;
-  ['ordUnitField', 'slField', 'tpField'].forEach(id => { const el = $(id); if (el) el.style.display = show ? '' : 'none'; });
+  ['ordUnitField', 'slField', 'tpField'].forEach(id => { const el = $(id); if (el) el.style.display = (show || (fixedTp && id !== 'slField')) ? '' : 'none'; });
   if (show) { $('slInput').value = tkToDisp(a.sl || 0); $('tpInput').value = tkToDisp((a.targets && a.targets[0]) ? a.targets[0].ticks : 0); }
+  if (fixedTp) $('tpInput').value = tkToDisp(a.tpTicks);
 }
 function setCustomBracket() {   // write the inline boxes back into the Custom SL/TP preset (stored in ticks, as every ATM is)
-  const a = atm[activeAtm]; if (!a || !a.custom) return;
+  const a = atm[activeAtm]; if (!a) return;
+  if (a.struct && a.tpTicks > 0) {   // fixed-TP struct preset: only the target box applies; live orders re-price like the R dial does
+    a.tpTicks = Math.max(1, dispToTk($('tpInput').value)); saveJSON('rt_atm', atm); repriceStructOrders(); renderRiskReadout(); drawLines(); repaintOverlays(); return;
+  }
+  if (!a.custom) return;
   a.sl = Math.max(0, dispToTk($('slInput').value));
   const tp = Math.max(0, dispToTk($('tpInput').value));
   a.targets = tp > 0 ? [{ ticks: tp, qty: (a.targets && a.targets[0] ? a.targets[0].qty : 1) || 1 }] : [];
@@ -3231,7 +3246,7 @@ function repriceStructOrders() {
       const sp = structStopPx(entryOrder.side, entryOrder.price, ea, entryOrder.sigBar);
       const sl = Math.max(1, Math.round(Math.abs(entryOrder.price - sp) / TICK));
       entryOrder.slTicks = sl;
-      entryOrder.tgts = [{ ticks: Math.max(1, Math.round(sl * (ea.rr || 1))), qty: 1 }];
+      entryOrder.tgts = [{ ticks: structTgtTicks(ea, sl), qty: 1 }];
     }
   }
   if (position) {
@@ -3244,7 +3259,7 @@ function repriceStructOrders() {
       position.stopPrice = rnd(long ? position.entry - sl * TICK : position.entry + sl * TICK);
       const st = orders.find(o => o.type === 'stop');
       if (st) st.price = position.stopPrice;
-      const tk = Math.max(1, Math.round(sl * (pa.rr || 1)));       // struct brackets carry a single R-based target
+      const tk = structTgtTicks(pa, sl);       // struct brackets carry a single R-based target
       orders.filter(o => o.type === 'target').forEach(o => {
         o.ticks = tk; o.price = rnd(long ? position.entry + tk * TICK : position.entry - tk * TICK);
       });
@@ -3312,7 +3327,7 @@ function tradeLevels(t) {   // planned stop + take-profit price/distance — sto
   let tps = (t.tps && t.tps.length) ? t.tps.slice() : null;
   if (!tps) {
     const a = atm[t.atm];
-    if (a && a.struct && stopTicks != null) tps = [{ ticks: Math.max(1, Math.round(stopTicks * (a.rr || 1))) }];
+    if (a && a.struct && stopTicks != null) tps = [{ ticks: structTgtTicks(a, stopTicks) }];
     else if (a && a.targets && a.targets.length) tps = a.targets.map(x => ({ ticks: x.ticks }));
     else if (t.exitType === 'target') tps = [{ ticks: Math.abs(t.ticks) }];
     if (tps) tps = tps.map(x => ({ ticks: x.ticks, price: rnd(long ? t.entry + x.ticks * tick : t.entry - x.ticks * tick) }));
