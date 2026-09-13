@@ -107,7 +107,8 @@ let trades = loadJSON('rt_trades', []);
 (() => { const bk = loadJSON('rt_trades_prerandom', null); if (bk) { trades = bk; saveJSON('rt_trades', trades); localStorage.removeItem('rt_trades_prerandom'); } })();   // recover real trades if a random-mode session was interrupted mid-round
 let showTrades = loadJSON('rt_show_trades', true);   // show entry/exit trade arrows on the chart
 let tradeLogs = loadJSON('rt_trade_logs', []);   // named saved trade logs: [{id,name,ts,trades:[...]}]
-let alertMin = loadJSON('rt_alert_min', 690);    // remind me when the replay crosses this ET time (minutes since midnight; 690 = 11:30). null = off
+let alertMin = loadJSON('rt_alert_min', 720);    // remind me when the replay crosses this ET time (minutes since midnight; 720 = 12:00). null = off
+if (!loadJSON('rt_alert_v', 0)) { alertMin = 720; saveJSON('rt_alert_min', alertMin); saveJSON('rt_alert_v', 1); }   // 2026-09-13: default moved 11:30 -> 12:00 (one-time)
 let prevAlertMin = null;                          // previous revealed bar's ET minutes — used to detect the upward cross
 let markers = [];            // {baseTime, position, color, shape, text}
 let lines = [];              // active price-line handles
@@ -2011,12 +2012,12 @@ function alertCheck() {   // call on forward advance: fire once when the reveale
   prevAlertMin = cur;
 }
 // the alert time is marked by a vertical LINE on the chart (no sound) — drawn at the current session's bar that reaches it
-let alertBarTime = null, alertBarKey = null;
+let alertBarTime = null, alertBarKey = null, alertBaseIdx = null;
 function updateAlertBar() {   // the bar where the session's clock first CROSSES the target time upward (the session opens 18:00 ET, so a plain >= match hits the evening)
   const s = sessions[currentSessionIdx()], key = (s ? s.key : '') + ':' + alertMin;
   if (key === alertBarKey) return;
-  alertBarKey = key; alertBarTime = null;
-  if (alertMin != null && s) for (let i = s.start + 1; i <= s.end; i++) { if (etMinutes(baseBars[i - 1].time) < alertMin && etMinutes(baseBars[i].time) >= alertMin) { alertBarTime = baseBars[i].time; break; } }
+  alertBarKey = key; alertBarTime = null; alertBaseIdx = null;
+  if (alertMin != null && s) for (let i = s.start + 1; i <= s.end; i++) { if (etMinutes(baseBars[i - 1].time) < alertMin && etMinutes(baseBars[i].time) >= alertMin) { alertBarTime = baseBars[i].time; alertBaseIdx = i; break; } }
   alertLineRepaint();
 }
 const ALERT_LINE = '#f0b90b';
@@ -2027,7 +2028,11 @@ const alertLinePrimitive = {
     if (alertMin == null || alertBarTime == null) return;
     try { target.useMediaCoordinateSpace((scope) => {
       const ctx = scope.context, ts = chart.timeScale(), H = (scope.mediaSize && scope.mediaSize.height) || 9999;
-      const x = ts.timeToCoordinate(alertBarTime); if (x == null) return;   // null until that bar is revealed
+      // anchor to the DISPLAYED bar holding that print: tick-count bars carry bumped/irregular times and
+      // 3m/5m buckets don't start on the alert minute, so the raw print time is not a series time there
+      let at = alertBarTime;
+      if (alertBaseIdx != null && bars.length) { const k = tfTicks ? tickBarAt(alertBaseIdx) : tfIndexAtBase(alertBaseIdx); if (k > idx) return; at = bars[k].time; }
+      const x = ts.timeToCoordinate(at); if (x == null) return;   // null until that bar is revealed
       ctx.save(); ctx.strokeStyle = ALERT_LINE; ctx.globalAlpha = 0.85; ctx.lineWidth = 1.2; ctx.setLineDash([5, 4]);
       ctx.beginPath(); ctx.moveTo(x, 16); ctx.lineTo(x, H); ctx.stroke(); ctx.setLineDash([]);
       ctx.globalAlpha = 1; ctx.font = '700 10px ui-monospace,monospace'; const txt = fmtMin(alertMin), tw = ctx.measureText(txt).width + 8;
