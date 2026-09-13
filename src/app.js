@@ -203,6 +203,11 @@ const chart = LightweightCharts.createChart($('chart'), {
 let candle = chart.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
 let vol = chart.addHistogramSeries({ priceScaleId: 'vol', priceFormat: { type: 'volume' } });
 chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+// Volume histogram toggle (Indicators menu). On tick-count bars every bar holds ~the same volume, so the
+// histogram is a flat strip that only eats chart height: it auto-hides there regardless of the switch.
+let volOn = loadJSON('rt_vol', true);
+function applyVolVisible() { vol.applyOptions({ visible: !!volOn && !tfTicks }); const c = $('indVol'); if (c) { c.checked = volOn; c.disabled = !!tfTicks; c.title = tfTicks ? 'Hidden on tick-count bars' : ''; } }
+function setVolOn(v) { volOn = !!v; saveJSON('rt_vol', volOn); applyVolVisible(); }
 function sizeChart() {
   const el = $('chart'); const w = el.clientWidth, h = el.clientHeight; if (!w || !h) return;
   chart.resize(w - 1, h, true); chart.resize(w, h, true); // double-resize: LWC no-ops a resize to the same size, so nudge then set
@@ -1965,7 +1970,7 @@ function buildTfSelect() {
 function buildDataSelect() { $('dataSelect').innerHTML = DATASETS.map((ds, i) => ds.hidden ? '' : `<option value="${i}" ${i === dataIdx ? 'selected' : ''}>${ds.label}</option>`).join(''); }   // hidden entries stay in DATASETS (still loadable) but never render in the dropdown
 
 // ---------- timeframe / index bookkeeping ----------
-function rebuildTf() { bars = tfTicks ? aggregateTicks(baseBars, tfTicks) : aggregate(baseBars, tf); computeRipster(); computeIndicators(); oscCompute(); stampBarIndices(); rebuildHA(); vpPKey = null; vpOKey = null; vpDEdge = -1; }
+function rebuildTf() { bars = tfTicks ? aggregateTicks(baseBars, tfTicks) : aggregate(baseBars, tf); computeRipster(); computeIndicators(); oscCompute(); stampBarIndices(); rebuildHA(); vpPKey = null; vpOKey = null; vpDEdge = -1; applyVolVisible(); }
 function tfIndexAtBase(bi) { // TF-bar index whose bucket contains baseBars[bi]
   const t = baseBars[bi].time; let lo = 0, hi = bars.length - 1, ans = 0;
   while (lo <= hi) { const mid = (lo + hi) >> 1; if (bars[mid].time <= t) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
@@ -3548,6 +3553,7 @@ function wire() {
   $('indVwap').checked = vwapOn; $('indVwap').onchange = (e) => setVwap(e.target.checked);
   $('indBB').checked = bbOn; $('indBB').onchange = (e) => setBB(e.target.checked);
   $('indEma').checked = emaOn; $('indEma').onchange = (e) => setEMA(e.target.checked);
+  $('indVol').onchange = (e) => setVolOn(e.target.checked); applyVolVisible();
   $('indVpP').checked = vpP.on; $('indVpP').onchange = (e) => setVpCfg('p', { on: e.target.checked });
   $('indVpO').checked = vpO.on; $('indVpO').onchange = (e) => setVpCfg('o', { on: e.target.checked });
   $('indVpD').checked = vpD.on; $('indVpD').onchange = (e) => setVpCfg('d', { on: e.target.checked });
