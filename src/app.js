@@ -1777,12 +1777,37 @@ function showLoading(on, msg) {
 
 // Every big dataset file is stored gzipped (.json.gz): ~9x smaller downloads and it keeps the whole
 // tick archive under GitHub Pages' 1 GB site limit. Decompressed in the browser (DecompressionStream).
+// Day files (tick tapes, month chunks) never change once written, so they are fetched WITHOUT a cache-
+// buster and the browser's HTTP cache serves repeat visits instantly; manifests / multi datasets do
+// change daily and keep the buster. Neighbouring tick days are also prefetched into memory (below).
+const tickBufCache = new Map();   // url -> ArrayBuffer (gzipped), a handful of prefetched days
+function cacheBust(url) { return /index|_multi|quiz/.test(url) ? url + (url.includes('?') ? '&' : '?') + 'v=' + Date.now() : url; }
 async function fetchJSON(url) {
-  const r = await fetch(url + (url.includes('?') ? '&' : '?') + 'v=' + Date.now());
-  if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url);
-  if (!/\.gz(\?|$)/.test(url)) return r.json();
-  const txt = await new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).text();
+  const isGz = /\.gz(\?|$)/.test(url);
+  let body;
+  if (isGz && tickBufCache.get(url)) { body = new Blob([tickBufCache.get(url)]).stream(); }
+  else {
+    const r = await fetch(cacheBust(url));
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url);
+    if (!isGz) return r.json();
+    body = r.body;
+  }
+  const txt = await new Response(body.pipeThrough(new DecompressionStream('gzip'))).text();
   return JSON.parse(txt);
+}
+function tickFileFor(day) {   // which tape a day would load: NinjaTrader when preferred (or the only one), else Databento
+  const useNt = ntTickDays.has(day) && (tickSrc === 'nt' || !dbTickDays.has(day));
+  return { useNt, url: `data/tick/${INSTR.symbol}_${day}${useNt ? '.nt' : ''}.json.gz` };
+}
+function prefetchTickNeighbours(day) {   // the previous and next tick days, so [ / ] switch with no download wait
+  const days = [...deepTickDays].sort(), i = days.indexOf(day); if (i < 0) return;
+  const want = [days[i + 1], days[i - 1]].filter(Boolean).map(d => tickFileFor(d).url);
+  for (const url of want) {
+    if (tickBufCache.has(url)) continue;
+    tickBufCache.set(url, null);   // reserve so a second call doesn't double-fetch
+    fetch(url).then(r => r.ok ? r.arrayBuffer() : null).then(buf => { if (buf) tickBufCache.set(url, buf); else tickBufCache.delete(url); }).catch(() => tickBufCache.delete(url));
+  }
+  for (const k of [...tickBufCache.keys()]) if (tickBufCache.size > 6 && !want.includes(k) && k !== tickFileFor(day).url) tickBufCache.delete(k);   // keep it small
 }
 async function loadDataset(ds) {
   if (ds && ds.tick) return enterTickMode(ds);          // Tradovate-style per-day tick replay
@@ -2121,9 +2146,9 @@ async function enterTickMode(ds) {
 }
 async function loadTickDay(day) {
   let d;
-  const useNt = ntTickDays.has(day) && (tickSrc === 'nt' || !dbTickDays.has(day));   // preference, else whichever tape exists
+  const { useNt, url: tickUrl } = tickFileFor(day);
   showLoading(true, `Loading tick tape · ${day}${useNt ? ' · NinjaTrader' : ''}…`);   // a 10–15 MB fetch + parse; silence here reads as a freeze
-  try { d = await fetchJSON(`data/tick/${INSTR.symbol}_${day}${useNt ? '.nt' : ''}.json.gz`); }
+  try { d = await fetchJSON(tickUrl); }
   catch (e) { showLoading(false); toast('Tick day not available locally: ' + day); return false; }
   pause(); position = null; entryOrder = null; orders = []; markers = []; tool = ''; pendingPt = null;
   tickMode = true; curTickDay = day; tickSrcLoaded = useNt ? 'nt' : 'db'; _modeBadgeTxt = null; syncTickSrcUI(); setSpeedOptions(true);
@@ -2158,6 +2183,7 @@ async function loadTickDay(day) {
   renderAll();
   showLoading(false);
   toast(`Tick replay · ${day} · ${n.toLocaleString()} prints`);
+  setTimeout(() => prefetchTickNeighbours(day), 300);
   return true;
 }
 function resetForming() {
