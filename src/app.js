@@ -205,7 +205,7 @@ let vol = chart.addHistogramSeries({ priceScaleId: 'vol', priceFormat: { type: '
 chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
 // Volume histogram toggle (Indicators menu). On tick-count bars every bar holds ~the same volume, so the
 // histogram is a flat strip that only eats chart height: it auto-hides there regardless of the switch.
-let volOn = loadJSON('rt_vol', true);
+let volOn = loadJSON('rt_vol', false);
 function applyVolVisible() { vol.applyOptions({ visible: !!volOn && !tfTicks }); const c = $('indVol'); if (c) { c.checked = volOn; c.disabled = !!tfTicks; c.title = tfTicks ? 'Hidden on tick-count bars' : ''; } }
 function setVolOn(v) { volOn = !!v; saveJSON('rt_vol', volOn); applyVolVisible(); }
 function sizeChart() {
@@ -611,7 +611,7 @@ const OSC_COL = {
 };
 
 // ---- state ----
-let oscMode = loadJSON('rt_oscMode', 'atr');   // 'rsi' | 'macd' | 'atr' | 'off'  (ATR 10 shown by default)
+let oscMode = loadJSON('rt_oscMode', 'off');   // 'rsi' | 'macd' | 'atr' | 'off'  (nothing by default; pick in Indicators)
 let atrLen  = (n => (Number.isFinite(n) && n >= 1) ? n : 10)(loadJSON('rt_atr_len', 10));  // adjustable ATR period (default 10)
 let oscChart = null, oscSyncing = false;       // reentrancy guard for range sync
 let rsiSeries = null, macdHist = null, macdLine = null, sigLine = null, atrSeries = null, atrHalfSeries = null;
@@ -836,12 +836,16 @@ window.__osc = () => ({ mode: oscMode, hasChart: !!oscChart, rsiLen: oscRsi.filt
 // ---------- indicator state (persisted) ----------
 let vwapOn = loadJSON('rt_vwap', false);
 let bbOn   = loadJSON('rt_bb',   false);
-let emaOn  = loadJSON('rt_ema',  true);
+let emaOn  = loadJSON('rt_ema',  false);
 // Volume Profile trio (each {on,color}, individually toggleable/colorable):
 //   P = PREV day's NY session 09:30–16:00 (PVAH/PPOC/PVAL) · O = OVERNIGHT 18:00→09:30 (OVAH/OPOC/OVAL) · D = DEVELOPING (live)
-let vpP = Object.assign({ on: loadJSON('rt_vp', true), color: '#3b82f6' }, loadJSON('rt_vp_p', null));
-let vpO = Object.assign({ on: true, color: '#26c6da' }, loadJSON('rt_vp_o', null));
-let vpD = Object.assign({ on: loadJSON('rt_vp_today', true), color: '#f0b90b', align: 'right' }, loadJSON('rt_vp_d', null));   // align: 'right' = histogram hugs the right edge (TV-style), 'left' = anchored at session start
+let vpP = Object.assign({ on: loadJSON('rt_vp', false), color: '#3b82f6' }, loadJSON('rt_vp_p', null));
+let vpO = Object.assign({ on: false, color: '#26c6da' }, loadJSON('rt_vp_o', null));
+let vpD = Object.assign({ on: loadJSON('rt_vp_today', false), color: '#f0b90b', align: 'right' }, loadJSON('rt_vp_d', null));
+if (!loadJSON('rt_indoff_v', 0)) {   // 2026-09-13: a clean chart by default — every indicator off once, then whatever you switch on sticks
+  ripsterOn = vwapOn = bbOn = emaOn = false; vpP.on = vpO.on = vpD.on = false; oscMode = 'off'; volOn = false; saveJSON('rt_vol', false);
+  ['rt_ripster', 'rt_vwap', 'rt_bb', 'rt_ema'].forEach(k => saveJSON(k, false)); saveJSON('rt_vp_p', vpP); saveJSON('rt_vp_o', vpO); saveJSON('rt_vp_d', vpD); saveJSON('rt_oscMode', 'off'); saveJSON('rt_indoff_v', 1);
+}   // align: 'right' = histogram hugs the right edge (TV-style), 'left' = anchored at session start
 let vpPData = null, vpPKey = null, vpOData = null, vpOKey = null, vpDData = null, vpDEdge = -1;
 let emaPeriods = (loadJSON('rt_ema_p', [10]) || [10])
   .filter(n => Number.isFinite(n) && n >= 1).slice(0, 6); // guard persisted value
