@@ -2869,7 +2869,7 @@ function exitQty(q, px, t, type) {
   const netTicks = long ? tcount(px, position.entry) : tcount(position.entry, px);
   const pnl = netTicks * INSTR.tickValue * q;
   const risk = (position.slTicks || 0) * INSTR.tickValue * q;
-  trades.push({ entryTime: position.entryTime, exitTime: t, side: position.side, qty: q, entry: position.entry, exit: px, ticks: netTicks, pnl, R: risk > 0 ? pnl / risk : null, atm: position.atm, exitType: type, tf: (typeof tf === 'number' ? tf : BASE_TF), sym: INSTR.symbol, stop: position.stopPrice, stopTicks: position.slTicks, tps: (position.tps || []).map(p => ({ ticks: p.ticks, price: p.price })), planSl: position.planSl, planTp: position.planTp, planRR: position.planRR, chart: captureTradeChart(position.entryTime, t) });
+  trades.push({ entryTime: position.entryTime, exitTime: t, side: position.side, qty: q, entry: position.entry, exit: px, ticks: netTicks, pnl, R: risk > 0 ? pnl / risk : null, atm: position.atm, exitType: type, tf: tfTicks ? 't' + tfTicks : (typeof tf === 'number' ? tf : BASE_TF), sym: INSTR.symbol, stop: position.stopPrice, stopTicks: position.slTicks, tps: (position.tps || []).map(p => ({ ticks: p.ticks, price: p.price })), planSl: position.planSl, planTp: position.planTp, planRR: position.planRR, chart: captureTradeChart(position.entryTime, t) });
   addMarker(t, long ? 'aboveBar' : 'belowBar', pnl >= 0 ? '#26a69a' : '#ef5350', long ? 'arrowDown' : 'arrowUp', usd(pnl));
   saveJSON('rt_trades', trades);
   position.qty -= q;
@@ -2995,6 +2995,19 @@ let pnlCalY = 0, pnlCalM = 0;
 const POST_EXIT_BARS = 5;   // K-bars kept AFTER the sell/close in the journal snapshot
 function captureTradeChart(entryT, exitT) {   // OHLC candles around the trade, bucketed at the ACTIVE timeframe, reconstructed from the full dataset
   if (!baseBars.length) return null;
+  if (tfTicks && bars.length) {   // tick-count bars: slice the day's real N-tick bars (bars[] covers the whole tape, not just the revealed part)
+    const at = (T) => { let lo = 0, hi = bars.length - 1, ans = 0; while (lo <= hi) { const m = (lo + hi) >> 1; if (bars[m].time <= T) { ans = m; lo = m + 1; } else hi = m - 1; } return ans; };
+    const k0 = at(entryT), k1 = at(exitT);
+    const from = Math.max(0, k0 - Math.max(25, Math.round((k1 - k0) * 0.8))), to = Math.min(bars.length - 1, k1 + POST_EXIT_BARS);
+    const step = Math.max(1, Math.ceil((to - from + 1) / 220));   // very long trades: thin the bars instead of drawing hundreds
+    const out = [];
+    for (let k = from; k <= to; k += step) {
+      const b = bars[k]; let h = b.high, l = b.low, c = b.close;
+      for (let j = k + 1; j < Math.min(k + step, to + 1); j++) { h = Math.max(h, bars[j].high); l = Math.min(l, bars[j].low); c = bars[j].close; }
+      out.push({ t: b.time, o: b.open, h, l, c });
+    }
+    return out.length ? out : null;
+  }
   const endT = baseBars[baseBars.length - 1].time;   // full dataset end — reconstruct PAST the replay edge so the post-exit tail is always there
   const tfSec = Math.max(1, Math.round((typeof tf === 'number' ? tf : BASE_TF) * 60));   // 1 candle = 1 bar of the timeframe in view
   const dur = Math.max(tfSec, exitT - entryT);
@@ -3036,7 +3049,8 @@ function liveTradeBars(t) {   // fallback when a trade has no stored snapshot: r
   if (!baseBars.length || t.entryTime < baseBars[0].time || t.exitTime > baseBars[Math.min(baseIdx, baseBars.length - 1)].time) return null;
   return captureTradeChart(t.entryTime, t.exitTime);
 }
-function tfLab(v) { v = (typeof v === 'number') ? v : BASE_TF; return v < 1 ? Math.round(v * 60) + 's' : v + 'm'; }
+function tfSecOf(v) { return (typeof v === 'number') ? Math.max(1, Math.round(v * 60)) : 60; }   // tick-bar trades ("t2000") have no fixed seconds; 60 keeps the time math sane
+function tfLab(v) { if (typeof v === 'string' && v[0] === 't') return v.slice(1) + 't'; v = (typeof v === 'number') ? v : BASE_TF; return v < 1 ? Math.round(v * 60) + 's' : (v >= 60 ? (v / 60) + 'h' : v + 'm'); }
 function synthBars(t) {   // minimal entry→exit path when no candle snapshot exists, so the screenshot is never blank
   const o = t.entry, c = t.exit, hi = Math.max(o, c), lo = Math.min(o, c), mt = (t.entryTime + t.exitTime) / 2;
   return [{ t: t.entryTime, o, h: o, l: o, c: o }, { t: mt, o, h: hi, l: lo, c: (o + c) / 2 }, { t: t.exitTime, o: c, h: c, l: c, c }];
@@ -3382,7 +3396,7 @@ function tradeBars(t) {   // the journal candle snapshot for a trade — stored 
 function tradeTrend(t, _bars) {   // price-action / 走勢 stats from the export window: excursion + trend before entry + follow-through after exit (ticks)
   const bars = (_bars && _bars.length) ? _bars : tradeBars(t); if (!bars.length) return { mfe: '', mae: '', post: '', pre: '', hi: '', lo: '' };
   const tick = (t.sym === INSTR.symbol ? INSTR.tickSize : (INSTR.tickSize || 0.25)) || 0.25, long = t.side === 'long';
-  const span = bars.length > 1 ? (bars[1].t - bars[0].t) : Math.max(1, Math.round((t.tf != null ? t.tf : BASE_TF) * 60));
+  const span = bars.length > 1 ? (bars[1].t - bars[0].t) : tfSecOf(t.tf != null ? t.tf : BASE_TF);
   const eb = Math.floor(t.entryTime / span) * span, xb = Math.floor(t.exitTime / span) * span;
   const inB = bars.filter(b => b.t >= eb && b.t <= xb), aft = bars.filter(b => b.t > xb), bef = bars.filter(b => b.t < eb);
   let mfe = 0, mae = 0;
@@ -3414,9 +3428,9 @@ const EXPORT_PAD_BARS = 80;   // K-bars kept BEFORE the entry and AFTER the exit
 function exportBars(t, pad) {   // reconstruct `pad` candles before entry + the in-trade candles + `pad` candles after exit, at the trade's own timeframe, from the full dataset
   pad = pad || EXPORT_PAD_BARS;
   const sameSym = !t.sym || t.sym === INSTR.symbol;
-  if (!(baseBars.length && sameSym && t.entryTime >= baseBars[0].time && t.exitTime <= baseBars[baseBars.length - 1].time))
-    return tradeBars(t);   // trade isn't covered by the loaded dataset -> fall back to the stored snapshot
-  const tfSec = Math.max(1, Math.round((t.tf != null ? t.tf : BASE_TF) * 60));
+  if (typeof t.tf === 'string' || !(baseBars.length && sameSym && t.entryTime >= baseBars[0].time && t.exitTime <= baseBars[baseBars.length - 1].time))
+    return tradeBars(t);   // tick-bar trade, or not covered by the loaded dataset -> the stored snapshot
+  const tfSec = tfSecOf(t.tf != null ? t.tf : BASE_TF);
   const cand = []; let cur = null;                       // bucket the whole dataset to the trade's timeframe
   for (let i = 0; i < baseBars.length; i++) {
     const b = baseBars[i], bk = Math.floor(b.time / tfSec) * tfSec;
@@ -3439,7 +3453,7 @@ function exportCsv() {   // ONE file, two sections: [TRADES] summary (+stop/TP +
   const brows = [];
   trades.forEach((t, i) => {
     const bars = xbars[i]; if (!bars.length) return;
-    const span = bars.length > 1 ? (bars[1].t - bars[0].t) : Math.max(1, Math.round((t.tf != null ? t.tf : BASE_TF) * 60));
+    const span = bars.length > 1 ? (bars[1].t - bars[0].t) : tfSecOf(t.tf != null ? t.tf : BASE_TF);
     const eb = Math.floor(t.entryTime / span) * span, xb = Math.floor(t.exitTime / span) * span;
     bars.forEach(b => { const seg = b.t < eb ? 'before' : (b.t > xb ? 'after' : 'in'); brows.push([i + 1, seg, b.t, tFmt(b.t), b.o, b.h, b.l, b.c].join(',')); });
   });
