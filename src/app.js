@@ -2468,7 +2468,7 @@ function openSettle() {   // settlement dashboard: this day's stats + running to
     + cell('Best / Worst', `${usd(r.best)} · ${usd(r.worst)}`)
     + `</div>`
     + (r.ts.length ? `<div class="dd-list">` + r.ts.map((t, i) => { const long = t.side === 'long';
-        return `<div class="dd-trade"><div class="dd-tinfo"><div class="dd-trow">#${i + 1} <span class="${long ? 'long-tag' : 'short-tag'}">${long ? 'LONG' : 'SHORT'} ${t.qty}</span> <b class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</b> · ${t.ticks >= 0 ? '+' : ''}${t.ticks}t · ${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + 'R'}</div>`
+        return `<div class="dd-trade"><div class="dd-tinfo"><div class="dd-trow">#${i + 1} <span class="${long ? 'long-tag' : 'short-tag'}">${long ? 'LONG' : 'SHORT'} ${t.qty}</span> <b class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</b> · ${t.ticks >= 0 ? '+' : ''}${t.ticks}t · ${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + 'R'}${t.planRR != null ? ` · plan ${fmtPlanRR(t)}` : ''}</div>`
           + `<div class="dd-sub">${tFmt(t.entryTime)} → ${tFmt(t.exitTime)} · ${f2(t.entry)} → ${f2(t.exit)} · ${t.atm} · ${t.exitType}</div></div>`
           + `<canvas class="dd-chart" data-ti="${i}" title="Scroll to zoom · drag to pan · double-click to reset"></canvas></div>`; }).join('') + `</div>` : `<div class="st-run">No trades this round.</div>`)
     + `<div class="st-actions"><button id="stNext" class="primary"><span class="material-symbols-outlined">shuffle</span>Next round</button><button id="stExit">End session</button></div></div>`;
@@ -2692,7 +2692,9 @@ function openPosition(side, px, t, atmName, mult, bracket) {
   tgts.sort((x, y) => x.ticks - y.ticks);
   const stopPrice = sl > 0 ? rnd(side === 'long' ? px - sl * TICK : px + sl * TICK) : null;   // planned stop + target prices (kept for the journal/CSV)
   const tps = tgts.map(tg => ({ ticks: tg.ticks, qty: tg.qty, price: rnd(side === 'long' ? px + tg.ticks * TICK : px - tg.ticks * TICK) }));
-  position = { side, qty: totalQty, entry: px, entryTime: t, atm: atmName, slTicks: sl, maxFav: px, beDone: false, stopPrice, tps, sigBar };
+  // initial plan, frozen at entry (the stop moves later with BE/trail, the R dial can re-price): qty-weighted target / stop
+  const planTp = tps.reduce((a, x) => a + x.ticks * x.qty, 0) / Math.max(1, totalQty), planRR = sl > 0 ? planTp / sl : null;
+  position = { side, qty: totalQty, entry: px, entryTime: t, atm: atmName, slTicks: sl, maxFav: px, beDone: false, stopPrice, tps, sigBar, planSl: sl, planTp, planRR };
   orders = [];
   if (sl > 0) orders.push({ type: 'stop', price: stopPrice, qty: totalQty });
   tps.forEach(tg => orders.push({ type: 'target', ticks: tg.ticks, qty: tg.qty, price: tg.price }));
@@ -2808,7 +2810,7 @@ function exitQty(q, px, t, type) {
   const netTicks = long ? tcount(px, position.entry) : tcount(position.entry, px);
   const pnl = netTicks * INSTR.tickValue * q;
   const risk = (position.slTicks || 0) * INSTR.tickValue * q;
-  trades.push({ entryTime: position.entryTime, exitTime: t, side: position.side, qty: q, entry: position.entry, exit: px, ticks: netTicks, pnl, R: risk > 0 ? pnl / risk : null, atm: position.atm, exitType: type, tf: (typeof tf === 'number' ? tf : BASE_TF), sym: INSTR.symbol, stop: position.stopPrice, stopTicks: position.slTicks, tps: (position.tps || []).map(p => ({ ticks: p.ticks, price: p.price })), chart: captureTradeChart(position.entryTime, t) });
+  trades.push({ entryTime: position.entryTime, exitTime: t, side: position.side, qty: q, entry: position.entry, exit: px, ticks: netTicks, pnl, R: risk > 0 ? pnl / risk : null, atm: position.atm, exitType: type, tf: (typeof tf === 'number' ? tf : BASE_TF), sym: INSTR.symbol, stop: position.stopPrice, stopTicks: position.slTicks, tps: (position.tps || []).map(p => ({ ticks: p.ticks, price: p.price })), planSl: position.planSl, planTp: position.planTp, planRR: position.planRR, chart: captureTradeChart(position.entryTime, t) });
   addMarker(t, long ? 'aboveBar' : 'belowBar', pnl >= 0 ? '#26a69a' : '#ef5350', long ? 'arrowDown' : 'arrowUp', usd(pnl));
   saveJSON('rt_trades', trades);
   position.qty -= q;
@@ -2914,13 +2916,14 @@ function todayStats() {
   const pnl = ts.reduce((s, t) => s + t.pnl, 0);
   return { key, n: ts.length, pnl, w: ts.filter(t => t.pnl > 0).length, l: ts.filter(t => t.pnl < 0).length };
 }
+function fmtPlanRR(t) { return t.planRR == null ? '–' : '1:' + (Math.round(t.planRR * 100) / 100).toFixed(2).replace(/\.?0+$/, ''); }   // "1:2" / "1:1.5" — the R:R planned at entry
 function renderTrades() {
   $('tradesTable').querySelector('tbody').innerHTML = trades.map((t, i) => `<tr>
     <td>${i + 1}</td><td class="${t.side === 'long' ? 'long-tag' : 'short-tag'}">${t.side === 'long' ? 'L' : 'S'}</td><td>${t.qty}</td>
     <td>${tFmt(t.entryTime)}</td><td>${tFmt(t.exitTime)}</td>
     <td class="mono">${f2(t.entry)}</td><td class="mono">${f2(t.exit)}</td>
     <td>${t.ticks >= 0 ? '+' : ''}${t.ticks}</td><td class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</td>
-    <td>${t.R == null ? '–' : t.R.toFixed(2)}</td><td>${t.atm}</td><td>${t.exitType}</td>
+    <td>${t.R == null ? '–' : t.R.toFixed(2)}</td><td class="mono" title="${t.planRR == null ? '' : `planned at entry: stop ${t.planSl}t · target ${Math.round(t.planTp)}t`}">${fmtPlanRR(t)}</td><td>${t.atm}</td><td>${t.exitType}</td>
     <td><button class="trade-del" data-ti="${i}" title="Delete this trade"><span class="material-symbols-outlined">close</span></button></td></tr>`).reverse().join('');
   const net = trades.reduce((s, t) => s + t.pnl, 0);
   const td = todayStats();
@@ -3102,7 +3105,7 @@ function openDayDetail(key) {
   el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">${key}</span> &nbsp;<b class="${net >= 0 ? 'pos' : 'neg'}">${usd(net)}</b> · ${ts.length} trades · ${w}W ${l}L</div>`
     + `<button class="dd-x" id="ddClose"><span class="material-symbols-outlined">close</span></button></div><div class="dd-list">`
     + ts.map((t, i) => { const long = t.side === 'long';
-      return `<div class="dd-trade"><div class="dd-tinfo"><div class="dd-trow">#${i + 1} <span class="${long ? 'long-tag' : 'short-tag'}">${long ? 'LONG' : 'SHORT'} ${t.qty}</span> <b class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</b> · ${t.ticks >= 0 ? '+' : ''}${t.ticks}t · ${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + 'R'}</div>`
+      return `<div class="dd-trade"><div class="dd-tinfo"><div class="dd-trow">#${i + 1} <span class="${long ? 'long-tag' : 'short-tag'}">${long ? 'LONG' : 'SHORT'} ${t.qty}</span> <b class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</b> · ${t.ticks >= 0 ? '+' : ''}${t.ticks}t · ${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + 'R'}${t.planRR != null ? ` · plan ${fmtPlanRR(t)}` : ''}</div>`
         + `<div class="dd-sub">${tFmt(t.entryTime)} → ${tFmt(t.exitTime)} · ${f2(t.entry)} → ${f2(t.exit)} · ${t.atm} · ${t.exitType}</div></div>`
         + `<canvas class="dd-chart" data-ti="${i}" title="Scroll to zoom · drag to pan · double-click to reset"></canvas></div>`; }).join('')
     + `</div></div>`;
@@ -3169,15 +3172,20 @@ function renderDash() {
   const exp = n ? net / n : 0;
   const rs = trades.filter(t => t.R != null).map(t => t.R);
   const avgR = rs.length ? rs.reduce((a, b) => a + b, 0) / rs.length : null;
+  const prs = trades.filter(t => t.planRR != null).map(t => t.planRR);
+  const avgPlan = prs.length ? prs.reduce((a, b) => a + b, 0) / prs.length : null;   // what you PLANNED on average vs what you got (Avg R)
   let eq = 0, peak = 0, dd = 0; trades.forEach(t => { eq += t.pnl; peak = Math.max(peak, eq); dd = Math.min(dd, eq - peak); });
   const card = (k, v, cls = '') => `<div class="stat"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`;
   $('statCards').innerHTML = card('Trades', n) + card('Win rate', winRate.toFixed(1) + '%', winRate >= 50 ? 'pnl-pos' : '') +
     card('Net P&L', usd(net), net >= 0 ? 'pnl-pos' : 'pnl-neg') + card('Profit factor', pf === Infinity ? '∞' : pf.toFixed(2)) +
-    card('Expectancy', usd(exp), exp >= 0 ? 'pnl-pos' : 'pnl-neg') + card('Avg R', avgR == null ? '–' : avgR.toFixed(2));
+    card('Expectancy', usd(exp), exp >= 0 ? 'pnl-pos' : 'pnl-neg') + card('Avg R', avgR == null ? '–' : avgR.toFixed(2)) +
+    card('Planned R:R', avgPlan == null ? '–' : '1:' + avgPlan.toFixed(2));
   const byAtm = {}; trades.forEach(t => { (byAtm[t.atm] ??= []).push(t); });
-  $('atmStats').innerHTML = `<table><thead><tr><th>ATM</th><th>Trades</th><th>Win%</th><th>Net $</th></tr></thead><tbody>` +
+  $('atmStats').innerHTML = `<table><thead><tr><th>ATM</th><th>Trades</th><th>Win%</th><th>Plan R:R</th><th>Avg R</th><th>Net $</th></tr></thead><tbody>` +
     Object.entries(byAtm).map(([k, ts]) => { const w = ts.filter(t => t.pnl > 0).length, l = ts.filter(t => t.pnl < 0).length, nt = ts.reduce((s, t) => s + t.pnl, 0);
-      return `<tr><td>${k}</td><td>${ts.length}</td><td>${(w + l) ? (w / (w + l) * 100).toFixed(0) : 0}%</td><td class="${nt >= 0 ? 'pos' : 'neg'}">${usd(nt)}</td></tr>`; }).join('') + `</tbody></table>`;
+      const pr = ts.filter(t => t.planRR != null), ar = ts.filter(t => t.R != null);
+      const plan = pr.length ? '1:' + (pr.reduce((a, t) => a + t.planRR, 0) / pr.length).toFixed(2) : '–', got = ar.length ? (ar.reduce((a, t) => a + t.R, 0) / ar.length).toFixed(2) : '–';
+      return `<tr><td>${k}</td><td>${ts.length}</td><td>${(w + l) ? (w / (w + l) * 100).toFixed(0) : 0}%</td><td class="mono">${plan}</td><td class="mono">${got}</td><td class="${nt >= 0 ? 'pos' : 'neg'}">${usd(nt)}</td></tr>`; }).join('') + `</tbody></table>`;
   const td = todayStats();
   $('todayPnl').className = 'todaypnl ' + (td.n === 0 ? 'flat' : (td.pnl >= 0 ? 'pos' : 'neg'));
   $('todayPnl').innerHTML = `<span class="tp-label">Today</span><span class="tp-date">${td.key || '—'}</span>`
@@ -3365,8 +3373,8 @@ function exportCsv() {   // ONE file, two sections: [TRADES] summary (+stop/TP +
   if (!trades.length) return toast('No trades to export');
   const xbars = trades.map(t => exportBars(t));   // 80-before-entry … 80-after-exit window per trade, reconstructed from the dataset
   // section 1 — trade summary (stop/take-profit levels + price-trend / 走勢 columns over the export window)
-  const head = 'idx,side,qty,entryTime,exitTime,entry,exit,stopPrice,stopTicks,tpPrice,tpTicks,ticks,pnl,R,atm,exitType,tf,sym,bars,mfeTicks,maeTicks,preTrendTicks,postExitTicks,windowHigh,windowLow';
-  const rows = trades.map((t, i) => { const tr = tradeTrend(t, xbars[i]), lv = tradeLevels(t); return [i + 1, t.side, t.qty, tFmt(t.entryTime), tFmt(t.exitTime), t.entry, t.exit, lv.stopPrice, lv.stopTicks, lv.tpPrice, lv.tpTicks, t.ticks, t.pnl, t.R == null ? '' : t.R.toFixed(3), t.atm, t.exitType, t.tf != null ? t.tf : '', t.sym || INSTR.symbol, xbars[i].length, tr.mfe, tr.mae, tr.pre, tr.post, tr.hi, tr.lo].join(','); });
+  const head = 'idx,side,qty,entryTime,exitTime,entry,exit,stopPrice,stopTicks,tpPrice,tpTicks,ticks,pnl,R,planSlTicks,planTpTicks,planRR,atm,exitType,tf,sym,bars,mfeTicks,maeTicks,preTrendTicks,postExitTicks,windowHigh,windowLow';
+  const rows = trades.map((t, i) => { const tr = tradeTrend(t, xbars[i]), lv = tradeLevels(t); return [i + 1, t.side, t.qty, tFmt(t.entryTime), tFmt(t.exitTime), t.entry, t.exit, lv.stopPrice, lv.stopTicks, lv.tpPrice, lv.tpTicks, t.ticks, t.pnl, t.R == null ? '' : t.R.toFixed(3), t.planSl ?? '', t.planTp == null ? '' : Math.round(t.planTp), t.planRR == null ? '' : t.planRR.toFixed(3), t.atm, t.exitType, t.tf != null ? t.tf : '', t.sym || INSTR.symbol, xbars[i].length, tr.mfe, tr.mae, tr.pre, tr.post, tr.hi, tr.lo].join(','); });
   // section 2 — per-trade chart bars (long format): 80 before entry + in-trade + 80 after exit; seg = before|in|after
   const bhead = 'trade_idx,seg,bar_epoch,bar_time,open,high,low,close';
   const brows = [];
