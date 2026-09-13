@@ -20,8 +20,8 @@ const DATASETS = [
   // NinjaTrader tick tape (MNQ_<day>.nt.json) carries micro volume. Tick value $0.50 / $1.25.
   { id: 'mnqdeep', label: 'MNQ', deep: true, chunks: 'NQ', instr: { symbol: 'MNQ', tickSize: 0.25, tickValue: 0.5 } },
   { id: 'mesdeep', label: 'MES', deep: true, chunks: 'ES', instr: { symbol: 'MES', tickSize: 0.25, tickValue: 1.25 } },
-  { id: 'nq1m', label: 'NQ · multi-res (finest available · daily-updated)', url: 'data/NQ_multi.json', hidden: true, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },   // $20/pt
-  { id: 'es1m', label: 'ES · multi-res (finest available · daily-updated)', url: 'data/ES_multi.json', hidden: true, instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
+  { id: 'nq1m', label: 'NQ · multi-res (finest available · daily-updated)', url: 'data/NQ_multi.json.gz', hidden: true, instr: { symbol: 'NQ', tickSize: 0.25, tickValue: 5 } },   // $20/pt
+  { id: 'es1m', label: 'ES · multi-res (finest available · daily-updated)', url: 'data/ES_multi.json.gz', hidden: true, instr: { symbol: 'ES', tickSize: 0.25, tickValue: 12.5 } }, // $50/pt
 ];
 const STD_TF = [0.25, 1 / 3, 0.5, 1, 2, 3, 5, 10, 15, 30, 60];   // standard timeframes in minutes (0.25=15s, 1/3=20s, 0.5=30s)
 let BASE_TF = 1;        // base bar resolution (minutes) — auto-detected per dataset
@@ -1775,6 +1775,15 @@ function showLoading(on, msg) {
   } else if (el) { el.style.display = 'none'; }
 }
 
+// Every big dataset file is stored gzipped (.json.gz): ~9x smaller downloads and it keeps the whole
+// tick archive under GitHub Pages' 1 GB site limit. Decompressed in the browser (DecompressionStream).
+async function fetchJSON(url) {
+  const r = await fetch(url + (url.includes('?') ? '&' : '?') + 'v=' + Date.now());
+  if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url);
+  if (!/\.gz(\?|$)/.test(url)) return r.json();
+  const txt = await new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).text();
+  return JSON.parse(txt);
+}
 async function loadDataset(ds) {
   if (ds && ds.tick) return enterTickMode(ds);          // Tradovate-style per-day tick replay
   if (ds && ds.deep) return enterDeepMode(ds);          // GitHub-safe monthly-chunked deep 15s history, loaded on demand
@@ -1785,7 +1794,7 @@ async function loadDataset(ds) {
   // Cache-bust once per DAY, not per load: reloads within the same day hit the browser/CDN
   // cache (no re-download of ~5.6 MB, no re-parse of 360k bars); the daily data refresh is
   // still picked up the next day. Date.now() here defeated caching entirely on every load.
-  try { const r = await fetch(url + (url.includes('?') ? '&' : '?') + 'v=' + new Date().toISOString().slice(0, 10)); if (!r.ok) throw 0; data = await r.json(); }
+  try { data = await fetchJSON(url); }
   catch (e) { showLoading(false); toast('This dataset is not ready yet'); return false; }
   pause(); position = null; entryOrder = null; orders = []; markers = []; tool = ''; pendingPt = null;
   if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; }   // switch active contract spec (tick grid + $/tick + symbol)
@@ -1828,7 +1837,7 @@ async function enterDeepMode(ds) {
   // chunk otherwise. The calendar offers the union, so a day covered only by ticks is still clickable.
   // per-symbol tick manifests: index_<SYM>.json (Databento) + index_<SYM>_nt.json (NinjaTrader db); a symbol
   // without either simply has no tick days (a missing manifest is a 404 -> empty set, never a 404 on click)
-  const idxOf = async (f) => { try { const r = await fetch(`data/tick/${f}?v=` + Date.now()); const t = r.ok ? await r.json() : []; return new Set(Array.isArray(t) ? t : (t.days || [])); } catch (e) { return new Set(); } };
+  const idxOf = async (f) => { try { const t = await fetchJSON(`data/tick/${f}.gz`); return new Set(Array.isArray(t) ? t : (t.days || [])); } catch (e) { return new Set(); } };
   dbTickDays = await idxOf(`index_${INSTR.symbol}.json`); ntTickDays = await idxOf(`index_${INSTR.symbol}_nt.json`);
   deepTickDays = new Set([...dbTickDays, ...ntTickDays]);
   deepAllDays = new Set(deepIndex.flatMap(m => m.days).concat([...deepTickDays]));
@@ -1845,7 +1854,7 @@ async function loadDeepMonth(month) {
   const months = mi > 0 ? [deepIndex[mi - 1].month, month] : [month];   // pull the prior month in too, so day 1's "previous session" VP has something to show
   let bars = [];
   try {
-    for (const m of months) { const r = await fetch(`data/chunks/${deepSym}/${m}.json?v=` + Date.now()); if (!r.ok) throw 0; bars = bars.concat(await r.json()); }
+    for (const m of months) bars = bars.concat(await fetchJSON(`data/chunks/${deepSym}/${m}.json.gz`));
   } catch (e) { showLoading(false); toast('Month not available locally: ' + month); return false; }
   pause(); position = null; entryOrder = null; orders = []; markers = []; tool = ''; pendingPt = null;
   tickMode = false; tfTicks = 0; TF_TICKS = []; tickBid = tickAsk = tickEv = null; deepMode = true; deepMonth = month; setSpeedOptions(false);   // tick bars/BBO only exist on per-print data
@@ -2102,7 +2111,7 @@ async function enterTickMode(ds) {
   // returning false makes the dataSelect handler revert the dropdown. (Setting tickMode/deepMode here
   // and returning true, as this used to, left the old dataset rendered but running tick-mode logic.)
   let idxFile;
-  try { const r = await fetch(`data/tick/index_${INSTR.symbol}.json?v=` + Date.now()); idxFile = r.ok ? await r.json() : []; } catch (e) { idxFile = []; }
+  try { idxFile = await fetchJSON(`data/tick/index_${INSTR.symbol}.json.gz`); } catch (e) { idxFile = []; }
   const days = (Array.isArray(idxFile) ? idxFile : (idxFile.days || [])).slice().sort();
   if (!days.length) { toast('Tick days are local-only (data/tick/) — not published, run scripts/fetch_tick_days.py locally'); if (!wired) { wire(); wired = true; } return false; }
   availTickDays = days;
@@ -2114,7 +2123,7 @@ async function loadTickDay(day) {
   let d;
   const useNt = ntTickDays.has(day) && (tickSrc === 'nt' || !dbTickDays.has(day));   // preference, else whichever tape exists
   showLoading(true, `Loading tick tape · ${day}${useNt ? ' · NinjaTrader' : ''}…`);   // a 10–15 MB fetch + parse; silence here reads as a freeze
-  try { const r = await fetch(`data/tick/${INSTR.symbol}_${day}${useNt ? '.nt' : ''}.json?v=` + Date.now()); if (!r.ok) throw 0; d = await r.json(); }
+  try { d = await fetchJSON(`data/tick/${INSTR.symbol}_${day}${useNt ? '.nt' : ''}.json.gz`); }
   catch (e) { showLoading(false); toast('Tick day not available locally: ' + day); return false; }
   pause(); position = null; entryOrder = null; orders = []; markers = []; tool = ''; pendingPt = null;
   tickMode = true; curTickDay = day; tickSrcLoaded = useNt ? 'nt' : 'db'; _modeBadgeTxt = null; syncTickSrcUI(); setSpeedOptions(true);

@@ -16,8 +16,14 @@ scripts/.db_key
 # 10-year per-year NQ history (~400MB total) — local backtesting only, NOT served by the app
 data/NQ_y20*.json
 
-# per-day tick (trades) replay files — fetched on demand, local-only (too big for GitHub)
-data/tick/
+# per-day tick (trades) replay files: raw JSON stays local; the gzipped copies (~1 MB/day) are committed
+# and served by GitHub Pages (see scripts/pack_gz.py + fetchJSON in app.js)
+data/tick/*.json
+!data/tick/*.json.gz
+# 15s month chunks + multi-res datasets: same rule — raw local, .gz committed
+data/chunks/*/20*.json
+data/NQ_multi.json
+data/ES_multi.json
 
 # raw build inputs for the multi-res blend + deep-history monthly chunks (scripts/merge_multires.py,
 # scripts/split_monthly.py): each is 400MB+ per symbol, way over GitHub's 100MB/file limit, and the
