@@ -1551,27 +1551,27 @@ $('chart').addEventListener('mousemove', e => {
 });
 
 // ---------- timeframe aggregation ----------
-// Tick bars: a new bar every N trades instead of every N minutes. Only meaningful when the base
+// Tick bars: a new bar every N ticks instead of every N minutes. Only meaningful when the base
 // resolution IS individual prints (tick mode), which is why TF_TICKS is populated in loadTickDay.
-// Bars stay contiguous and fixed-width in print count, so bar index === floor(printIndex / N) —
-// that identity is what lets revealTick and mBucket stay O(1) below.
 function aggregateTicks(base, n) {
-  // One "tick" = one CME MATCH EVENT (all fills of one aggressor order — tickEv marks the first
-  // print of each), which is how CME feeds and Tradovate count since the 2009 aggregation change:
-  // a sweep through three price levels is ONE tick. A bar closes after n events, and only at an
-  // event boundary, so an event's prints are never split across bars — which also means bars are
-  // NOT fixed print-width and lookups must go through tickBarAt(), not floor(i / n).
+  // One "tick" = ONE CONTRACT. Measured against a Tradovate 2000t chart (2,069 contracts per bar on
+  // 2026-09-01): Tradovate/CQG count every individual fill, and ~97% of NQ fills are one lot, so
+  // ticks ≈ contracts. Databento's trades are CME per-price-level summaries (a 5-lot may be five
+  // fills), so counting prints (2,790/bar) or match events (3,109/bar) overshoots; counting contracts
+  // lands at 2,001/bar, within 3% of Tradovate, and a NinjaTrader tape gives the same answer. A bar
+  // closes at the first print that carries it to n contracts, so bars are NOT fixed print-width and
+  // lookups must go through tickBarAt(), not floor(i / n).
   const out = []; let cur = null, evs = 0;
   for (let i = 0; i < base.length; i++) {
-    const b = base[i], newEv = !tickEv || i === 0 || tickEv[i] === 1;
-    if (!cur || (newEv && evs >= n)) {
+    const b = base[i];
+    if (!cur || evs >= n) {
       let t = b.time;
       if (out.length && t <= out[out.length - 1].time) t = out[out.length - 1].time + 1;   // LWC needs strictly increasing times; an opening burst can close several bars in one second
       cur = { time: t, open: b.open, high: b.high, low: b.low, close: b.close, volume: 0, subStart: i, subEnd: i }; out.push(cur); evs = 0;
     }
     if (b.high > cur.high) cur.high = b.high; if (b.low < cur.low) cur.low = b.low;
     cur.close = b.close; cur.volume += b.volume; cur.subEnd = i;
-    if (newEv) evs++;
+    evs += b.volume;
   }
   return out;
 }
@@ -2100,8 +2100,8 @@ async function loadTickDay(day) {
   for (let i = 0; i < n; i++) { const p = d.p[i], ms = d.t0 + d.dt[i]; tickMs[i] = ms; baseBars[i] = { time: Math.floor(ms / 1000), open: p, high: p, low: p, close: p, volume: d.s[i] }; }
   BASE_TF = 1 / 60;                                            // nominal; tick mode always buckets
   TF_OPTIONS = [1 / 60, 1 / 12, 0.25, 0.5, 1, 2, 3, 5, 10, 15, 30, 60];   // 1s 5s 15s 30s 1m 2m 3m 5m 10m 15m 30m 1h
-  const nEvents = tickEv ? tickEv.reduce((a, x) => a + x, 0) : n;
-  TF_TICKS = [100, 500, 1000, 2000].filter(k => k * 3 <= nEvents);   // tick-count bars, only where the day has enough EVENTS to draw a few
+  const nContracts = d.s.reduce((a, x) => a + x, 0);
+  TF_TICKS = [100, 500, 1000, 2000].filter(k => k * 3 <= nContracts);   // tick-count bars (1 tick = 1 contract), only where the day has enough volume to draw a few
   if (!TF_OPTIONS.some(m => Math.abs(m - tf) < 1e-9)) tf = 1;   // keep the previous timeframe across a day switch; 1m only if it isn't offered here
   if (tfTicks && !TF_TICKS.includes(tfTicks)) tfTicks = 0;       // e.g. a 2000t pick landing on a short holiday session that can't draw it
   sessions = [{ key: day, start: 0, end: n - 1 }];            // one day; calendar lists all fetched days
