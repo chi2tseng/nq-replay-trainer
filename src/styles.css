@@ -994,3 +994,24 @@ select:disabled{ -webkit-text-fill-color:var(--dim); }
 input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
 input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button{ -webkit-appearance:none; margin:0; }
 input, select, button{ -webkit-tap-highlight-color:transparent; }
+
+/* ===================== Uniform control heights ===================== */
+/* One height per zone, applied as a hard `height` (not min-height) so buttons, selects and inputs in the
+   same row always line up — toolbar 34px on desktop / 40px on tablet, order panel 36px, big Buy/Sell 56px. */
+:root{ --tb-ctl:34px; --ctl:36px; --ctl-lg:44px; --ctl-xl:56px; }
+@media (max-width:1400px){ :root{ --tb-ctl:40px; --ctl:40px; --ctl-lg:46px; --ctl-xl:58px; } }
+#toolbar button, #toolbar select, #toolbar .tb-btn, #toolbar .seg, #toolbar .seg button{ height:var(--tb-ctl); min-height:0; box-sizing:border-box; padding-top:0; padding-bottom:0; display:inline-flex; align-items:center; justify-content:center; }
+#toolbar select{ display:inline-block; line-height:normal; }
+#toolbar select.hidden-select{ display:none; }   /* the legacy session <select> stays hidden */
+#toolbar input[type=range]{ height:var(--tb-ctl); margin:0; }
+#toolbar .mode-badge, #toolbar #clock, #toolbar #clockPrice, #toolbar #bboTag{ display:inline-flex; align-items:center; height:var(--tb-ctl); }
+#toolbar .mode-badge.has-sel, #toolbar .mode-badge:empty{ display:none; }
+#leftbar button{ width:var(--tb-ctl); height:var(--tb-ctl); }
+#tabs button{ height:var(--tb-ctl); min-height:0; box-sizing:border-box; padding-top:0; padding-bottom:0; display:inline-flex; align-items:center; }
+/* order panel */
+#side .seg button, #side .stepper, #side .stepper button, #side .stepper input, #side .ord-field select, #side .ord-field input, #side input[type=number], #side input[type=text], #side select{ height:var(--ctl); min-height:0; box-sizing:border-box; padding-top:0; padding-bottom:0; }
+#side .seg{ height:var(--ctl); }
+#side .bs-stop, #side .ico-btn.flat, #side .ico-btn.rev, #side .ico-btn.wide{ height:var(--ctl-lg); min-height:0; box-sizing:border-box; padding-top:0; padding-bottom:0; }
+#side .bs{ height:var(--ctl-xl); min-height:0; box-sizing:border-box; }
+#side .card-h, #side details.card summary{ min-height:0; }
+#btnAtmSave, #btnAtmDel{ height:var(--ctl); min-height:0; box-sizing:border-box; padding-top:0; padding-bottom:0; }
