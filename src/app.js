@@ -478,6 +478,7 @@ function updateModeBadge() {   // what the tape really is: TBBO (trade+quote), T
   const t = tickMode ? (tickBid ? 'TBBO' : 'TICK') + (tickSrcLoaded ? ' · ' + tickSrcLoaded.toUpperCase() : '') : (baseBars.length ? '15s' : '');
   if (t === _modeBadgeTxt) return; _modeBadgeTxt = t;
   el.textContent = t; el.className = 'mode-badge ' + (tickMode ? 'live' : 'coarse');
+  if (tickMode && curTickDay && dbTickDays.has(curTickDay) && ntTickDays.has(curTickDay)) el.classList.add('has-sel');   // the picker names the source; badge yields its slot
   const src = tickSrcLoaded === 'nt' ? 'NinjaTrader export' : 'Databento';
   el.title = tickMode ? (tickBid ? `${src} — every trade with the bid × ask in force before it; market orders cross the real spread` : `${src} — every trade; fills at the last print`) : '15-second bars — no intrabar tape on this day';
 }

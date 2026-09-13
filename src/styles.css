@@ -950,3 +950,7 @@ button.bs-stop.sell:hover:not(:disabled){ background:#33262a; border-color:var(-
 .help-row{ display:flex; align-items:center; gap:8px; padding:3px 0; font-size:12px; color:var(--txt); }
 .help-row kbd{ font-family:var(--mono); font-size:11px; min-width:46px; text-align:center; padding:2px 6px; border:1px solid var(--line); border-bottom-width:2px; border-radius:5px; background:var(--panel2); color:var(--txt); }
 @media (max-width:700px){ .help-body{ grid-template-columns:1fr; } .help-grp{ border-right:0; border-bottom:1px solid var(--line); } }
+/* tick-source picker (only on days with both a Databento and a NinjaTrader tape) */
+#tickSrcSel{ font-size:11px; padding:4px 4px; max-width:104px; }
+.mode-badge.has-sel{ display:none !important; }
+#tickSrcSel[data-kind]::after{ content:attr(data-kind); }
