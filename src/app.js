@@ -1799,15 +1799,16 @@ function tickFileFor(day) {   // which tape a day would load: NinjaTrader when p
   const useNt = ntTickDays.has(day) && (tickSrc === 'nt' || !dbTickDays.has(day));
   return { useNt, url: `data/tick/${INSTR.symbol}_${day}${useNt ? '.nt' : ''}.json.gz` };
 }
-function prefetchTickNeighbours(day) {   // the previous and next tick days, so [ / ] switch with no download wait
+const PREFETCH_DAYS = 5;   // tick days kept ready on each side of the current one (gz buffers: ~1.5 MB NQ … 7 MB MNQ each)
+function prefetchTickNeighbours(day) {   // nearest first, one download at a time so it never competes with the day you just opened
   const days = [...deepTickDays].sort(), i = days.indexOf(day); if (i < 0) return;
-  const want = [days[i + 1], days[i - 1]].filter(Boolean).map(d => tickFileFor(d).url);
-  for (const url of want) {
-    if (tickBufCache.has(url)) continue;
-    tickBufCache.set(url, null);   // reserve so a second call doesn't double-fetch
-    fetch(url).then(r => r.ok ? r.arrayBuffer() : null).then(buf => { if (buf) tickBufCache.set(url, buf); else tickBufCache.delete(url); }).catch(() => tickBufCache.delete(url));
-  }
-  for (const k of [...tickBufCache.keys()]) if (tickBufCache.size > 6 && !want.includes(k) && k !== tickFileFor(day).url) tickBufCache.delete(k);   // keep it small
+  const order = [];
+  for (let k = 1; k <= PREFETCH_DAYS; k++) { if (days[i + k]) order.push(days[i + k]); if (days[i - k]) order.push(days[i - k]); }
+  const want = order.map(d => tickFileFor(d).url), keep = new Set([tickFileFor(day).url, ...want]);
+  for (const k of [...tickBufCache.keys()]) if (!keep.has(k)) tickBufCache.delete(k);   // drop days that fell out of the window
+  const todo = want.filter(u => !tickBufCache.has(u));
+  todo.forEach(u => tickBufCache.set(u, null));   // reserve
+  (async () => { for (const url of todo) { try { const r = await fetch(url); const buf = r.ok ? await r.arrayBuffer() : null; if (buf && tickBufCache.has(url)) tickBufCache.set(url, buf); else tickBufCache.delete(url); } catch (e) { tickBufCache.delete(url); } } })();
 }
 async function loadDataset(ds) {
   if (ds && ds.tick) return enterTickMode(ds);          // Tradovate-style per-day tick replay
