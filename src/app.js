@@ -287,15 +287,15 @@ function attachGutter(el, axis) {
   }
   function onUp() {
     if (!active) return; active = false;
-    window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp);
+    window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp);
     el.classList.remove('dragging'); document.body.classList.remove('resizing', cls);
     saveJSON('rt_layout2', { side: layout.side, bottom: layout.bottom });
   }
-  el.addEventListener('mousedown', (e) => {
+  el.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
     active = true; startPos = axis === 'x' ? e.clientX : e.clientY; startVal = layout[key];
     el.classList.add('dragging'); document.body.classList.add('resizing', cls);
-    window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp);
+    window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp);
     e.preventDefault();
   });
   el.addEventListener('dblclick', () => { layout[key] = LAYOUT_DEFAULTS[key]; layout[key === 'side' ? 'sideUser' : 'bottomUser'] = false; applyLayout(true); });   // reset = hand the size back to the viewport
@@ -433,7 +433,7 @@ function showCtx(clientX, clientY) {
       const sel = document.createElement('select'); sel.id = 'ctxAtmSel';
       const opts = [['40pt', `±${CTX_BRACKET_PTS}pt fixed`]].concat(Object.keys(atm).map(k => [k, k]));
       sel.innerHTML = opts.map(([v, l]) => `<option value="${escHtml(v)}"${v === (atm[ctxAtm] || ctxAtm === '40pt' ? ctxAtm : '40pt') ? ' selected' : ''}>${escHtml(l)}</option>`).join('');
-      ['mousedown', 'click'].forEach(ev => sel.addEventListener(ev, e => e.stopPropagation()));
+      ['pointerdown', 'click'].forEach(ev => sel.addEventListener(ev, e => e.stopPropagation()));
       sel.onchange = (e) => { ctxAtm = e.target.value; saveJSON('rt_ctx_atm', ctxAtm); };
       d.appendChild(sel); d.onclick = (e) => e.stopPropagation();
     }
@@ -445,7 +445,7 @@ function showCtx(clientX, clientY) {
   ctxEl.style.top = Math.min(clientY, window.innerHeight - ctxEl.offsetHeight - 6) + 'px';
 }
 $('chart').addEventListener('contextmenu', (e) => { e.preventDefault(); showCtx(e.clientX, e.clientY); });
-window.addEventListener('mousedown', (e) => { if (ctxEl && ctxEl.style.display === 'block' && !ctxEl.contains(e.target)) hideCtx(); });
+window.addEventListener('pointerdown', (e) => { if (ctxEl && ctxEl.style.display === 'block' && !ctxEl.contains(e.target)) hideCtx(); });
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideCtx(); });
 
 // ---------- chart legend overlay (OHLCV readout, follows crosshair) ----------
@@ -533,7 +533,7 @@ function toggleInd(which) {
 }
 function initIndLegend() {
   const el = $('indLegend'); if (!el) return;
-  el.addEventListener('mousedown', (e) => e.stopPropagation());   // clicking the legend must not start a chart drag
+  el.addEventListener('pointerdown', (e) => e.stopPropagation());   // clicking the legend must not start a chart drag
   el.addEventListener('click', (e) => { const x = e.target.closest('[data-del]'); if (x) toggleInd(x.dataset.del); });   // X removes (turns off)
   renderIndLegend();
 }
@@ -1543,7 +1543,7 @@ chart.subscribeClick(param => {
   const price = param.point ? candle.coordinateToPrice(param.point.y) : bars[i].close;   // hl / tl / ray / box
   if (price != null) handleDrawClick(tool, param.time, price);
 });
-$('chart').addEventListener('mousedown', e => {
+$('chart').addEventListener('pointerdown', e => {
   if (e.button !== 0 || tool) return;             // left-button only; while a tool is armed, clicks place points
   const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
   const _ocx = orderCancelAt(x, y); if (_ocx != null) { cancelOrder(_ocx); e.preventDefault(); return; }   // ✕ on an order tag → cancel that order
@@ -1556,7 +1556,7 @@ $('chart').addEventListener('mousedown', e => {
   if (selDrawing) { selDrawing = null; repaintOverlays(); }   // 4) empty space -> deselect (lets the chart pan)
   if (!overPriceAxis(e.clientX)) vpan = { lx: x, ly: y };   // 5) start a free pan — price follows vertical motion, LWC pans time horizontally (never locked)
 });
-window.addEventListener('mousemove', e => {
+window.addEventListener('pointermove', e => {
   const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
   if (dragH) {                                    // editing a drawing endpoint: snap price to tick, time to bar grid
     const p = candle.coordinateToPrice(y);
@@ -1572,13 +1572,13 @@ window.addEventListener('mousemove', e => {
   const p = candle.coordinateToPrice(y);
   if (p != null) { drag.set(rnd(p)); drawLines(); renderLive(); }
 });
-window.addEventListener('mouseup', () => {
+window.addEventListener('pointerup', () => {
   vpan = null;
   if (dragH) { dragH = null; saveJSON('rt_drawings', drawings); chart.applyOptions({ handleScroll: true, handleScale: true }); return; }
   if (dragBody) { dragBody = null; saveJSON('rt_drawings', drawings); chart.applyOptions({ handleScroll: true, handleScale: true }); return; }
   if (drag) { drag = null; chart.applyOptions({ handleScroll: true, handleScale: true }); }
 });
-$('chart').addEventListener('mousemove', e => {
+$('chart').addEventListener('pointermove', e => {
   if (drag || dragH || dragBody) return;
   if (tool) { $('chart').style.cursor = 'crosshair'; return; }
   const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
@@ -1961,7 +1961,7 @@ function wireCalendar() {
       else if (dayIdx[day.dataset.key] != null) { gotoSession(dayIdx[day.dataset.key]); }  // plain datasets; gotoSession() closes the popover itself
     }
   });
-  document.addEventListener('mousedown', (e) => { const p = $('datePopover'); if (p && p.classList.contains('open') && !p.contains(e.target) && !$('dateBtn').contains(e.target)) closeCal(); });
+  document.addEventListener('pointerdown', (e) => { const p = $('datePopover'); if (p && p.classList.contains('open') && !p.contains(e.target) && !$('dateBtn').contains(e.target)) closeCal(); });
 }
 function buildTfSelect() {
   const time = TF_OPTIONS.map(m => `<option value="${m}" ${!tfTicks && m === tf ? 'selected' : ''}>${m < 1 ? Math.round(m * 60) + 's' : m >= 60 ? (m / 60) + 'h' : m + 'm'}</option>`).join('');
@@ -2463,21 +2463,21 @@ function wireCardDrag(elId, storeKey, skipSel) {   // let a chart overlay card b
   const pos = loadJSON(storeKey, null);
   if (pos && typeof pos.left === 'number') { el.style.left = pos.left + 'px'; el.style.top = pos.top + 'px'; el.style.right = 'auto'; }
   let drag = null;
-  el.addEventListener('mousedown', (e) => {
+  el.addEventListener('pointerdown', (e) => {
     if (skipSel && e.target.closest(skipSel)) return;           // let buttons inside the card click through
     e.stopPropagation(); e.preventDefault();                  // don't start a chart pan
     const r = el.getBoundingClientRect(), wrap = $('chartwrap').getBoundingClientRect();
     el.style.left = (r.left - wrap.left) + 'px'; el.style.top = (r.top - wrap.top) + 'px'; el.style.right = 'auto';   // freeze current spot as left/top (so a plain click doesn't jump it)
     drag = { dx: e.clientX - r.left, dy: e.clientY - r.top }; el.style.cursor = 'grabbing';
   });
-  window.addEventListener('mousemove', (e) => {
+  window.addEventListener('pointermove', (e) => {
     if (!drag) return;
     const wrap = $('chartwrap').getBoundingClientRect();
     const left = Math.max(0, Math.min(e.clientX - drag.dx - wrap.left, wrap.width - el.offsetWidth));
     const top = Math.max(0, Math.min(e.clientY - drag.dy - wrap.top, wrap.height - el.offsetHeight));
     el.style.left = left + 'px'; el.style.top = top + 'px';
   });
-  window.addEventListener('mouseup', () => {
+  window.addEventListener('pointerup', () => {
     if (!drag) return;
     drag = null; el.style.cursor = '';
     saveJSON(storeKey, { left: parseFloat(el.style.left) || 0, top: parseFloat(el.style.top) || 0 });
@@ -3058,7 +3058,7 @@ function swingPivots(bars, k) {   // local swing highs/lows: bar i is a pivot if
 }
 // pan-drag state shared across review canvases (document-level so a drag can continue off-canvas; added once)
 let _ddDrag = null;
-document.addEventListener('mousemove', (e) => {
+document.addEventListener('pointermove', (e) => {
   if (!_ddDrag) return; const c = _ddDrag.c; if (!c || !c._view || !c._n) return;
   const L = 6, RG = 70, plotW = Math.max(10, (c.clientWidth || 680) - L - RG);
   const v = _ddDrag.view, width = v.to - v.from;
@@ -3066,7 +3066,7 @@ document.addEventListener('mousemove', (e) => {
   from = Math.max(0, Math.min(c._n - width, from));
   c._view = { from, to: from + width }; drawTradeChart(c, c._t);
 });
-document.addEventListener('mouseup', () => { if (_ddDrag) { if (_ddDrag.c) _ddDrag.c.style.cursor = 'grab'; _ddDrag = null; } });
+document.addEventListener('pointerup', () => { if (_ddDrag) { if (_ddDrag.c) _ddDrag.c.style.cursor = 'grab'; _ddDrag = null; } });
 function mountTradeChart(c, t) {   // wire zoom (wheel) + pan (drag) + reset (dbl-click) on a trade-review canvas, then draw
   c._t = t; c._view = null;        // fresh full view each open
   if (!c._wired) {
@@ -3080,7 +3080,7 @@ function mountTradeChart(c, t) {   // wire zoom (wheel) + pan (drag) + reset (db
       let from = Math.max(0, Math.min(c._n - w, cur - frac * w));
       c._view = { from, to: from + w }; drawTradeChart(c, c._t);
     }, { passive: false });
-    c.addEventListener('mousedown', (e) => { if (e.button !== 0) return; _ddDrag = { c, startX: e.clientX, view: { ...c._view } }; c.style.cursor = 'grabbing'; e.preventDefault(); });
+    c.addEventListener('pointerdown', (e) => { if (e.button !== 0) return; _ddDrag = { c, startX: e.clientX, view: { ...c._view } }; c.style.cursor = 'grabbing'; e.preventDefault(); });
     c.addEventListener('dblclick', () => { c._view = { from: 0, to: c._n }; drawTradeChart(c, c._t); });
   }
   drawTradeChart(c, t);
@@ -3570,13 +3570,13 @@ function wire() {
   $('chartTypeSelect').value = chartType; $('chartTypeSelect').onchange = (e) => setChartType(e.target.value);
   // MTF dropdown (top toolbar)
   $('btnMtf').onclick = (e) => { e.stopPropagation(); $('mtfPopover').classList.toggle('open'); $('btnMtf').classList.toggle('active'); };
-  document.addEventListener('mousedown', (e) => { const p = $('mtfPopover'), b = $('btnMtf'); if (p && p.classList.contains('open') && !p.contains(e.target) && !b.contains(e.target)) { p.classList.remove('open'); b.classList.remove('active'); } });
+  document.addEventListener('pointerdown', (e) => { const p = $('mtfPopover'), b = $('btnMtf'); if (p && p.classList.contains('open') && !p.contains(e.target) && !b.contains(e.target)) { p.classList.remove('open'); b.classList.remove('active'); } });
   const readMtfTfs = () => ['mtfTf1', 'mtfTf2', 'mtfTf3'].map(id => +$(id).value || 0);
   $('mtfLayout').onchange = (e) => setMtf(e.target.value, readMtfTfs());
   ['mtfTf1', 'mtfTf2', 'mtfTf3'].forEach(id => { $(id).onchange = () => setMtf(mtfLayout === 'off' ? 'stack' : mtfLayout, readMtfTfs()); });   // picking a timeframe while Off turns the view on instead of silently doing nothing
   // Indicators dropdown (top toolbar) + oscillator pane close button
   $('btnIndicators').onclick = (e) => { e.stopPropagation(); $('indPopover').classList.toggle('open'); $('btnIndicators').classList.toggle('active'); };
-  document.addEventListener('mousedown', (e) => { const p = $('indPopover'), b = $('btnIndicators'); if (p && p.classList.contains('open') && !p.contains(e.target) && !b.contains(e.target)) { p.classList.remove('open'); b.classList.remove('active'); } });
+  document.addEventListener('pointerdown', (e) => { const p = $('indPopover'), b = $('btnIndicators'); if (p && p.classList.contains('open') && !p.contains(e.target) && !b.contains(e.target)) { p.classList.remove('open'); b.classList.remove('active'); } });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { const p = $('indPopover'), b = $('btnIndicators'); if (p && p.classList.contains('open')) { p.classList.remove('open'); if (b) b.classList.remove('active'); } } });
   $('oscClose').onclick = () => { setOscMode('off'); const s = $('oscSelect'); if (s) s.value = 'off'; };
 

@@ -954,3 +954,31 @@ button.bs-stop.sell:hover:not(:disabled){ background:#33262a; border-color:var(-
 #tickSrcSel{ font-size:11px; padding:4px 4px; max-width:104px; }
 .mode-badge.has-sel{ display:none !important; }
 #tickSrcSel[data-kind]::after{ content:attr(data-kind); }
+
+/* ===================== Tablet (iPad Pro 12.9: 1366×1024 / 1024×1366) ===================== */
+/* Touch: pointer events drive every drag (chart lines, drawings, gutters, cards); touch-action:none keeps
+   the browser from stealing those gestures for page scroll. The chart canvas itself pans/zooms via LWC. */
+#chart, .gutter, #rndHud, #quizCard, .dd-chart canvas{ touch-action:none; }
+#app{ height:100dvh; }   /* Safari's collapsing address bar: dvh tracks the visible height */
+@media (max-width:1400px){
+  /* toolbar: two deliberate rows instead of a ragged wrap — row 1 = data + view + clock, row 2 = transport */
+  #toolbar{ row-gap:6px; padding-top:6px; padding-bottom:6px; }
+  #toolbar .center{ order:3; flex:1 1 100%; justify-content:flex-start; }
+  #toolbar .right{ order:2; margin-left:auto; }
+  #startSlider{ flex:1 1 120px; min-width:100px; }
+  /* finger-sized targets */
+  #toolbar button, #toolbar select, .tb-btn{ min-height:40px; }
+  #toolbar button{ min-width:40px; }
+  #leftbar button{ width:40px; height:40px; }
+  #leftbar .material-symbols-outlined{ font-size:22px; }
+  .seg button{ min-height:38px; }
+  .stepper button{ min-width:40px; }
+  #posBox .big{ font-size:17px; }
+  #tabs button, .tabbar button{ min-height:40px; }
+  .cal-day{ height:36px; font-size:13px; }
+  .pop-row{ min-height:38px; }
+}
+@media (max-width:1100px) and (orientation:portrait){
+  /* portrait iPad: the chart is tall and narrow — give the bottom panel less and the side panel a little less */
+  #app{ --bottom-h:230px; }
+}
