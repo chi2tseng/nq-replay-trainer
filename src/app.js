@@ -107,6 +107,20 @@ let trades = loadJSON('rt_trades', []);
 (() => { const bk = loadJSON('rt_trades_prerandom', null); if (bk) { trades = bk; saveJSON('rt_trades', trades); localStorage.removeItem('rt_trades_prerandom'); } })();   // recover real trades if a random-mode session was interrupted mid-round
 let showTrades = loadJSON('rt_show_trades', true);   // show entry/exit trade arrows on the chart
 let tradeLogs = loadJSON('rt_trade_logs', []);   // named saved trade logs: [{id,name,ts,trades:[...]}]
+// Trades taken before 2026-09-13 have no planned-R:R fields, but they DO carry the stop ticks and the
+// initial target list from entry — enough to reconstruct the plan (mean of the targets ÷ stop).
+function backfillPlanRR(list) {
+  let n = 0;
+  (list || []).forEach(t => {
+    if (t.planRR != null || !(t.stopTicks > 0) || !Array.isArray(t.tps) || !t.tps.length) return;
+    const tp = t.tps.reduce((a, x) => a + (x.ticks || 0), 0) / t.tps.length;
+    if (!(tp > 0)) return;
+    t.planSl = t.stopTicks; t.planTp = tp; t.planRR = tp / t.stopTicks; n++;
+  });
+  return n;
+}
+{ let n = backfillPlanRR(trades); tradeLogs.forEach(l => { n += backfillPlanRR(l.trades); });
+  if (n) { saveJSON('rt_trades', trades); saveJSON('rt_trade_logs', tradeLogs); console.log('planned R:R backfilled on', n, 'trades'); } }
 let alertMin = loadJSON('rt_alert_min', 720);    // remind me when the replay crosses this ET time (minutes since midnight; 720 = 12:00). null = off
 if (!loadJSON('rt_alert_v', 0)) { alertMin = 720; saveJSON('rt_alert_min', alertMin); saveJSON('rt_alert_v', 1); }   // 2026-09-13: default moved 11:30 -> 12:00 (one-time)
 let prevAlertMin = null;                          // previous revealed bar's ET minutes — used to detect the upward cross
