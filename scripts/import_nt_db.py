@@ -87,7 +87,8 @@ def import_symbol(sym):
         first_et, last_et = rows[0][5], rows[-1][5]
         starts_ok = first_et.hour == 18 and first_et.minute <= 5           # tape begins at the 18:00 ET Globex open
         later_day = any(d > day for d in days)                             # NT already holds a later day -> this one won't grow
-        complete = (last_et.hour == 16 and last_et.minute >= 59) or last_et.hour >= 17 or later_day   # 16:59 close, or a holiday early close followed by more data
+        on_day = last_et.strftime('%Y-%m-%d') == day                        # the last tick must be on the trading day's own date: a tape ending at 19:xx the evening BEFORE is the first hour of a new day, not a close
+        complete = later_day or (on_day and (last_et.hour > 16 or (last_et.hour == 16 and last_et.minute >= 59)))   # 16:59 close, or a holiday early close followed by more data
         if day in have and not FORCE: continue
         if len(rows) < 5000: print(f"  skip {day}: {len(rows)} ticks"); continue
         if not (starts_ok and complete) and not FORCE: print(f"  skip {day}: incomplete in NT db (ticks {first_et:%m-%d %H:%M} .. {last_et:%m-%d %H:%M} ET) — will retry once NT has the rest"); continue
