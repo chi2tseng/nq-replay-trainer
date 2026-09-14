@@ -2177,7 +2177,7 @@ async function loadTickDay(day) {
   BASE_TF = 1 / 60;                                            // nominal; tick mode always buckets
   TF_OPTIONS = [1 / 60, 1 / 12, 0.25, 0.5, 1, 2, 3, 5, 10, 15, 30, 60];   // 1s 5s 15s 30s 1m 2m 3m 5m 10m 15m 30m 1h
   const nContracts = d.s.reduce((a, x) => a + x, 0);
-  TF_TICKS = [100, 500, 1000, 2000].filter(k => k * 3 <= nContracts);   // tick-count bars (1 tick = 1 contract), only where the day has enough volume to draw a few
+  TF_TICKS = [100, 200, 500, 1000, 2000].filter(k => k * 3 <= nContracts);   // tick-count bars (1 tick = 1 contract), only where the day has enough volume to draw a few
   if (!TF_OPTIONS.some(m => Math.abs(m - tf) < 1e-9)) tf = 1;   // keep the previous timeframe across a day switch; 1m only if it isn't offered here
   if (tfTicks && !TF_TICKS.includes(tfTicks)) tfTicks = 0;       // e.g. a 2000t pick landing on a short holiday session that can't draw it
   sessions = [{ key: day, start: 0, end: n - 1 }];            // one day; calendar lists all fetched days
