@@ -219,13 +219,31 @@ window.addEventListener('resize', sizeChart);
 const PX_MARGIN_DEF = 0.15; let pxMargin = PX_MARGIN_DEF;   // symmetric vertical margin on the price scale; wheel grows/shrinks it. Also = the 1:1 vertical-pan range (±pxMargin); wheel-out for more room
 let pxShift = 0;                                          // vertical pan offset: drag the chart body up/down to move the price view
 let priceAuto = true;                                    // price scale auto-fits (follows price); a manual vertical pan/zoom freezes it (natural), Fit re-enables
+// Magnification past the auto-fit: margins can only shrink to 0 (= visible bars fill the height), which on a quiet
+// ES day still leaves tiny candles. pxZoom > 1 narrows the auto price range around its middle (+ pxOffset for
+// panning) through the series' autoscaleInfoProvider, so the scale keeps auto-following price while magnified.
+let pxZoom = 1, pxOffset = 0;                             // magnification (1 = auto-fit) and vertical pan in price units while magnified
+const PX_ZOOM_MAX = 40, PX_ZOOM_STEP = 1.15;
+function priceRangeProvider(original) {
+  const r = original();
+  if (!r || !r.priceRange || (pxZoom <= 1 && !pxOffset)) return r;
+  const { minValue, maxValue } = r.priceRange, mid = (minValue + maxValue) / 2 + pxOffset, half = Math.max((maxValue - minValue) / 2 / pxZoom, TICK * 2);
+  return { priceRange: { minValue: mid - half, maxValue: mid + half }, margins: r.margins };
+}
+function bindPriceZoom(series) { if (series && series.applyOptions) series.applyOptions({ autoscaleInfoProvider: priceRangeProvider }); }
 function applyPriceZoom() {
   pxShift = Math.max(-pxMargin, Math.min(pxMargin, pxShift));   // clamp to the margin room: both margins stay >=0 so the data block keeps its size → vertical pan tracks the mouse 1:1 (no compression). Wheel-zoom-out grows pxMargin = more pan room.
-  chart.priceScale('right').applyOptions({ autoScale: priceAuto, scaleMargins: { top: pxMargin + pxShift, bottom: pxMargin - pxShift } });
+  const magnified = pxZoom > 1 || pxOffset !== 0;
+  chart.priceScale('right').applyOptions({ autoScale: priceAuto || magnified, scaleMargins: { top: pxMargin + pxShift, bottom: pxMargin - pxShift } });
+  if (magnified) {                                               // LWC only re-asks the provider when the visible range changes: nudge it
+    bindPriceZoom(candle);
+    try { const ts = chart.timeScale(), lr = ts.getVisibleLogicalRange(); if (lr) { ts.setVisibleLogicalRange({ from: lr.from + 0.01, to: lr.to }); ts.setVisibleLogicalRange(lr); } } catch (e) {}
+  }
 }
+bindPriceZoom(candle);
 applyPriceZoom();
 function fitRecent(n) {   // frame the most recent n bars (+ a little right margin) and re-fit the price to them
-  pxMargin = PX_MARGIN_DEF; pxShift = 0; priceAuto = true;
+  pxMargin = PX_MARGIN_DEF; pxShift = 0; priceAuto = true; pxZoom = 1; pxOffset = 0;
   const li = idx - seriesFrom;                              // logical index of the latest bar in the windowed series
   const from = Math.max(0, li - (n - 1)), to = li + 6;
   try { chart.timeScale().setVisibleLogicalRange({ from, to }); } catch (e) { chart.timeScale().fitContent(); }
@@ -239,7 +257,11 @@ $('chart').addEventListener('wheel', (e) => {
   if (!overPriceAxis(e.clientX)) return;
   e.preventDefault(); e.stopPropagation();
   priceAuto = false;                                                                  // manual zoom → freeze auto-fit (natural)
-  pxMargin = Math.max(0, Math.min(0.45, pxMargin + (e.deltaY > 0 ? 0.03 : -0.03)));   // down=zoom out, up=zoom in
+  if (e.deltaY < 0) {                                                                 // up = zoom in: margins to 0 first, then magnify past the auto range
+    if (pxMargin > 0.001) pxMargin = Math.max(0, pxMargin - 0.03); else pxZoom = Math.min(PX_ZOOM_MAX, pxZoom * PX_ZOOM_STEP);
+  } else {                                                                            // down = zoom out: un-magnify first, then grow margins
+    if (pxZoom > 1) { pxZoom = Math.max(1, pxZoom / PX_ZOOM_STEP); if (pxZoom === 1) pxOffset = 0; } else pxMargin = Math.min(0.45, pxMargin + 0.03);
+  }
   applyPriceZoom();
 }, { capture: true, passive: false });
 // double-click the price axis = auto-fit (TradingView behaviour)
@@ -1566,7 +1588,12 @@ window.addEventListener('pointermove', e => {
   if (dragBody) { moveBody(x, y); return; }       // moving a whole drawing
   if (vpan && !drag && !dragH) {                   // free 2D pan: price follows vertical motion (1:1), LWC pans time on horizontal motion — both work, neither locked
     const idy = y - vpan.ly, idx = x - vpan.lx; vpan.lx = x; vpan.ly = y;
-    if (idy !== 0 && Math.abs(idy) >= Math.abs(idx)) { priceAuto = false; pxShift += idy / ($('chart').clientHeight || 1); applyPriceZoom(); }
+    if (idy !== 0 && Math.abs(idy) >= Math.abs(idx)) {
+      priceAuto = false;
+      if (pxZoom > 1) { const a = candle.coordinateToPrice(y), b = candle.coordinateToPrice(y - idy); if (a != null && b != null) pxOffset += (b - a); }   // magnified: move the window by the price under the pointer
+      else pxShift += idy / ($('chart').clientHeight || 1);
+      applyPriceZoom();
+    }
   }
   if (!drag) return;
   const p = candle.coordinateToPrice(y);
@@ -1732,6 +1759,7 @@ function setChartType(type) {
 
   // 2) build + assign the new series to the SAME `candle` variable the whole app uses
   candle = makePriceSeries();
+  bindPriceZoom(candle);
 
   // 3) re-feed exactly what is currently revealed within the render window (idx = last revealed TF bar)
   seriesFrom = revealStart(idx);
