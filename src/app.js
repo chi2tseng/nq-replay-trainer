@@ -1617,8 +1617,9 @@ $('chart').addEventListener('pointermove', e => {
 // ---------- timeframe aggregation ----------
 // Tick bars: a new bar every N ticks instead of every N minutes. Only meaningful when the base
 // resolution IS individual prints (tick mode), which is why TF_TICKS is populated in loadTickDay.
+const NT_FILL_SIZE = 1.077;   // contracts per NinjaTrader print (NQ); Databento tick bars divide contracts by this to land on NT's bar boundaries
 function aggregateTicks(base, n) {
-  // (2026-09-15: both tapes now count PRINTS — see the evs line. History of the contract-count choice:)
+  // (2026-09-15: Databento now counts contracts/1.077 to mirror NT — see the evs line. History of the contract-count choice:)
   // Databento tape: one "tick" = ONE CONTRACT. NinjaTrader tape: one "tick" = one print, which is what a
   // NinjaTrader N-tick chart draws (its Last stream is one record per fill). Measured against a Tradovate 2000t chart (2,069 contracts per bar on
   // 2026-09-01): Tradovate/CQG count every individual fill, and ~97% of NQ fills are one lot, so
@@ -1637,7 +1638,7 @@ function aggregateTicks(base, n) {
     }
     if (b.high > cur.high) cur.high = b.high; if (b.low < cur.low) cur.low = b.low;
     cur.close = b.close; cur.volume += b.volume; cur.subEnd = i;
-    evs += 1;   // 1 tick = 1 trade print on both tapes (2026-09-15: user wants N-tick = N trades, so bar volume varies; NT tape matches NT's own bars, Databento's per-price-level trades give somewhat fewer, larger prints)
+    evs += tickSrcLoaded === 'nt' ? 1 : b.volume / NT_FILL_SIZE;   // NT tape: 1 tick = 1 print (= NT's own bars). Databento: emulate NT's fill granularity — NT sees 1.077 contracts per print (NQ, stable 1.071-1.080 over 09/07-09/11), so a bar closes at n*1.077 contracts; reproduces NT's daily 2000t bar count within 1% (counting Databento prints was -22%, raw contracts +8%)
   }
   return out;
 }
