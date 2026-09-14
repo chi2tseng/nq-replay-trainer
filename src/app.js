@@ -1618,6 +1618,7 @@ $('chart').addEventListener('pointermove', e => {
 // Tick bars: a new bar every N ticks instead of every N minutes. Only meaningful when the base
 // resolution IS individual prints (tick mode), which is why TF_TICKS is populated in loadTickDay.
 function aggregateTicks(base, n) {
+  // (2026-09-15: both tapes now count PRINTS — see the evs line. History of the contract-count choice:)
   // Databento tape: one "tick" = ONE CONTRACT. NinjaTrader tape: one "tick" = one print, which is what a
   // NinjaTrader N-tick chart draws (its Last stream is one record per fill). Measured against a Tradovate 2000t chart (2,069 contracts per bar on
   // 2026-09-01): Tradovate/CQG count every individual fill, and ~97% of NQ fills are one lot, so
@@ -1636,7 +1637,7 @@ function aggregateTicks(base, n) {
     }
     if (b.high > cur.high) cur.high = b.high; if (b.low < cur.low) cur.low = b.low;
     cur.close = b.close; cur.volume += b.volume; cur.subEnd = i;
-    evs += tickSrcLoaded === 'nt' ? 1 : b.volume;   // NinjaTrader tape: 1 tick = 1 print, exactly how NT's own N-tick bars count; Databento: 1 tick = 1 contract (Tradovate proxy)
+    evs += 1;   // 1 tick = 1 trade print on both tapes (2026-09-15: user wants N-tick = N trades, so bar volume varies; NT tape matches NT's own bars, Databento's per-price-level trades give somewhat fewer, larger prints)
   }
   return out;
 }
@@ -2205,7 +2206,7 @@ async function loadTickDay(day) {
   BASE_TF = 1 / 60;                                            // nominal; tick mode always buckets
   TF_OPTIONS = [1 / 60, 1 / 12, 0.25, 0.5, 1, 2, 3, 5, 10, 15, 30, 60];   // 1s 5s 15s 30s 1m 2m 3m 5m 10m 15m 30m 1h
   const nContracts = d.s.reduce((a, x) => a + x, 0);
-  TF_TICKS = [100, 200, 500, 1000, 2000].filter(k => k * 3 <= nContracts);   // tick-count bars (1 tick = 1 contract), only where the day has enough volume to draw a few
+  TF_TICKS = [100, 200, 500, 1000, 2000].filter(k => k * 3 <= d.p.length);   // tick-count bars (1 tick = 1 trade print), only where the day has enough prints to draw a few
   if (!TF_OPTIONS.some(m => Math.abs(m - tf) < 1e-9)) tf = 1;   // keep the previous timeframe across a day switch; 1m only if it isn't offered here
   if (tfTicks && !TF_TICKS.includes(tfTicks)) tfTicks = 0;       // e.g. a 2000t pick landing on a short holiday session that can't draw it
   sessions = [{ key: day, start: 0, end: n - 1 }];            // one day; calendar lists all fetched days
