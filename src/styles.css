@@ -960,12 +960,16 @@ button.bs-stop.sell:hover:not(:disabled){ background:#33262a; border-color:var(-
    the browser from stealing those gestures for page scroll. The chart canvas itself pans/zooms via LWC. */
 #chart, .gutter, #rndHud, #quizCard, .dd-chart canvas{ touch-action:none; }
 #app{ height:100dvh; }   /* Safari's collapsing address bar: dvh tracks the visible height */
-@media (max-width:1400px){
-  /* toolbar: two deliberate rows instead of a ragged wrap — row 1 = data + view + clock, row 2 = transport */
+/* Below ~1800px one row no longer fits (data 617-703 + transport ~700 + clock 291) and the transport group
+   wrapped inside itself while the other groups floated mid-height. Switch to two deliberate rows as soon as
+   the single row can't fit: row 1 = data + view + clock, row 2 = transport. */
+@media (max-width:1799px){
   #toolbar{ row-gap:6px; padding-top:6px; padding-bottom:6px; }
-  #toolbar .center{ order:3; flex:1 1 100%; justify-content:flex-start; }
+  #toolbar .center{ order:3; flex:1 1 100%; justify-content:flex-start; flex-wrap:nowrap; }
   #toolbar .right{ order:2; margin-left:auto; }
   #startSlider{ flex:1 1 120px; min-width:100px; }
+}
+@media (max-width:1400px){
   /* finger-sized targets */
   #toolbar button, #toolbar select, .tb-btn{ min-height:40px; }
   #toolbar button{ min-width:40px; }
