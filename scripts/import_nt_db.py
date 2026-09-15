@@ -29,6 +29,20 @@ ET = ZoneInfo("America/New_York")
 LOCAL = datetime.datetime.now().astimezone().tzinfo          # .ncd timestamps are in the machine's zone
 EPOCH = datetime.datetime(1, 1, 1)
 FORCE = '--force' in sys.argv
+REDO = set(a for a in sys.argv[1:] if a[:4] == '2026' and len(a) == 10)   # `py import_nt_db.py 2026-09-14` re-imports that day even if already converted
+MIN_VOL_RATIO = 0.85   # NT's live recording can silently drop prints (2026-09-14 held ~50% of the day across all 4 symbols); a day is only accepted once its RTH volume is >= 85% of the Yahoo 1m reference
+_ref = {}
+def ref_rth_volume(parent, day):
+    """RTH (09:30-16:00 ET) volume of `day` from data/<parent>_db_1m.json (Yahoo daily update); None if the day isn't there yet"""
+    if parent not in _ref:
+        f = os.path.join(OUT, '..', f'{parent}_db_1m.json'); agg = {}
+        if os.path.exists(f):
+            for b in json.load(open(f)):
+                t = datetime.datetime.fromtimestamp(b['time'], ET); hm = t.strftime('%H:%M')
+                if '09:30' <= hm < '16:00': k = t.strftime('%Y-%m-%d'); agg[k] = agg.get(k, 0) + (b.get('volume') or 0)
+        _ref[parent] = agg
+    v = _ref[parent].get(day); return v if v else None
+_ratio = {}   # (parent, day) -> NT/Yahoo RTH volume ratio, so the micros can reuse the parent's verdict
 # pb bit 7 = 2-byte volume (else 1 byte); bit 6 = the stored value is in HUNDREDS of contracts (a 500-lot is 0x40 + 0x05)
 MODES = {0: (0, 1), 1: (1, 0), 2: (0, 2), 3: (2, 0), 4: (0, 3), 5: (3, 0)}
 
@@ -66,6 +80,8 @@ def main():
 def import_symbol(sym):
     ip = os.path.join(OUT, f'index_{sym}_nt.json')
     have = set(json.load(open(ip))) if os.path.exists(ip) else set()
+    have -= REDO
+    parent = sym.replace('M', '', 1) if sym.startswith('M') else sym
     folders = sorted(glob.glob(os.path.join(NTDIR, f'{sym} [0-9][0-9]-[0-9][0-9]')))   # "NQ 09-26", not "NQ" cash or spreads
     if not folders: print(f"{sym}: no tick folder in NinjaTrader db yet (open a 1-tick {sym} chart in NT)"); return
     print(f"{sym}: {len(folders)} contract folder(s)")
@@ -92,6 +108,14 @@ def import_symbol(sym):
         if day in have and not FORCE: continue
         if len(rows) < 5000: print(f"  skip {day}: {len(rows)} ticks"); continue
         if not (starts_ok and complete) and not FORCE: print(f"  skip {day}: incomplete in NT db (ticks {first_et:%m-%d %H:%M} .. {last_et:%m-%d %H:%M} ET) — will retry once NT has the rest"); continue
+        if not FORCE:   # volume cross-check against the Yahoo 1m reference (NQ/ES); micros inherit the parent's verdict
+            if parent == sym:
+                y, m, d_ = map(int, day.split('-')); a = datetime.datetime(y, m, d_, 9, 30, tzinfo=ET); b = datetime.datetime(y, m, d_, 16, 0, tzinfo=ET)
+                nt_rth = sum(r[4] for r in rows if a <= r[5] < b); ref = ref_rth_volume(parent, day)
+                _ratio[(parent, day)] = (nt_rth / ref) if ref else None
+            ratio = _ratio.get((parent, day))
+            if ratio is None: print(f"  defer {day}: no Yahoo reference volume yet for {parent} (comes with the 08:00 daily update) — will check next run"); continue
+            if ratio < MIN_VOL_RATIO: print(f"  skip {day}: NT tape holds only {ratio*100:.0f}% of the day's RTH volume (vs Yahoo) — in NT right-click the chart > Reload All Historical Data, then this re-imports automatically"); continue
         t0 = rows[0][0]
         rec = {"day": day, "sym": sym, "src": "nt", "contract": contract, "tick": tick, "t0": t0,
                "dt": [r[0] - t0 for r in rows], "p": [r[1] * tick for r in rows], "s": [r[4] for r in rows],
