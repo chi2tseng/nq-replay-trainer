@@ -43,6 +43,12 @@ def ref_rth_volume(parent, day):
         _ref[parent] = agg
     v = _ref[parent].get(day); return v if v else None
 _ratio = {}   # (parent, day) -> NT/Yahoo RTH volume ratio, so the micros can reuse the parent's verdict
+def roll_week(day):
+    """True from the Monday before a quarterly expiry (3rd Friday of Mar/Jun/Sep/Dec) through expiry day"""
+    y, m, d = map(int, day.split('-'))
+    if m not in (3, 6, 9, 12): return False
+    first = datetime.date(y, m, 1); third_fri = first + datetime.timedelta(days=(4 - first.weekday()) % 7 + 14)
+    return third_fri - datetime.timedelta(days=4) <= datetime.date(y, m, d) <= third_fri
 # pb bit 7 = 2-byte volume (else 1 byte); bit 6 = the stored value is in HUNDREDS of contracts (a 500-lot is 0x40 + 0x05)
 MODES = {0: (0, 1), 1: (1, 0), 2: (0, 2), 3: (2, 0), 4: (0, 3), 5: (3, 0)}
 
@@ -86,11 +92,19 @@ def import_symbol(sym):
     if not folders: print(f"{sym}: no tick folder in NinjaTrader db yet (open a 1-tick {sym} chart in NT)"); return
     print(f"{sym}: {len(folders)} contract folder(s)")
     days = collections.defaultdict(lambda: collections.defaultdict(list))   # day -> contract -> rows
+    unstable = set()   # days with an hour file that failed to decode (mid-write) — never import those this run
     tick = 0.25
     for folder in folders:
         contract = os.path.basename(folder)
         for f in sorted(glob.glob(os.path.join(folder, '*.Last.ncd'))):
-            tick, rows = decode(f)
+            try: tick, rows = decode(f)
+            except (IndexError, struct.error) as e:   # NT still writing this hour file (a reload/download in progress): drop the whole day this run, retry next run
+                bad_day = None
+                try: bad_day = (datetime.datetime.strptime(os.path.basename(f)[:10], '%Y%m%d%H').replace(tzinfo=LOCAL).astimezone(ET) + datetime.timedelta(hours=6)).strftime('%Y-%m-%d')
+                except Exception: pass
+                if os.path.getsize(f) < 2048:   # a thin far-month hour (e.g. NQ 12-26 before the roll) with a record shape the decoder doesn't know; nothing the front-month tape needs
+                    print(f"  skip tiny file {os.path.basename(folder)}/{os.path.basename(f)} ({os.path.getsize(f)} B, {e.__class__.__name__})"); continue
+                print(f"  partial file {os.path.basename(folder)}/{os.path.basename(f)} ({e.__class__.__name__}) — NT is still writing it; day {bad_day} deferred to the next run"); unstable.add(bad_day); continue
             for t, px, bo, ao, vol in rows:
                 loc = (EPOCH + datetime.timedelta(microseconds=t // 10)).replace(tzinfo=LOCAL)
                 et = loc.astimezone(ET)
@@ -106,6 +120,7 @@ def import_symbol(sym):
         on_day = last_et.strftime('%Y-%m-%d') == day                        # the last tick must be on the trading day's own date: a tape ending at 19:xx the evening BEFORE is the first hour of a new day, not a close
         complete = later_day or (on_day and (last_et.hour > 16 or (last_et.hour == 16 and last_et.minute >= 59)))   # 16:59 close, or a holiday early close followed by more data
         if day in have and not FORCE: continue
+        if day in unstable: print(f"  skip {day}: an hour file was mid-write — next run"); continue
         if len(rows) < 5000: print(f"  skip {day}: {len(rows)} ticks"); continue
         if not (starts_ok and complete) and not FORCE: print(f"  skip {day}: incomplete in NT db (ticks {first_et:%m-%d %H:%M} .. {last_et:%m-%d %H:%M} ET) — will retry once NT has the rest"); continue
         if not FORCE:   # volume cross-check against the Yahoo 1m reference (NQ/ES); micros inherit the parent's verdict
@@ -115,7 +130,9 @@ def import_symbol(sym):
                 _ratio[(parent, day)] = (nt_rth / ref) if ref else None
             ratio = _ratio.get((parent, day))
             if ratio is None: print(f"  defer {day}: no Yahoo reference volume yet for {parent} (comes with the 08:00 daily update) — will check next run"); continue
-            if ratio < MIN_VOL_RATIO: print(f"  skip {day}: NT tape holds only {ratio*100:.0f}% of the day's RTH volume (vs Yahoo) — in NT right-click the chart > Reload All Historical Data, then this re-imports automatically"); continue
+            if roll_week(day):   # expiry week: NT's chart is already on the next contract while the expiring one still trades (09/14: Dec 67% / Sep 33%), so a single-contract tape can't match Yahoo's total
+                print(f"  note {day}: roll week — {contract} alone is {ratio*100:.0f}% of Yahoo's {parent} volume, accepted as NT's own chart shows it")
+            elif ratio < MIN_VOL_RATIO: print(f"  skip {day}: NT tape holds only {ratio*100:.0f}% of the day's RTH volume (vs Yahoo) — in NT right-click the chart > Reload All Historical Data (Ctrl+Shift+R), then this re-imports automatically"); continue
         t0 = rows[0][0]
         rec = {"day": day, "sym": sym, "src": "nt", "contract": contract, "tick": tick, "t0": t0,
                "dt": [r[0] - t0 for r in rows], "p": [r[1] * tick for r in rows], "s": [r[4] for r in rows],
