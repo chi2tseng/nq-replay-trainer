@@ -64,7 +64,8 @@ select,input{
 }
 select:hover,input:hover{border-color:#8A8B8D}
 select:focus,input:focus{outline:none;border-color:var(--brand);background:#FFFFFF}
-button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
+button:focus-visible{outline:none}   /* NT8 shows no focus ring on buttons */
+select:focus-visible,input:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
 input[type=number]{width:72px}
 input[type=checkbox]{
   accent-color:var(--brand);
