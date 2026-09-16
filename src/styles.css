@@ -568,7 +568,7 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
   gap:3px 8px; max-width:calc(100% - 70px);
   padding:1px 2px;
   font-size:13px; line-height:1.25; color:var(--txt);
-  text-shadow:0 1px 2px rgba(0,0,0,.85);    /* boxless TradingView-style legend — shadow for legibility over candles */
+  /* no text-shadow: NT8 is flat */
   pointer-events:none;                      /* never block crosshair/clicks/drag */
   -webkit-user-select:none; user-select:none;
 }
@@ -590,7 +590,7 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
   display:flex; flex-direction:column; align-items:flex-start; gap:0;
   max-width:calc(100% - 70px);
   font-size:13px; line-height:1.3;
-  text-shadow:0 1px 2px rgba(0,0,0,.85);               /* boxless legend over candles (TradingView-style) */
+  /* no text-shadow: NT8 is flat */
   -webkit-user-select:none; user-select:none;
 }
 #indLegend .il-row{
@@ -788,7 +788,7 @@ button.bs-stop.buy:hover:not(:disabled), button.bs-stop.sell:hover:not(:disabled
 .rh-pnl.pos{ color:var(--green) } .rh-pnl.neg{ color:var(--red) }
 .rh-sub{ font-family:var(--mono); font-size:11px; color:var(--dim); margin-bottom:10px; }
 .rh-bar{ height:6px; background:var(--panel2); border-radius:99px; overflow:hidden; }
-.rh-fill{ height:100%; width:0%; background:linear-gradient(90deg,var(--brand),var(--green)); border-radius:99px; transition:width .18s linear; }
+.rh-fill{ height:100%; width:0%; background:var(--brand); transition:width .18s linear; }
 .rh-scale{ display:flex; justify-content:space-between; font-family:var(--mono); font-size:9px; color:var(--dim); margin-top:3px; }
 .rh-meta{ display:flex; justify-content:space-between; align-items:center; margin-top:9px; font-family:var(--mono); font-size:11px; color:var(--dim); }
 .rh-streak{ display:inline-flex; align-items:center; gap:2px; color:#f0b90b; font-weight:700; }
@@ -872,7 +872,7 @@ button.bs-stop.buy:hover:not(:disabled), button.bs-stop.sell:hover:not(:disabled
 #chartwrap.mtf-stack .mtf-pane{border-left:none;border-top:1px solid var(--line)}
 .mtf-pane > .mtf-chart{position:absolute;inset:0}
 .mtf-tag{position:absolute;top:4px;left:8px;z-index:3;font-size:10px;font-weight:700;letter-spacing:.4px;
-         color:var(--dim);text-shadow:0 1px 3px #000a;pointer-events:none}
+         color:var(--dim);pointer-events:none}
 .mtf-tag b{color:var(--txt);font-size:11px}
 /* Grid 2x2: display:contents dissolves #mtfWrap so its panes become direct grid
    items alongside #chart — main chart lands top-left, aux panes fill the rest in order. */
