@@ -193,14 +193,14 @@ function normalizeAtms(obj) { // migrate v1 {tp,qty} -> {targets:[...]}
 
 // ---------- chart ----------
 const chart = LightweightCharts.createChart($('chart'), {
-  layout: { background: { color: '#000000' }, textColor: '#d1d4dc', attributionLogo: false },
-  grid: { vertLines: { color: '#161616' }, horzLines: { color: '#161616' } },
-  crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-  rightPriceScale: { borderColor: '#2a2e39' },
+  layout: { background: { color: '#FFFFFF' }, textColor: '#000000', attributionLogo: false },
+  grid: { vertLines: { color: '#EDEDED' }, horzLines: { color: '#EDEDED' } },
+  crosshair: { mode: LightweightCharts.CrosshairMode.Normal, vertLine: { color: '#58595B', labelBackgroundColor: '#D3D3D3' }, horzLine: { color: '#58595B', labelBackgroundColor: '#D3D3D3' } },
+  rightPriceScale: { borderColor: '#BCBDBF' },
   localization: { timeFormatter: etCrosshairFmt },                 // crosshair label in ET
-  timeScale: { borderColor: '#2a2e39', timeVisible: true, secondsVisible: true, rightOffset: 6, tickMarkFormatter: etTickFmt }, // axis labels in ET (open = 09:30)
+  timeScale: { borderColor: '#BCBDBF', timeVisible: true, secondsVisible: true, rightOffset: 6, tickMarkFormatter: etTickFmt }, // axis labels in ET (open = 09:30)
 });
-let candle = chart.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
+let candle = chart.addCandlestickSeries({ upColor: '#32CD32', downColor: '#FF0000', borderVisible: true, borderUpColor: '#1E8A1E', borderDownColor: '#B30000', wickUpColor: '#1E8A1E', wickDownColor: '#B30000' });
 let vol = chart.addHistogramSeries({ priceScaleId: 'vol', priceFormat: { type: 'volume' } });
 chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
 // Volume histogram toggle (Indicators menu). On tick-count bars every bar holds ~the same volume, so the
@@ -562,9 +562,9 @@ function initIndLegend() {
 
 // ---------- indicators: Ripster EMA clouds (filled band between each EMA pair) ----------
 const RIPSTER = [   // Ripster EMA Clouds — pairs + per-cloud style; matches the default look (hl2 source)
-  { fast: 8,   slow: 9,   a: 0.55, dir: true,  line: 'rgba(255,255,255,0.22)' },               // fast green/red
-  { fast: 5,   slow: 12,  a: 0.32, dir: true,  line: 'rgba(255,255,255,0.18)' },               // momentum green/red
-  { fast: 34,  slow: 50,  a: 0.22, dir: true,  line: 'rgba(255,255,255,0.15)' },               // medium green/red
+  { fast: 8,   slow: 9,   a: 0.55, dir: true,  line: 'rgba(0,0,0,0.20)' },                      // fast green/red
+  { fast: 5,   slow: 12,  a: 0.32, dir: true,  line: 'rgba(0,0,0,0.16)' },                      // momentum green/red
+  { fast: 34,  slow: 50,  a: 0.22, dir: true,  line: 'rgba(0,0,0,0.13)' },                      // medium green/red
   { fast: 72,  slow: 89,  a: 0.30, dir: false, fill: '#9c7a4d', line: 'rgba(156,122,77,0.9)' }, // brown band
   { fast: 180, slow: 200, a: 0.32, dir: false, fill: '#5b8def', line: 'rgba(91,141,239,0.95)' },// blue band
 ];
@@ -594,7 +594,7 @@ const ripsterPrimitive = {
               const f1 = candle.priceToCoordinate(cl.fast[i + 1]), s1 = candle.priceToCoordinate(cl.slow[i + 1]);
               if (f0 == null || s0 == null || f1 == null || s1 == null) continue;
               ctx.beginPath(); ctx.moveTo(x0, f0); ctx.lineTo(x1, f1); ctx.lineTo(x1, s1); ctx.lineTo(x0, s0); ctx.closePath();
-              ctx.globalAlpha = cl.st.a; ctx.fillStyle = cl.st.dir ? (cl.fast[i] >= cl.slow[i] ? '#26a69a' : '#ef5350') : cl.st.fill; ctx.fill(); ctx.globalAlpha = 1;
+              ctx.globalAlpha = cl.st.a; ctx.fillStyle = cl.st.dir ? (cl.fast[i] >= cl.slow[i] ? '#1E8A1E' : '#B30000') : cl.st.fill; ctx.fill(); ctx.globalAlpha = 1;
             }
             for (const w of ['fast', 'slow']) {
               ctx.beginPath(); let st = false;
@@ -623,13 +623,13 @@ function ripsterRepaint() { if (ripsterPrimitive._req) ripsterPrimitive._req(); 
 
 // ---- palette (must be literal hex — a 2nd chart can't read CSS vars) ----
 const OSC_COL = {
-  bg:    '#000000', grid: '#161616', border: '#2a2e39', txt: '#787b86',
-  rsi:   '#c026d3',                       // RSI line (magenta, distinct from Ripster)
-  guide: '#3a4150',                       // 30/70/50 guide lines
-  macd:  '#2962ff', signal: '#fcd535',    // MACD line / signal line
-  up:    '#26a69a', down: '#ef5350',      // histogram + matches candle body colors
-  atr:   '#f0b90b',                       // ATR line (amber)
-  atrHalf: '#a9842c',                     // half-ATR line (dim amber, dashed) = 0.5-ATR target distance
+  bg:    '#FFFFFF', grid: '#EDEDED', border: '#BCBDBF', txt: '#58595B',
+  rsi:   '#7B1FA2',                       // RSI line (purple, distinct from Ripster)
+  guide: '#BCBDBF',                       // 30/70/50 guide lines
+  macd:  '#0B5FA5', signal: '#CC4400',    // MACD line / signal line
+  up:    '#21B116', down: '#D40605',      // histogram (text-safe on white; matches candle body hue)
+  atr:   '#B26A00',                       // ATR line (amber)
+  atrHalf: '#D9A441',                     // half-ATR line (dim amber, dashed) = 0.5-ATR target distance
 };
 
 // ---- state ----
@@ -708,7 +708,7 @@ function ensureOscChart() {
   oscChart = LightweightCharts.createChart($('oscPane'), {
     layout: { background: { color: OSC_COL.bg }, textColor: OSC_COL.txt, fontSize: 10 },
     grid: { vertLines: { color: OSC_COL.grid }, horzLines: { color: OSC_COL.grid } },
-    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal, vertLine: { color: '#58595B', labelBackgroundColor: '#D3D3D3' }, horzLine: { color: '#58595B', labelBackgroundColor: '#D3D3D3' } },
     rightPriceScale: { borderColor: OSC_COL.border, scaleMargins: { top: 0.1, bottom: 0.1 } },
     localization: { timeFormatter: etCrosshairFmt },
     // keep BOTH time scales identical so columns line up 1:1 with the main chart
@@ -861,9 +861,9 @@ let bbOn   = loadJSON('rt_bb',   false);
 let emaOn  = loadJSON('rt_ema',  false);
 // Volume Profile trio (each {on,color}, individually toggleable/colorable):
 //   P = PREV day's NY session 09:30–16:00 (PVAH/PPOC/PVAL) · O = OVERNIGHT 18:00→09:30 (OVAH/OPOC/OVAL) · D = DEVELOPING (live)
-let vpP = Object.assign({ on: loadJSON('rt_vp', false), color: '#3b82f6' }, loadJSON('rt_vp_p', null));
+let vpP = Object.assign({ on: loadJSON('rt_vp', false), color: '#0B5FA5' }, loadJSON('rt_vp_p', null));
 let vpO = Object.assign({ on: false, color: '#26c6da' }, loadJSON('rt_vp_o', null));
-let vpD = Object.assign({ on: loadJSON('rt_vp_today', false), color: '#f0b90b', align: 'right' }, loadJSON('rt_vp_d', null));
+let vpD = Object.assign({ on: loadJSON('rt_vp_today', false), color: '#B26A00', align: 'right' }, loadJSON('rt_vp_d', null));
 if (!loadJSON('rt_indoff_v', 0)) {   // 2026-09-13: a clean chart by default — every indicator off once, then whatever you switch on sticks
   ripsterOn = vwapOn = bbOn = emaOn = false; vpP.on = vpO.on = vpD.on = false; oscMode = 'off'; volOn = false; saveJSON('rt_vol', false);
   ['rt_ripster', 'rt_vwap', 'rt_bb', 'rt_ema'].forEach(k => saveJSON(k, false)); saveJSON('rt_vp_p', vpP); saveJSON('rt_vp_o', vpO); saveJSON('rt_vp_d', vpD); saveJSON('rt_oscMode', 'off'); saveJSON('rt_indoff_v', 1);
@@ -874,11 +874,11 @@ let emaPeriods = (loadJSON('rt_ema_p', [10]) || [10])
 const BB_PERIOD = 20, BB_MULT = 2;
 
 // EMA ribbon colors (cool->warm as period grows; falls back to amber if list is longer)
-const EMA_COLORS = ['#42a5f5', '#26a69a', '#2962ff', '#ef5350', '#ab47bc', '#787b86'];
-const VWAP_COLOR = '#e040fb';                 // session VWAP — distinct magenta
-const BB_LINE = 'rgba(139,147,167,0.85)';     // --dim, opaque-ish
-const BB_MID = 'rgba(240,185,11,0.85)';       // --amber mid (basis)
-const BB_FILL = 'rgba(139,147,167,0.07)';     // very faint band fill
+const EMA_COLORS = ['#0B5FA5', '#0F7A6B', '#B26A00', '#C2185B', '#7B1FA2', '#455A64'];
+const VWAP_COLOR = '#7B1FA2';                 // session VWAP — distinct purple
+const BB_LINE = 'rgba(11,95,165,0.85)';       // info blue, opaque-ish
+const BB_MID = 'rgba(88,89,91,0.85)';         // --dim mid (basis)
+const BB_FILL = 'rgba(11,95,165,0.07)';       // very faint band fill
 
 // ---------- computed arrays (indexed parallel to bars[]) ----------
 let vwapData = [];                 // number|null per bar
@@ -926,7 +926,7 @@ function computeBB() {
 // EMA ribbon: configurable list of EMA periods over close (reuses emaArr()).
 function computeEMA() {
   const c = bars.map(b => b.close);
-  emaData = emaPeriods.map((p, i) => ({ period: p, color: EMA_COLORS[i] || '#787b86', arr: emaArr(c, p) }));
+  emaData = emaPeriods.map((p, i) => ({ period: p, color: EMA_COLORS[i] || '#58595B', arr: emaArr(c, p) }));
 }
 
 // Call from rebuildTf() (after bars is set). Cheap; only recomputes what's needed.
@@ -1202,7 +1202,7 @@ const drawingsPrimitive = {
             if (d.type === 'hl' || d.type === 'measure' || d.type === 'rr') continue;   // these draw their own grab points / lines
             const hs = [d.p1]; if (d.p2) hs.push(d.p2);
             if (d.type === 'box' && d.p2) { hs.push({ t: d.p2.t, p: d.p1.p }, { t: d.p1.t, p: d.p2.p }); }
-            for (const pt of hs) { const hx = X(pt.t), hy = Y(pt.p); if (hx == null || hy == null) continue; ctx.beginPath(); ctx.arc(hx, hy, 3.5, 0, 7); ctx.fillStyle = '#000000'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = d.color || '#d1d4dc'; ctx.stroke(); }
+            for (const pt of hs) { const hx = X(pt.t), hy = Y(pt.p); if (hx == null || hy == null) continue; ctx.beginPath(); ctx.arc(hx, hy, 3.5, 0, 7); ctx.fillStyle = '#FFFFFF'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = d.color || '#000000'; ctx.stroke(); }
           }
           // selected drawing: emphasise its anchors in brand amber (signals selected + draggable + deletable)
           if (selDrawing && drawings.includes(selDrawing)) {
@@ -1210,9 +1210,9 @@ const drawingsPrimitive = {
             if (d.type === 'hl') hpts.push({ t: null, p: d.p1.p });
             else if (d.type === 'rr') { hpts.push({ t: d.p1.t, p: d.p1.p }, { t: d.p1.t, p: d.stop }, { t: d.p1.t, p: d.target }); }
             else { if (d.p1) hpts.push(d.p1); if (d.p2) hpts.push(d.p2); }
-            for (const pt of hpts) { const hx = pt.t == null ? W / 2 : X(pt.t), hy = Y(pt.p); if (hx == null || hy == null) continue; ctx.beginPath(); ctx.arc(hx, hy, 5, 0, 7); ctx.fillStyle = '#fcd535'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = '#000000'; ctx.stroke(); }
+            for (const pt of hpts) { const hx = pt.t == null ? W / 2 : X(pt.t), hy = Y(pt.p); if (hx == null || hy == null) continue; ctx.beginPath(); ctx.arc(hx, hy, 5, 0, 7); ctx.fillStyle = '#6495ED'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = '#000000'; ctx.stroke(); }
           }
-          if (pendingPt) { const x = X(pendingPt.t), y = Y(pendingPt.p); if (x != null && y != null) { ctx.fillStyle = '#2962ff'; ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fill(); } }
+          if (pendingPt) { const x = X(pendingPt.t), y = Y(pendingPt.p); if (x != null && y != null) { ctx.fillStyle = '#CC4400'; ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fill(); } }
         });
         window.__drw = { n: ((window.__drw || {}).n || 0) + 1, ok: true };
       } catch (e) { window.__drw = { err: String(e) }; }
@@ -1227,26 +1227,26 @@ function orderLines() {   // single source for drawing AND dragging (entry / sto
   const out = [];
   if (entryOrder) {
     const long = entryOrder.side === 'long', q = entryOrder.mult || 1;
-    out.push({ price: entryOrder.price, color: '#2962ff', label: `${long ? 'BUY' : 'SELL'} ${entryOrder.kind === 'limit' ? 'LMT' : 'STP'}`, qty: q, cancel: 'entry',
+    out.push({ price: entryOrder.price, color: '#0B5FA5', label: `${long ? 'BUY' : 'SELL'} ${entryOrder.kind === 'limit' ? 'LMT' : 'STP'}`, qty: q, cancel: 'entry',
                drag: { get: () => entryOrder.price, set: p => entryOrder.price = p } });
     if (entryOrder.struct) {   // structural preview (computed from the current bar; not independently draggable)
       const sp = structStopPx(side, entryOrder.price, atm[entryOrder.atm] || atm[activeAtm] || {}), risk = Math.abs(entryOrder.price - sp);
-      out.push({ price: sp, color: '#ef5350', label: 'STOP', qty: q, ref: entryOrder.price });
-      out.push({ price: rnd(long ? entryOrder.price + risk : entryOrder.price - risk), color: '#26a69a', label: 'TGT', qty: q, ref: entryOrder.price });
+      out.push({ price: sp, color: '#D40605', label: 'STOP', qty: q, ref: entryOrder.price });
+      out.push({ price: rnd(long ? entryOrder.price + risk : entryOrder.price - risk), color: '#1E8A1E', label: 'TGT', qty: q, ref: entryOrder.price });
     } else {
-      if (entryOrder.slTicks > 0) out.push({ price: rnd(long ? entryOrder.price - entryOrder.slTicks * TICK : entryOrder.price + entryOrder.slTicks * TICK), color: '#ef5350', label: 'STOP', qty: q, ref: entryOrder.price,
+      if (entryOrder.slTicks > 0) out.push({ price: rnd(long ? entryOrder.price - entryOrder.slTicks * TICK : entryOrder.price + entryOrder.slTicks * TICK), color: '#D40605', label: 'STOP', qty: q, ref: entryOrder.price,
         drag: { get: () => rnd(long ? entryOrder.price - entryOrder.slTicks * TICK : entryOrder.price + entryOrder.slTicks * TICK), set: p => { entryOrder.slTicks = Math.max(1, Math.round(Math.abs(entryOrder.price - p) / TICK)); } } });
-      (entryOrder.tgts || []).forEach((tg, i) => { if (tg.ticks > 0) out.push({ price: rnd(long ? entryOrder.price + tg.ticks * TICK : entryOrder.price - tg.ticks * TICK), color: '#26a69a', label: 'TGT' + (entryOrder.tgts.length > 1 ? (i + 1) : ''), qty: tg.qty, ref: entryOrder.price,
+      (entryOrder.tgts || []).forEach((tg, i) => { if (tg.ticks > 0) out.push({ price: rnd(long ? entryOrder.price + tg.ticks * TICK : entryOrder.price - tg.ticks * TICK), color: '#1E8A1E', label: 'TGT' + (entryOrder.tgts.length > 1 ? (i + 1) : ''), qty: tg.qty, ref: entryOrder.price,
         drag: { get: () => rnd(long ? entryOrder.price + tg.ticks * TICK : entryOrder.price - tg.ticks * TICK), set: p => { tg.ticks = Math.max(1, Math.round(Math.abs(p - entryOrder.price) / TICK)); } } }); });
     }
   }
   if (position) {
     const long = position.side === 'long';
     const uT = long ? tcount(curPx(), position.entry) : tcount(position.entry, curPx());
-    out.push({ price: position.entry, color: '#2962ff', label: `${long ? 'LONG' : 'SHORT'} ${position.qty}`, pnl: uT * INSTR.tickValue * position.qty, posEntry: true });
+    out.push({ price: position.entry, color: '#0B5FA5', label: `${long ? 'LONG' : 'SHORT'} ${position.qty}`, pnl: uT * INSTR.tickValue * position.qty, posEntry: true });
     orders.forEach((o, i) => out.push(o.type === 'stop'
-      ? { price: o.price, color: '#ef5350', label: 'STOP', qty: o.qty, ref: position.entry, cancel: i, drag: { get: () => o.price, set: p => o.price = p } }
-      : { price: o.price, color: '#26a69a', label: 'TGT', qty: o.qty, ref: position.entry, cancel: i, drag: { get: () => o.price, set: p => o.price = p } }));
+      ? { price: o.price, color: '#D40605', label: 'STOP', qty: o.qty, ref: position.entry, cancel: i, drag: { get: () => o.price, set: p => o.price = p } }
+      : { price: o.price, color: '#1E8A1E', label: 'TGT', qty: o.qty, ref: position.entry, cancel: i, drag: { get: () => o.price, set: p => o.price = p } }));
   }
   return out;
 }
@@ -1259,7 +1259,7 @@ function drawOrderBrackets(ctx, W) {
     const y = candle.priceToCoordinate(o.price); if (y == null) continue;
     const yr = Math.round(y);
     const segs = [o.label + (o.qty ? '  ×' + o.qty : '')];
-    if (o.ref != null) { const d = Math.abs(tcount(o.price, o.ref)) * INSTR.tickValue * (o.qty || 1); segs.push((o.color === '#ef5350' ? '−$' : '+$') + d.toFixed(0)); }
+    if (o.ref != null) { const d = Math.abs(tcount(o.price, o.ref)) * INSTR.tickValue * (o.qty || 1); segs.push((o.label === 'STOP' ? '−$' : '+$') + d.toFixed(0)); }
     else if (o.pnl != null) segs.push((o.pnl >= 0 ? '+$' : '−$') + Math.abs(o.pnl).toFixed(0));
     segs.push(f2(o.price));
     ctx.font = '600 11px ' + FONT;
@@ -1273,7 +1273,7 @@ function drawOrderBrackets(ctx, W) {
     let cx = left + PAD; const cy = top + h / 2 + 0.5;
     segs.forEach((s, i) => { ctx.fillStyle = '#fff'; ctx.font = (i === segs.length - 1 ? '700 11px ' : '600 11px ') + FONT; ctx.fillText(s, cx, cy); cx += wseg[i] + GAP; });
     if (hasX) { const bx = right - XW;
-      ctx.strokeStyle = 'rgba(255,255,255,.45)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(bx, top + 3); ctx.lineTo(bx, top + h - 3); ctx.stroke();
+      ctx.strokeStyle = 'rgba(0,0,0,.45)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(bx, top + 3); ctx.lineTo(bx, top + h - 3); ctx.stroke();
       ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.4; const m = 5; ctx.beginPath(); ctx.moveTo(bx + m, top + m); ctx.lineTo(bx + XW - m, top + h - m); ctx.moveTo(bx + XW - m, top + m); ctx.lineTo(bx + m, top + h - m); ctx.stroke();
       orderHits.push({ spec: o.cancel, x: bx, y: top, w: XW, h }); }
   }
@@ -1293,17 +1293,17 @@ function orderCancelAt(x, y) { for (const hb of orderHits) { if (x >= hb.x && x 
 function repaintOverlays() { if (ripsterPrimitive._req) ripsterPrimitive._req(); if (drawingsPrimitive._req) drawingsPrimitive._req(); indicatorRepaint(); orderRepaint(); }
 function handleDrawClick(t, time, price) {
   price = magnetPrice(time, price);   // magnet on -> snap to nearest OHLC; off -> rnd(price)
-  if (t === 'hl') { drawings.push({ type: 'hl', p1: { t: time, p: price }, color: '#d1d4dc' }); selDrawing = drawings[drawings.length - 1]; saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return; }
+  if (t === 'hl') { drawings.push({ type: 'hl', p1: { t: time, p: price }, color: '#000000' }); selDrawing = drawings[drawings.length - 1]; saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return; }
   if (t === 'rr') {   // Long/Short position — ONE click: entry here, default risk below, target at 2R (then drag to adjust)
     const entry = price, riskT = rrDefaultRiskTicks();
     const stop = rnd(entry - riskT * TICK), target = rnd(entry + riskT * RR_DEFAULT * TICK);
     const ci = bars.findIndex(b => b.time === time), hi = Math.min(idx, bars.length - 1);
     const rb = bars[Math.max(0, Math.min(hi, (ci < 0 ? hi : ci) + 20))];
-    drawings.push({ type: 'rr', p1: { t: time, p: entry }, p2: { t: rb ? rb.time : time, p: entry }, stop, target, color: '#fcd535' });
+    drawings.push({ type: 'rr', p1: { t: time, p: entry }, p2: { t: rb ? rb.time : time, p: entry }, stop, target, color: '#CC4400' });
     selDrawing = drawings[drawings.length - 1]; saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return;
   }
   if (!pendingPt) { pendingPt = { t: time, p: price }; repaintOverlays(); toast('Click the second point'); return; }
-  drawings.push({ type: t, p1: pendingPt, p2: { t: time, p: price }, color: t === 'box' ? '#2962ff' : t === 'fib' ? '#fcd535' : '#d1d4dc' });
+  drawings.push({ type: t, p1: pendingPt, p2: { t: time, p: price }, color: t === 'box' ? '#6495ED' : t === 'fib' ? '#CC4400' : '#000000' });
   pendingPt = null; selDrawing = drawings[drawings.length - 1]; saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw();
 }
 function clearDrawings() {   // wipe everything drawn with the toolbar: lines / rays / h-lines / boxes / fib / measure / R:R AND the up/down/long/short arrow markers
@@ -1316,8 +1316,8 @@ function clearDrawings() {   // wipe everything drawn with the toolbar: lines / 
 }
 // ---- Fibonacci retracement (drawing type 'fib', 2-point) ----
 const FIB_LEVELS = [
-  { lv: 0, c: '#787b86' }, { lv: 0.236, c: '#ef5350' }, { lv: 0.382, c: '#ff9f0a' }, { lv: 0.5, c: '#fcd535' },
-  { lv: 0.618, c: '#26a69a' }, { lv: 0.786, c: '#22c55e' }, { lv: 1, c: '#787b86' }, { lv: 1.272, c: '#3b82f6' }, { lv: 1.618, c: '#7c5cff' },
+  { lv: 0, c: '#58595B' }, { lv: 0.236, c: '#0B5FA5' }, { lv: 0.382, c: '#1E8A1E' }, { lv: 0.5, c: '#B26A00' },
+  { lv: 0.618, c: '#C2185B' }, { lv: 0.786, c: '#7B1FA2' }, { lv: 1, c: '#0F7A6B' }, { lv: 1.272, c: '#B30000' }, { lv: 1.618, c: '#000000' },
 ];
 const FIB_FILL_A = 0.05, FIB_LINE_A = 0.85;
 function drawFib(ctx, d, X, Y, W) {
@@ -1339,7 +1339,7 @@ function drawMeasure(ctx, d, X, Y) {
   const dPts = d.p2.p - d.p1.p, dTicks = tcount(d.p2.p, d.p1.p), dPct = d.p1.p ? (dPts / d.p1.p) * 100 : 0;
   const i1 = bars.findIndex(b => b.time === d.p1.t), i2 = bars.findIndex(b => b.time === d.p2.t);
   const nBars = (i1 >= 0 && i2 >= 0) ? Math.abs(i2 - i1) : 0, dSec = Math.abs(d.p2.t - d.p1.t), up = dPts >= 0;
-  const bx = Math.min(x1, x2), by = Math.min(y1, y2), bw = Math.max(1, Math.abs(x2 - x1)), bh = Math.max(1, Math.abs(y2 - y1)), col = up ? '#26a69a' : '#ef5350';
+  const bx = Math.min(x1, x2), by = Math.min(y1, y2), bw = Math.max(1, Math.abs(x2 - x1)), bh = Math.max(1, Math.abs(y2 - y1)), col = up ? '#1E8A1E' : '#B30000';
   ctx.save();
   ctx.globalAlpha = 0.14; ctx.fillStyle = col; ctx.fillRect(bx, by, bw, bh); ctx.globalAlpha = 1;
   ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.strokeRect(bx, by, bw, bh);
@@ -1350,11 +1350,11 @@ function drawMeasure(ctx, d, X, Y) {
   ctx.font = '600 12px ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif'; ctx.textBaseline = 'middle';
   const padX = 7, tw = ctx.measureText(label).width, pillW = tw + padX * 2, pillH = 20;
   let px = Math.max(2, (x1 + x2) / 2 - pillW / 2), py = Math.max(2, (y1 + y2) / 2 - pillH / 2);
-  ctx.fillStyle = '#161616'; ctx.globalAlpha = 0.92;
+  ctx.fillStyle = '#D3D3D3'; ctx.globalAlpha = 0.92;
   if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(px, py, pillW, pillH, 5); ctx.fill(); } else ctx.fillRect(px, py, pillW, pillH);
   ctx.globalAlpha = 1; ctx.strokeStyle = col; ctx.lineWidth = 1;
   if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(px, py, pillW, pillH, 5); ctx.stroke(); } else ctx.strokeRect(px, py, pillW, pillH);
-  ctx.fillStyle = '#d1d4dc'; ctx.textAlign = 'left'; ctx.fillText(label, px + padX, py + pillH / 2 + 0.5);
+  ctx.fillStyle = '#000000'; ctx.textAlign = 'left'; ctx.fillText(label, px + padX, py + pillH / 2 + 0.5);
   ctx.restore();
 }
 // ---- Long/Short position R:R tool (drawing type 'rr') — entry / stop / target zones + R:R ----
@@ -1377,16 +1377,16 @@ function drawRR(ctx, d, X, Y, W) {
   const { xa, xb } = rrRange(d, X), w = Math.max(2, xb - xa), cx = (xa + xb) / 2;
   ctx.save();
   ctx.globalAlpha = 0.16;
-  ctx.fillStyle = '#26a69a'; ctx.fillRect(xa, Math.min(ye, yt), w, Math.abs(yt - ye));   // reward zone
-  ctx.fillStyle = '#ef5350'; ctx.fillRect(xa, Math.min(ye, ys), w, Math.abs(ys - ye));   // risk zone
+  ctx.fillStyle = '#32CD32'; ctx.fillRect(xa, Math.min(ye, yt), w, Math.abs(yt - ye));   // reward zone
+  ctx.fillStyle = '#FF0000'; ctx.fillRect(xa, Math.min(ye, ys), w, Math.abs(ys - ye));   // risk zone
   ctx.globalAlpha = 1;
-  ctx.strokeStyle = 'rgba(120,130,150,0.45)'; ctx.lineWidth = 1; ctx.strokeRect(xa, Math.min(yt, ys), w, Math.abs(yt - ys));
+  ctx.strokeStyle = 'rgba(88,89,91,0.45)'; ctx.lineWidth = 1; ctx.strokeRect(xa, Math.min(yt, ys), w, Math.abs(yt - ys));
   const hline = (yy, col) => { ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(xa, yy); ctx.lineTo(xb, yy); ctx.stroke(); };
-  hline(yt, '#26a69a'); hline(ys, '#ef5350');
-  ctx.setLineDash([5, 3]); hline(ye, '#d1d4dc'); ctx.setLineDash([]);
+  hline(yt, '#1E8A1E'); hline(ys, '#B30000');
+  ctx.setLineDash([5, 3]); hline(ye, '#000000'); ctx.setLineDash([]);
   // blue handles — squares at the 4 box corners, circles at the entry edges
-  const sq = (x, y) => { ctx.fillStyle = '#3b82f6'; ctx.strokeStyle = '#000000'; ctx.lineWidth = 1.5; ctx.fillRect(x - 3.5, y - 3.5, 7, 7); ctx.strokeRect(x - 3.5, y - 3.5, 7, 7); };
-  const ci = (x, y) => { ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fillStyle = '#3b82f6'; ctx.fill(); ctx.strokeStyle = '#000000'; ctx.lineWidth = 1.5; ctx.stroke(); };
+  const sq = (x, y) => { ctx.fillStyle = '#6495ED'; ctx.strokeStyle = '#000000'; ctx.lineWidth = 1.5; ctx.fillRect(x - 3.5, y - 3.5, 7, 7); ctx.strokeRect(x - 3.5, y - 3.5, 7, 7); };
+  const ci = (x, y) => { ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fillStyle = '#6495ED'; ctx.fill(); ctx.strokeStyle = '#000000'; ctx.lineWidth = 1.5; ctx.stroke(); };
   sq(xa, yt); sq(xb, yt); sq(xa, ys); sq(xb, ys); ci(xa, ye); ci(xb, ye);
   // metrics + centered label pills — matches TradingView's Long/Short position tool
   const qty = Math.max(1, parseInt(($('qty') || {}).value, 10) || 1);
@@ -1408,9 +1408,9 @@ function drawRR(ctx, d, X, Y, W) {
     ctx.globalAlpha = 1; ctx.fillStyle = fg;
     lines.forEach((ln, i) => ctx.fillText(ln, px + pw / 2, py + 4 + lh / 2 + i * lh));
   };
-  pill(`Target: ${f2(d.target)} (${sgn(tPct)}${tPct.toFixed(2)}%) ${tPts.toFixed(2)}, Amount: ${usd(rewT * INSTR.tickValue * qty)}`, yt, '#0b3b2a', '#26a69a');
-  pill(`Open PnL: ${usd(openPnl)}, Qty: ${qty}\nRisk/reward ratio: ${rr.toFixed(2)}`, ye, '#161616', '#d1d4dc');
-  pill(`Stop: ${f2(d.stop)} (${sgn(sPct)}${sPct.toFixed(2)}%) ${sPts.toFixed(2)}, Amount: ${usd(riskT * INSTR.tickValue * qty)}`, ys, '#3b1418', '#ef5350');
+  pill(`Target: ${f2(d.target)} (${sgn(tPct)}${tPct.toFixed(2)}%) ${tPts.toFixed(2)}, Amount: ${usd(rewT * INSTR.tickValue * qty)}`, yt, '#D3D3D3', '#1E8A1E');
+  pill(`Open PnL: ${usd(openPnl)}, Qty: ${qty}\nRisk/reward ratio: ${rr.toFixed(2)}`, ye, '#D3D3D3', '#000000');
+  pill(`Stop: ${f2(d.stop)} (${sgn(sPct)}${sPct.toFixed(2)}%) ${sPts.toFixed(2)}, Amount: ${usd(riskT * INSTR.tickValue * qty)}`, ys, '#D3D3D3', '#B30000');
   ctx.restore();
 }
 function resetToolAfterDraw() { tool = ''; pendingPt = null; updateToolUI(); }   // revert to cursor after a completed drawing (TradingView default)
@@ -1432,10 +1432,10 @@ let annotations = loadJSON('rt_annotations', []);   // {baseTime, position, colo
 let drawings = loadJSON('rt_drawings', []);         // {type:'hl'|'tl'|'ray'|'box', p1:{t,p}, p2?:{t,p}, color}
 let pendingPt = null;                                // first click of a 2-point drawing
 const ANN = {
-  au:    { position: 'belowBar', color: '#26a69a', shape: 'arrowUp',   text: '' },
-  ad:    { position: 'aboveBar', color: '#ef5350', shape: 'arrowDown', text: '' },
-  long:  { position: 'belowBar', color: '#26a69a', shape: 'arrowUp',   text: 'LONG' },
-  short: { position: 'aboveBar', color: '#ef5350', shape: 'arrowDown', text: 'SHORT' },
+  au:    { position: 'belowBar', color: '#21B116', shape: 'arrowUp',   text: '' },
+  ad:    { position: 'aboveBar', color: '#D40605', shape: 'arrowDown', text: '' },
+  long:  { position: 'belowBar', color: '#21B116', shape: 'arrowUp',   text: 'LONG' },
+  short: { position: 'aboveBar', color: '#D40605', shape: 'arrowDown', text: 'SHORT' },
 };
 const TOOLBTN = { start: 'btnPickStart', au: 'annUp', ad: 'annDown', long: 'annLong', short: 'annShort', hl: 'drwHL', tl: 'drwTL', ray: 'drwRay', box: 'drwBox', fib: 'drwFib', measure: 'drwMeasure', rr: 'drwRR' };
 function placeAnnotation(t, baseTime) { const a = ANN[t]; if (!a) return; annotations.push({ baseTime, ...a }); saveJSON('rt_annotations', annotations); refreshMarkers(); }
@@ -1678,7 +1678,7 @@ let chartType = loadJSON('rt_charttype', 'candles');   // candles|hollow|ha|bars
 let haBars = [];                                       // precomputed Heikin-Ashi OHLC, index-aligned to bars[]
 
 // ---- Binance-dark palette for the price series ----
-const CT_UP = '#26a69a', CT_DOWN = '#ef5350', CT_LINE = '#fcd535', CT_TXT = '#d1d4dc';
+const CT_UP = '#32CD32', CT_DOWN = '#FF0000', CT_LINE = '#000000', CT_TXT = '#000000';
 const CT_TRANSPARENT = 'rgba(0,0,0,0)';
 
 // Heikin-Ashi (recursive -> must be precomputed over the whole TF array).
@@ -1720,7 +1720,7 @@ function cd(b) {
   if (chartType === 'hollow') {
     const up = b.close >= b.open;
     return { time: b.time, open: b.open, high: b.high, low: b.low, close: b.close,
-             color: up ? CT_TRANSPARENT : CT_DOWN, borderColor: up ? CT_UP : CT_DOWN, wickColor: up ? CT_UP : CT_DOWN };
+             color: up ? CT_TRANSPARENT : CT_DOWN, borderColor: up ? '#1E8A1E' : '#B30000', wickColor: up ? '#1E8A1E' : '#B30000' };
   }
   return { time: b.time, open: b.open, high: b.high, low: b.low, close: b.close }; // candles / bars
 }
@@ -1733,9 +1733,9 @@ function makePriceSeries() {
     case 'line':
       return chart.addLineSeries({ color: CT_LINE, lineWidth: 2, lastValueVisible: true, priceLineVisible: true });
     case 'area':
-      return chart.addAreaSeries({ lineColor: CT_LINE, topColor: 'rgba(252,213,53,0.28)', bottomColor: 'rgba(252,213,53,0.02)', lineWidth: 2 });
+      return chart.addAreaSeries({ lineColor: CT_LINE, topColor: 'rgba(204,68,0,0.28)', bottomColor: 'rgba(204,68,0,0)', lineWidth: 2 });
     case 'hollow':   // hollow = candlestick with per-bar transparent up-bodies (see cd()); set defaults too
-      return chart.addCandlestickSeries({ upColor: CT_TRANSPARENT, downColor: CT_DOWN, borderUpColor: CT_UP, borderDownColor: CT_DOWN, borderVisible: true, wickUpColor: CT_UP, wickDownColor: CT_DOWN });
+      return chart.addCandlestickSeries({ upColor: CT_TRANSPARENT, downColor: CT_DOWN, borderUpColor: '#1E8A1E', borderDownColor: '#B30000', borderVisible: true, wickUpColor: '#1E8A1E', wickDownColor: '#B30000' });
     case 'ha':
     case 'cont':
     case 'candles':
@@ -1791,7 +1791,7 @@ function setChartType(type) {
 function stampBarIndices() { for (let i = 0; i < bars.length; i++) bars[i].__i = i; }
 
 function updateChartTypeUI() { const s = $('chartTypeSelect'); if (s && s.value !== chartType) s.value = chartType; }
-function vd(b) { return { time: b.time, value: b.volume, color: b.close >= b.open ? 'rgba(38,166,154,.5)' : 'rgba(239,83,80,.5)' }; }
+function vd(b) { return { time: b.time, value: b.volume, color: b.close >= b.open ? 'rgba(50,205,50,.45)' : 'rgba(255,0,0,.35)' }; }
 const mBucket = (ts) => {
   if (!tfTicks) { const sp = Math.round(tf * 60); return Math.floor(ts / sp) * sp; }
   let lo = 0, hi = bars.length - 1, r = -1;      // tick bars: the last bar starting at or before ts
@@ -2108,7 +2108,7 @@ function updateAlertBar() {   // the bar where the session's clock first CROSSES
   if (alertMin != null && s) for (let i = s.start + 1; i <= s.end; i++) { if (etMinutes(baseBars[i - 1].time) < alertMin && etMinutes(baseBars[i].time) >= alertMin) { alertBarTime = baseBars[i].time; alertBaseIdx = i; break; } }
   alertLineRepaint();
 }
-const ALERT_LINE = '#f0b90b';
+const ALERT_LINE = '#CC4400';
 const alertLinePrimitive = {
   attached(p) { this._req = p.requestUpdate; },
   updateAllViews() {},
@@ -2124,8 +2124,8 @@ const alertLinePrimitive = {
       ctx.save(); ctx.strokeStyle = ALERT_LINE; ctx.globalAlpha = 0.85; ctx.lineWidth = 1.2; ctx.setLineDash([5, 4]);
       ctx.beginPath(); ctx.moveTo(x, 16); ctx.lineTo(x, H); ctx.stroke(); ctx.setLineDash([]);
       ctx.globalAlpha = 1; ctx.font = '700 10px ui-monospace,monospace'; const txt = fmtMin(alertMin), tw = ctx.measureText(txt).width + 8;
-      rrect(ctx, x - tw / 2, 2, tw, 14, 3); ctx.fillStyle = ALERT_LINE; ctx.fill();
-      ctx.fillStyle = '#000'; ctx.textBaseline = 'middle'; ctx.textAlign = 'center'; ctx.fillText(txt, x, 9);
+      rrect(ctx, x - tw / 2, 2, tw, 14, 3); ctx.fillStyle = '#D3D3D3'; ctx.fill();
+      ctx.fillStyle = '#000000'; ctx.textBaseline = 'middle'; ctx.textAlign = 'center'; ctx.fillText(txt, x, 9);
       ctx.restore();
     }); } catch (e) { window.__aline = { err: String(e) }; }
   } }) }],
@@ -2307,12 +2307,12 @@ function rebuildMtf() {
     tag.innerHTML = `<b>${m < 1 ? Math.round(m * 60) + 's' : m >= 60 ? (m / 60) + 'h' : m + 'm'}</b>`;
     el.appendChild(cv); el.appendChild(tag); host.appendChild(el);
     const c = LightweightCharts.createChart(cv, {
-      layout: { background: { color: '#000000' }, textColor: '#d1d4dc', fontSize: 10, attributionLogo: false },
-      grid: { vertLines: { color: '#161616' }, horzLines: { color: '#161616' } },
-      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-      rightPriceScale: { borderColor: '#2a2e39', scaleMargins: { top: 0.12, bottom: 0.12 } },
+      layout: { background: { color: '#FFFFFF' }, textColor: '#000000', fontSize: 10, attributionLogo: false },
+      grid: { vertLines: { color: '#EDEDED' }, horzLines: { color: '#EDEDED' } },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal, vertLine: { color: '#58595B', labelBackgroundColor: '#D3D3D3' }, horzLine: { color: '#58595B', labelBackgroundColor: '#D3D3D3' } },
+      rightPriceScale: { borderColor: '#BCBDBF', scaleMargins: { top: 0.12, bottom: 0.12 } },
       localization: { timeFormatter: etCrosshairFmt },
-      timeScale: { borderColor: '#2a2e39', timeVisible: true, secondsVisible: m < 1, rightOffset: 4, tickMarkFormatter: etTickFmt },
+      timeScale: { borderColor: '#BCBDBF', timeVisible: true, secondsVisible: m < 1, rightOffset: 4, tickMarkFormatter: etTickFmt },
     });
     const s = c.addCandlestickSeries({ upColor: CT_UP, downColor: CT_DOWN, borderVisible: false, wickUpColor: CT_UP, wickDownColor: CT_DOWN });
     mtfPanes.push({ tf: m, el, cv, chart: c, series: s, bars: null, srcKey: '', lastJ: -1 });
@@ -2639,8 +2639,8 @@ function quizAnswer(ans) {
   baseIdx = Math.min(baseBars.length - 1, Math.max(baseIdx, end));
   syncIdxFromBase(); hardReveal();
   markers = [                                                               // reveal what you actually did
-    { baseTime: q.entryTime, position: q.side === 'long' ? 'belowBar' : 'aboveBar', color: q.side === 'long' ? '#26a69a' : '#ef5350', shape: q.side === 'long' ? 'arrowUp' : 'arrowDown', text: `YOU ${q.side === 'long' ? 'LONG' : 'SHORT'} ${f2(q.entry)}` },
-    { baseTime: q.exitTime, position: q.side === 'long' ? 'aboveBar' : 'belowBar', color: q.pnl >= 0 ? '#26a69a' : '#ef5350', shape: q.side === 'long' ? 'arrowDown' : 'arrowUp', text: `${usd(q.pnl)}` }
+    { baseTime: q.entryTime, position: q.side === 'long' ? 'belowBar' : 'aboveBar', color: q.side === 'long' ? '#21B116' : '#D40605', shape: q.side === 'long' ? 'arrowUp' : 'arrowDown', text: `YOU ${q.side === 'long' ? 'LONG' : 'SHORT'} ${f2(q.entry)}` },
+    { baseTime: q.exitTime, position: q.side === 'long' ? 'aboveBar' : 'belowBar', color: q.pnl >= 0 ? '#21B116' : '#D40605', shape: q.side === 'long' ? 'arrowDown' : 'arrowUp', text: `${usd(q.pnl)}` }
   ];
   refreshMarkers(); fitRecent(110); renderAll();
   renderQuizCard();
@@ -2787,7 +2787,7 @@ function openPosition(side, px, t, atmName, mult, bracket) {
   orders = [];
   if (sl > 0) orders.push({ type: 'stop', price: stopPrice, qty: totalQty });
   tps.forEach(tg => orders.push({ type: 'target', ticks: tg.ticks, qty: tg.qty, price: tg.price }));
-  addMarker(t, side === 'long' ? 'belowBar' : 'aboveBar', side === 'long' ? '#26a69a' : '#ef5350', side === 'long' ? 'arrowUp' : 'arrowDown', `${side === 'long' ? 'L' : 'S'}${totalQty} ${f2(px)}`);
+  addMarker(t, side === 'long' ? 'belowBar' : 'aboveBar', side === 'long' ? '#21B116' : '#D40605', side === 'long' ? 'arrowUp' : 'arrowDown', `${side === 'long' ? 'L' : 'S'}${totalQty} ${f2(px)}`);
   drawLines(); renderLive();
 }
 
@@ -2900,7 +2900,7 @@ function exitQty(q, px, t, type) {
   const pnl = netTicks * INSTR.tickValue * q;
   const risk = (position.slTicks || 0) * INSTR.tickValue * q;
   trades.push({ entryTime: position.entryTime, exitTime: t, side: position.side, qty: q, entry: position.entry, exit: px, ticks: netTicks, pnl, R: risk > 0 ? pnl / risk : null, atm: position.atm, exitType: type, tf: tfTicks ? 't' + tfTicks : (typeof tf === 'number' ? tf : BASE_TF), sym: INSTR.symbol, stop: position.stopPrice, stopTicks: position.slTicks, tps: (position.tps || []).map(p => ({ ticks: p.ticks, price: p.price })), planSl: position.planSl, planTp: position.planTp, planRR: position.planRR, chart: captureTradeChart(position.entryTime, t) });
-  addMarker(t, long ? 'aboveBar' : 'belowBar', pnl >= 0 ? '#26a69a' : '#ef5350', long ? 'arrowDown' : 'arrowUp', usd(pnl));
+  addMarker(t, long ? 'aboveBar' : 'belowBar', pnl >= 0 ? '#21B116' : '#D40605', long ? 'arrowDown' : 'arrowUp', usd(pnl));
   saveJSON('rt_trades', trades);
   position.qty -= q;
   if (position.qty <= 0) { position = null; orders = []; }
@@ -2954,7 +2954,7 @@ function renderLive() {
   if (bt) {
     if (tickBid && tickAsk && baseIdx < tickBid.length) {
       bt.style.display = '';
-      bt.innerHTML = `<span style="color:#26a69a">${f2(tickBid[baseIdx])}</span><span style="color:#8a8a8a"> × </span><span style="color:#ef5350">${f2(tickAsk[baseIdx])}</span>`;
+      bt.innerHTML = `<span style="color:#21B116">${f2(tickBid[baseIdx])}</span><span style="color:#58595B"> × </span><span style="color:#D40605">${f2(tickAsk[baseIdx])}</span>`;
     } else bt.style.display = 'none';
   }
   maybeUpdateVP();   // recompute the prior-day volume profile when the trading day changes
@@ -3154,52 +3154,52 @@ function drawTradeChart(c, t) {
   const long = t.side === 'long', eY = y(t.entry), xY = y(t.exit);
   // header band — symbol · timeframe · side (left), P&L · ticks · R (right)
   const head = `${t.sym || INSTR.symbol} · ${tfLab(t.tf)}`;
-  ctx.fillStyle = '#0f1320'; ctx.fillRect(0, 0, W, TH);
-  ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.font = '700 12px sans-serif'; ctx.fillStyle = '#d1d4dc'; ctx.fillText(head, L + 2, TH / 2);
-  ctx.fillStyle = long ? '#26a69a' : '#ef5350'; ctx.fillText(`  ${long ? 'LONG' : 'SHORT'} ${t.qty}`, L + 2 + ctx.measureText(head).width, TH / 2);
+  ctx.fillStyle = '#E6E7E8'; ctx.fillRect(0, 0, W, TH);
+  ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.font = '700 12px sans-serif'; ctx.fillStyle = '#000000'; ctx.fillText(head, L + 2, TH / 2);
+  ctx.fillStyle = long ? '#21B116' : '#D40605'; ctx.fillText(`  ${long ? 'LONG' : 'SHORT'} ${t.qty}`, L + 2 + ctx.measureText(head).width, TH / 2);
   if (W > 360) {
-    ctx.textAlign = 'right'; ctx.fillStyle = t.pnl >= 0 ? '#26a69a' : '#ef5350'; ctx.font = '700 12px ui-monospace,monospace';
+    ctx.textAlign = 'right'; ctx.fillStyle = t.pnl >= 0 ? '#21B116' : '#D40605'; ctx.font = '700 12px ui-monospace,monospace';
     ctx.fillText(`${usd(t.pnl)} · ${t.ticks >= 0 ? '+' : ''}${t.ticks}t · ${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + 'R'}`, W - 6, TH / 2);
     ctx.textAlign = 'left';
   }
   ctx.save(); ctx.beginPath(); ctx.rect(L, top, plotW, bot - top); ctx.clip();   // everything that scrolls is clipped to the plot
   // trade-span shading
   const sx = Math.min(eX, xX), sw = Math.max(2, Math.abs(xX - eX));
-  ctx.fillStyle = t.pnl >= 0 ? 'rgba(38,166,154,.09)' : 'rgba(239,83,80,.09)'; ctx.fillRect(sx, top, sw, bot - top);
+  ctx.fillStyle = t.pnl >= 0 ? 'rgba(50,205,50,.09)' : 'rgba(255,0,0,.09)'; ctx.fillRect(sx, top, sw, bot - top);
   // recent high / low of the visible window: reference lines + price levels (左側標 H/L 點位)
   const vHi = Math.max(...vis.map(b => b.h)), vLo = Math.min(...vis.map(b => b.l));
-  ctx.setLineDash([2, 3]); ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(150,158,176,.45)';
+  ctx.setLineDash([2, 3]); ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(88,89,91,.45)';
   [vHi, vLo].forEach(p => { const yy = y(p); ctx.beginPath(); ctx.moveTo(L, yy); ctx.lineTo(W - RG, yy); ctx.stroke(); });
-  ctx.setLineDash([]); ctx.font = '700 10px ui-monospace,monospace'; ctx.fillStyle = '#aeb6c6'; ctx.textAlign = 'left';
+  ctx.setLineDash([]); ctx.font = '700 10px ui-monospace,monospace'; ctx.fillStyle = '#58595B'; ctx.textAlign = 'left';
   ctx.textBaseline = 'top'; ctx.fillText('H ' + f2(vHi), L + 3, y(vHi) + 2);
   ctx.textBaseline = 'bottom'; ctx.fillText('L ' + f2(vLo), L + 3, y(vLo) - 2);
   // candles (visible range only)
-  for (let i = i0; i <= i1; i++) { const b = bars[i], up = b.c >= b.o; ctx.strokeStyle = ctx.fillStyle = up ? '#26a69a' : '#ef5350'; const cx = x(i);
+  for (let i = i0; i <= i1; i++) { const b = bars[i], up = b.c >= b.o; ctx.strokeStyle = ctx.fillStyle = up ? '#1E8A1E' : '#B30000'; const cx = x(i);
     ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(cx, y(b.h)); ctx.lineTo(cx, y(b.l)); ctx.stroke();
     const yo = y(b.o), yc = y(b.c); ctx.fillRect(cx - bw / 2, Math.min(yo, yc), bw, Math.max(1, Math.abs(yo - yc))); }
   // recent swing pivots: small dots + thinned price labels (近期高低點 以及點位)
   const piv = swingPivots(bars, 3); let lastHx = -99, lastLx = -99; ctx.textAlign = 'center';
   piv.forEach(p => { if (p.i < i0 || p.i > i1) return; const up = p.type === 'H', px = x(p.i), py = y(p.price);
-    ctx.fillStyle = up ? '#26a69a' : '#ef5350'; ctx.beginPath(); ctx.arc(px, py + (up ? -3 : 3), 2, 0, 6.2832); ctx.fill();
-    const last = up ? lastHx : lastLx; if (Math.abs(px - last) > 30) { ctx.font = '9px ui-monospace,monospace'; ctx.fillStyle = up ? '#7fd4cb' : '#f1a3a1'; ctx.textBaseline = up ? 'bottom' : 'top'; ctx.fillText(f2(p.price), px, up ? py - 7 : py + 7); if (up) lastHx = px; else lastLx = px; } });
+    ctx.fillStyle = up ? '#1E8A1E' : '#B30000'; ctx.beginPath(); ctx.arc(px, py + (up ? -3 : 3), 2, 0, 6.2832); ctx.fill();
+    const last = up ? lastHx : lastLx; if (Math.abs(px - last) > 30) { ctx.font = '9px ui-monospace,monospace'; ctx.fillStyle = up ? '#1E8A1E' : '#B30000'; ctx.textBaseline = up ? 'bottom' : 'top'; ctx.fillText(f2(p.price), px, up ? py - 7 : py + 7); if (up) lastHx = px; else lastLx = px; } });
   // entry / exit level lines + markers
   ctx.setLineDash([4, 3]); ctx.lineWidth = 1.2;
-  ctx.strokeStyle = '#2962ff'; ctx.beginPath(); ctx.moveTo(L, eY); ctx.lineTo(W - RG, eY); ctx.stroke();
-  ctx.strokeStyle = t.pnl >= 0 ? '#26a69a' : '#ef5350'; ctx.beginPath(); ctx.moveTo(L, xY); ctx.lineTo(W - RG, xY); ctx.stroke();
+  ctx.strokeStyle = '#0B5FA5'; ctx.beginPath(); ctx.moveTo(L, eY); ctx.lineTo(W - RG, eY); ctx.stroke();
+  ctx.strokeStyle = t.pnl >= 0 ? '#1E8A1E' : '#B30000'; ctx.beginPath(); ctx.moveTo(L, xY); ctx.lineTo(W - RG, xY); ctx.stroke();
   ctx.setLineDash([]);
-  if (inPlot(eX)) tradeMarker(ctx, eX, eY, long, '#2962ff');
-  if (inPlot(xX)) tradeMarker(ctx, xX, xY, !long, t.pnl >= 0 ? '#26a69a' : '#ef5350');
+  if (inPlot(eX)) tradeMarker(ctx, eX, eY, long, '#0B5FA5');
+  if (inPlot(xX)) tradeMarker(ctx, xX, xY, !long, t.pnl >= 0 ? '#1E8A1E' : '#B30000');
   ctx.restore();
   // gutter price tags (entry/exit) — outside the clip
-  priceTag(ctx, W - 3, eY, f2(t.entry), '#2962ff');
-  priceTag(ctx, W - 3, xY, f2(t.exit), t.pnl >= 0 ? '#26a69a' : '#ef5350');
+  priceTag(ctx, W - 3, eY, f2(t.entry), '#0B5FA5');
+  priceTag(ctx, W - 3, xY, f2(t.exit), t.pnl >= 0 ? '#1E8A1E' : '#B30000');
   if (W > 300) {
     const tmShort = ts => tFmt(ts).replace(/^\d\d\/\d\d\s*/, '');
-    ctx.font = '10px ui-monospace,monospace'; ctx.fillStyle = '#787b86'; ctx.textBaseline = 'bottom';
+    ctx.font = '10px ui-monospace,monospace'; ctx.fillStyle = '#58595B'; ctx.textBaseline = 'bottom';
     ctx.textAlign = 'left'; ctx.fillText('In ' + tmShort(t.entryTime), L + 2, H - 2);
     ctx.textAlign = 'right'; ctx.fillText('Out ' + tmShort(t.exitTime), W - RG - 2, H - 2); ctx.textAlign = 'left';
   }
-  if (synth) { ctx.font = '10px sans-serif'; ctx.fillStyle = '#5d6573'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('no bar snapshot — entry/exit only', W / 2, TH + 12); ctx.textAlign = 'left'; }
+  if (synth) { ctx.font = '10px sans-serif'; ctx.fillStyle = '#58595B'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('no bar snapshot — entry/exit only', W / 2, TH + 12); ctx.textAlign = 'left'; }
 }
 function openDayDetail(key) {
   const el = $('dayDetail'); if (!el) return;
@@ -3301,15 +3301,15 @@ function renderDash() {
 function drawEquity() {   // cumulative R (each trade's P&L divided by its own planned risk) — size-independent, so 1 lot and 66 lots weigh the same
   const c = $('equity'), ctx = c.getContext('2d'); const W = c.width = c.clientWidth || 600, H = c.height;
   ctx.clearRect(0, 0, W, H);
-  if (!trades.length) { ctx.fillStyle = '#787b86'; ctx.fillText('No trades yet', 10, 20); return; }
+  if (!trades.length) { ctx.fillStyle = '#58595B'; ctx.fillText('No trades yet', 10, 20); return; }
   const eq = []; let s = 0; trades.forEach(t => { s += (t.R != null ? t.R : 0); eq.push(s); });
   const lo = Math.min(0, ...eq), hi = Math.max(0, ...eq), rng = (hi - lo) || 1;
   const PAD_L = 34, x = i => PAD_L + i * (W - PAD_L - 8) / Math.max(1, eq.length - 1), y = v => H - 14 - (v - lo) / rng * (H - 26);
-  ctx.font = '10px ui-monospace,monospace'; ctx.fillStyle = '#787b86'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  ctx.font = '10px ui-monospace,monospace'; ctx.fillStyle = '#58595B'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
   const step = rng <= 4 ? 1 : rng <= 10 ? 2 : rng <= 25 ? 5 : 10;   // R grid lines
-  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) { ctx.strokeStyle = v === 0 ? '#3a3f4b' : '#232733'; ctx.beginPath(); ctx.moveTo(PAD_L, y(v)); ctx.lineTo(W, y(v)); ctx.stroke(); ctx.fillText((v > 0 ? '+' : '') + v + 'R', PAD_L - 4, y(v)); }
-  ctx.strokeStyle = s >= 0 ? '#26a69a' : '#ef5350'; ctx.lineWidth = 1.5; ctx.beginPath(); eq.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))); ctx.stroke();
-  ctx.fillStyle = s >= 0 ? '#26a69a' : '#ef5350'; ctx.textAlign = 'left'; ctx.font = '700 11px ui-monospace,monospace';
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) { ctx.strokeStyle = v === 0 ? '#BCBDBF' : '#EDEDED'; ctx.beginPath(); ctx.moveTo(PAD_L, y(v)); ctx.lineTo(W, y(v)); ctx.stroke(); ctx.fillText((v > 0 ? '+' : '') + v + 'R', PAD_L - 4, y(v)); }
+  ctx.strokeStyle = s >= 0 ? '#21B116' : '#D40605'; ctx.lineWidth = 1.5; ctx.beginPath(); eq.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))); ctx.stroke();
+  ctx.fillStyle = s >= 0 ? '#21B116' : '#D40605'; ctx.textAlign = 'left'; ctx.font = '700 11px ui-monospace,monospace';
   ctx.fillText(`${s >= 0 ? '+' : ''}${s.toFixed(2)}R · ${trades.length} trades`, PAD_L + 4, 10);
 }
 
