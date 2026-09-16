@@ -48,13 +48,14 @@ const chartRect = () => page.evaluate(() => document.getElementById('chart').get
 const barX = (k) => page.evaluate((k) => chart.timeScale().timeToCoordinate(bars[k].time), k);
 const priceY = (p) => page.evaluate((p) => candle.priceToCoordinate(p), p);
 const clickChart = async (x, y, mods = [], button = 'left') => { const r = await chartRect(); for (const m of mods) await page.keyboard.down(m); await page.mouse.click(r.left + x, r.top + y, { button }); for (const m of mods) await page.keyboard.up(m); await page.waitForTimeout(650); };
+const clickTool = async (sel) => { const inPop = await page.$eval(sel, e => !!e.closest('#linesPopover')).catch(() => false); if (inPop) { await page.hover('#drwLines'); await page.click('#btnLinesMenu'); await page.waitForTimeout(150); } await page.click(sel); };
 const dragChart = async (x1, y1, x2, y2, mods = []) => { const r = await chartRect(); for (const m of mods) await page.keyboard.down(m); await page.mouse.move(r.left + x1, r.top + y1); await page.mouse.down(); for (let i = 1; i <= 8; i++) await page.mouse.move(r.left + x1 + (x2 - x1) * i / 8, r.top + y1 + (y2 - y1) * i / 8); await page.waitForTimeout(60); await page.mouse.up(); for (const m of mods) await page.keyboard.up(m); await page.waitForTimeout(300); };
 const hoverChart = async (x, y) => { const r = await chartRect(); await page.mouse.move(r.left + x, r.top + y); await page.waitForTimeout(150); };
 const paint = () => page.evaluate(() => new Promise(res => { repaintOverlays(); requestAnimationFrame(() => requestAnimationFrame(() => res(window.__drwDbg))); }));
 const seed = (list) => page.evaluate((list) => { drawings.length = 0; for (const d of list) drawings.push(newDrawing(d)); clearSelection(); saveJSON('rt_drawings', drawings); repaintOverlays(); }, list);
 const clear = async () => page.evaluate(() => { drawings.length = 0; clearSelection(); hoverDrawing = null; pendingPt = null; previewXY = null; saveJSON('rt_drawings', drawings); if (tool) setTool(''); drawingsLocked = false; lockBtnUI(); undoStack.length = 0; redoStack.length = 0; if ($('drawSettings').classList.contains('open')) closeDrawSettings(); repaintOverlays(); });
 const geomOf = (i) => page.evaluate((i) => { const d = drawings[i]; if (!d) return null; return { type: d.type, t1: d.p1.t, p1: d.p1.p, t2: d.p2 && d.p2.t, p2: d.p2 && d.p2.p, x1: drawX(d.p1.t), y1: drawY(d.p1.p), x2: d.p2 ? drawX(d.p2.t) : null, y2: d.p2 ? drawY(d.p2.p) : null, stop: d.stop, target: d.target, color: d.style && d.style.color }; }, i);
-const drawTL = async (x1, y1, x2, y2, mods2 = [], tool = 'drwTL') => { await page.click('#' + tool); await clickChart(x1, y1); await clickChart(x2, y2, mods2); };
+const drawTL = async (x1, y1, x2, y2, mods2 = [], tool = 'drwTL') => { await clickTool('#' + tool); await clickChart(x1, y1); await clickChart(x2, y2, mods2); };
 const n = () => page.evaluate(() => drawings.length);
 const key = async (combo) => { await page.keyboard.press(combo); await page.waitForTimeout(120); };
 const setMagnet = (v) => page.evaluate((v) => { magnet = v; if (v !== 'off') magnetMode = v; saveJSON('rt_magnet', v); }, v);
@@ -81,7 +82,7 @@ try {
   {
     const x = await barX(k + 8), out = [];
     for (const [btn, type] of [['drwHL', 'hl'], ['drwHRay', 'hray'], ['drwVLine', 'vline'], ['drwCross', 'cross']]) {
-      await clear(); await page.click('#' + btn); await clickChart(x, geo.H * 0.5);
+      await clear(); await clickTool('#' + btn); await clickChart(x, geo.H * 0.5);
       out.push(await page.evaluate((type) => { const d = drawings[0]; return { type, n: drawings.length, got: d && d.type, hasP2: !!(d && d.p2), pending: pendingPt, tool, hasP: !!(d && 'p' in d.p1) }; }, type));
     }
     const ok = out.every(o => o.n === 1 && o.got === o.type && !o.hasP2 && o.pending === null && o.tool === '' && (o.type === 'vline' ? !o.hasP : o.hasP));
@@ -93,7 +94,7 @@ try {
   {
     const xa = await barX(k), ya = Math.round(geo.H * 0.35), xb = await barX(k + 25), yb = Math.round(geo.H * 0.65);
     const cr = await chartRect();
-    await page.click('#drwTL'); await clickChart(xa, ya);
+    await clickTool('#drwTL'); await clickChart(xa, ya);
     await page.mouse.move(cr.left + xb, cr.top + yb, { steps: 4 }); await page.waitForTimeout(250);
     const r = await page.evaluate(() => ({ pending: !!pendingPt, prev: previewXY, dbg: window.__drwDbg && window.__drwDbg.preview, n: drawings.length }));
     const ink = await page.evaluate(({ xa, ya, xb, yb }) => window.__segInk('chart', xa, ya, xb, yb), { xa, ya, xb, yb });
@@ -108,17 +109,17 @@ try {
   await clear();
   {
     const x = await barX(k);
-    await page.click('#drwHL'); await clickChart(x, geo.H * 0.4);
+    await clickTool('#drwHL'); await clickChart(x, geo.H * 0.4);
     const off = await page.evaluate(() => ({ tool, n: drawings.length, active: document.getElementById('drwHL').classList.contains('active') }));
     await page.click('#btnKeepDraw');
     const kd = await page.evaluate(() => ({ keep: keepDrawing, stored: localStorage.getItem('rt_keepdraw'), active: document.getElementById('btnKeepDraw').classList.contains('active') }));
-    await page.click('#drwHL'); await clickChart(x, geo.H * 0.45); await clickChart(x, geo.H * 0.5);
+    await clickTool('#drwHL'); await clickChart(x, geo.H * 0.45); await clickChart(x, geo.H * 0.5);
     const on = await page.evaluate(() => ({ tool, n: drawings.length, active: document.getElementById('drwHL').classList.contains('active') }));
-    await page.click('#drwTL'); await clickChart(x, geo.H * 0.3); await clickChart(x + 60, geo.H * 0.35);
+    await clickTool('#drwTL'); await clickChart(x, geo.H * 0.3); await clickChart(x + 60, geo.H * 0.35);
     const on2 = await page.evaluate(() => ({ tool, pending: pendingPt, n: drawings.length }));
     await page.click('#annUp'); await clickChart(x, geo.H * 0.8);
     const ann = await page.evaluate(() => ({ tool, n: annotations.length }));
-    await page.click('#btnKeepDraw'); await page.evaluate(() => setTool('')); await page.click('#drwHL'); await clickChart(x, geo.H * 0.55);
+    await page.click('#btnKeepDraw'); await page.evaluate(() => setTool('')); await clickTool('#drwHL'); await clickChart(x, geo.H * 0.55);
     const back = await page.evaluate(() => ({ tool, keep: keepDrawing, n: drawings.length }));
     await page.evaluate(() => { annotations.length = 0; saveJSON('rt_annotations', annotations); refreshMarkers(); });
     report('G3', off.tool === '' && back.tool === '', `after a single placement (Keep drawing off) tool reverts to cursor: '${off.tool}' / '${back.tool}'`);
@@ -131,7 +132,7 @@ try {
   {
     let y = Math.round(geo.H * 0.5), p = await page.evaluate((y) => candle.coordinateToPrice(y), y);
     for (let i = 0; i < 40 && Math.abs(p / 0.25 - Math.round(p / 0.25)) < 0.05; i++) { y += 1; p = await page.evaluate((y) => candle.coordinateToPrice(y), y); }
-    await page.click('#drwHL'); await clickChart(await barX(k), y);
+    await clickTool('#drwHL'); await clickChart(await barX(k), y);
     const r = await page.evaluate(() => ({ n: drawings.length, p: drawings[0] && drawings[0].p1.p, tool }));
     const offTick = r.p != null && Math.abs(r.p / 0.25 - Math.round(r.p / 0.25)) > 0.01;
     report('G5', r.n === 1 && offTick && r.tool === '', `hl placed p=${r.p} (clicked price ${p}), not tick-quantised=${offTick}`);
@@ -141,7 +142,7 @@ try {
   await clear();
   {
     const xa = (await barX(k)) + geo.spacing * 0.4, xb = (await barX(k + 12)) + geo.spacing * 0.45;
-    await page.click('#drwTL'); await clickChart(xa, geo.H * 0.4); await clickChart(xb, geo.H * 0.55);
+    await clickTool('#drwTL'); await clickChart(xa, geo.H * 0.4); await clickChart(xb, geo.H * 0.55);
     const r = await page.evaluate(() => { const d = drawings[0]; return { n: drawings.length, on1: d && bars.some(b => b.time === d.p1.t), on2: d && bars.some(b => b.time === d.p2.t), tool, x1: d && drawX(d.p1.t), x2: d && drawX(d.p2.t) }; });
     report('G6', r.n === 1 && !r.on1 && !r.on2 && Math.abs(r.x1 - xa) < 1.5 && Math.abs(r.x2 - xb) < 1.5 && r.tool === '', `tl placed between bars: on a bar time=${r.on1}/${r.on2}; drawX round-trip x1=${r.x1 && r.x1.toFixed(1)}≈${xa.toFixed(1)} x2=${r.x2 && r.x2.toFixed(1)}≈${xb.toFixed(1)}`);
   }
@@ -150,7 +151,7 @@ try {
   await clear();
   {
     const xLast = await barX(geo.idx), x = xLast + geo.spacing * 3.5;
-    await page.click('#drwHRay'); await clickChart(x, geo.H * 0.5);
+    await clickTool('#drwHRay'); await clickChart(x, geo.H * 0.5);
     const place = await page.evaluate(() => { const d = drawings[0]; return { n: drawings.length, t: d && d.p1.t, lastT: bars[idx].time, x: d && drawX(d.p1.t), native: d && chart.timeScale().timeToCoordinate(d.p1.t) }; });
     await page.evaluate(({ lastT, pMid }) => { localStorage.setItem('rt_drawings', JSON.stringify([{ type: 'vline', p1: { t: lastT + 240 }, color: '#000000' }, { type: 'tl', p1: { t: lastT - 600, p: pMid }, p2: { t: lastT + 240, p: pMid }, color: '#000000' }])); localStorage.setItem('rt_drawings_v', '1'); }, geo);
     await load();
@@ -164,13 +165,13 @@ try {
   await clear(); await setMagnet('strong');
   {
     const ohlc = await ohlcOf(k), x = (await barX(k)) + geo.spacing * 0.3, yFar = (await priceY(ohlc[1])) - 60;
-    await page.click('#drwHL'); await clickChart(x, yFar);
+    await clickTool('#drwHL'); await clickChart(x, yFar);
     const strong = await page.evaluate((k) => { const d = drawings[0]; return { n: drawings.length, p: d && d.p1.p, t: d && d.p1.t, bt: bars[k].time }; }, k);
     await clear(); await setMagnet('weak');
     const ohlc2 = await ohlcOf(k), x2 = await barX(k), yH = await priceY(ohlc2[1]);
-    await page.click('#drwHL'); await clickChart(x2, yH - 40);
+    await clickTool('#drwHL'); await clickChart(x2, yH - 40);
     const far = await page.evaluate((ohlc) => { const d = drawings[0]; return { p: d && d.p1.p, snapped: d && ohlc.includes(d.p1.p) }; }, ohlc2);
-    await clear(); await page.click('#drwHL'); await clickChart(x2, yH - 6);
+    await clear(); await clickTool('#drwHL'); await clickChart(x2, yH - 6);
     const near = await page.evaluate((ohlc) => { const d = drawings[0]; return { p: d && d.p1.p, snapped: d && ohlc.includes(d.p1.p) }; }, ohlc2);
     const wpx = await page.evaluate(() => MAGNET_WEAK_PX);
     // menu gesture: hover reveals chevron, click opens weak/strong popover, body click toggles off<->lastMode
@@ -195,11 +196,11 @@ try {
   await clear(); await setMagnet('off'); await page.evaluate(() => { magnetMode = 'strong'; });
   {
     const ohlc = await ohlcOf(k), x = await barX(k), yH = await priceY(ohlc[1]);
-    await page.click('#drwHL'); await clickChart(x, yH - 50, ['Control']);
+    await clickTool('#drwHL'); await clickChart(x, yH - 50, ['Control']);
     const withCtrl = await page.evaluate((ohlc) => ({ p: drawings[0] && drawings[0].p1.p, snapped: drawings[0] && ohlc.includes(drawings[0].p1.p) }), ohlc);
-    await clear(); await page.click('#drwHL'); await clickChart(x, yH - 50);
+    await clear(); await clickTool('#drwHL'); await clickChart(x, yH - 50);
     const noCtrl = await page.evaluate((ohlc) => ({ snapped: drawings[0] && ohlc.includes(drawings[0].p1.p) }), ohlc);
-    await clear(); await setMagnet('strong'); await page.click('#drwHL'); await clickChart(x, yH - 50, ['Control']);
+    await clear(); await setMagnet('strong'); await clickTool('#drwHL'); await clickChart(x, yH - 50, ['Control']);
     const strongCtrl = await page.evaluate((ohlc) => ({ snapped: drawings[0] && ohlc.includes(drawings[0].p1.p) }), ohlc);
     // drag with Ctrl held/released mid-drag
     await clear(); await setMagnet('off'); await page.evaluate(() => { magnetMode = 'strong'; });
@@ -221,7 +222,7 @@ try {
   {
     const xLast = await barX(geo.idx), x = xLast + geo.spacing * 3;
     const y = Math.round(geo.H * 0.5), pClick = await page.evaluate((y) => candle.coordinateToPrice(y), y);
-    await page.click('#drwHL'); await clickChart(x, y);
+    await clickTool('#drwHL'); await clickChart(x, y);
     const r = await page.evaluate(() => { const d = drawings[0]; const all = new Set(); for (let i = Math.max(0, idx - 3); i <= idx; i++) for (const v of [bars[i].open, bars[i].high, bars[i].low, bars[i].close]) all.add(v); return { n: drawings.length, p: d && d.p1.p, t: d && d.p1.t, lastT: bars[idx].time, inOhlc: d && all.has(d.p1.p), mi: magnetBarIdx(d && d.p1.t) }; });
     report('G10', r.n === 1 && Math.abs(r.p - pClick) < 0.25 && r.t > r.lastT && !r.inOhlc && r.mi === -1, `strong magnet 3 bars past the last bar: p==clicked(free)=${Math.abs(r.p - pClick) < 0.25}, magnetBarIdx=${r.mi} (-1 = no bar under cursor -> no snap in future space)`);
   }
@@ -235,9 +236,9 @@ try {
     if (!pick) report('G11', false, 'not verified — no revealed bar in view had VWAP >=3px clear of every OHLC value to test against');
     else {
       const x = await barX(pick.i);
-      await page.evaluate(() => { magnetInd = false; }); await page.click('#drwHL'); await clickChart(x, pick.yv + 1);
+      await page.evaluate(() => { magnetInd = false; }); await clickTool('#drwHL'); await clickChart(x, pick.yv + 1);
       const off = await page.evaluate(() => drawings[0] && drawings[0].p1.p);
-      await clear(); await page.evaluate(() => { magnetInd = true; document.getElementById('magInd').checked = true; }); await page.click('#drwHL'); await clickChart(x, pick.yv + 1);
+      await clear(); await page.evaluate(() => { magnetInd = true; document.getElementById('magInd').checked = true; }); await clickTool('#drwHL'); await clickChart(x, pick.yv + 1);
       const on = await page.evaluate(() => drawings[0] && drawings[0].p1.p);
       const ohlc = await ohlcOf(pick.i);
       report('G11', ohlc.includes(off) && on === pick.v, `bar ${pick.i} VWAP=${pick.v}: Snap to indicators off -> snaps to an OHLC value instead(${ohlc.includes(off)}); on -> snaps to VWAP(${on === pick.v})`);
@@ -407,7 +408,7 @@ try {
   // ================= G21 Undo / G22 Redo (create, drag, delete) =================
   await clear();
   {
-    for (let i = 0; i < 3; i++) { await page.click('#drwHL'); await clickChart(geo.W * 0.5, geo.H * (0.3 + i * 0.1)); }
+    for (let i = 0; i < 3; i++) { await clickTool('#drwHL'); await clickChart(geo.W * 0.5, geo.H * (0.3 + i * 0.1)); }
     const n3 = await n();
     await key('Control+z'); await key('Control+z'); const n1 = await n();
     await key('Control+y'); const n2b = await n();
@@ -553,7 +554,7 @@ try {
   await clear();
   {
     const x = await barX(k); const y = await priceY(geo.pLow);
-    await page.click('#drwHRay'); await clickChart(x, y); await page.waitForTimeout(400);
+    await clickTool('#drwHRay'); await clickChart(x, y); await page.waitForTimeout(400);
     const r = await page.evaluate(({ k }) => { const d = drawings[0], x1 = drawX(d.p1.t), y1 = drawY(d.p1.p), PW = window.__paneW('chart'); return { n: drawings.length, type: d && d.type, t: d && d.p1.t, expT: bars[k].time, noP2: d && d.p2 === undefined, right: window.__rowDark('chart', Math.round(y1), Math.round(x1) + 6, PW - 2), left: window.__rowDark('chart', Math.round(y1), 5, Math.round(x1) - 6) }; }, { k });
     report('G36', r.n === 1 && r.type === 'hray' && nearT(r.t, r.expT) && r.noP2 && r.right > 0.9 && r.left < 0.25, `1 click -> {t,p} only (no p2), extends right of the anchor(${r.right.toFixed(2)}) not left(${r.left.toFixed(2)})`);
   }
@@ -564,7 +565,7 @@ try {
   await clear();
   {
     const x = await barX(k);
-    await page.click('#drwVLine'); await clickChart(x, geo.H * 0.5); await page.waitForTimeout(400);
+    await clickTool('#drwVLine'); await clickChart(x, geo.H * 0.5); await page.waitForTimeout(400);
     const r = await page.evaluate((k) => { const d = drawings[0], H = document.getElementById('chart').clientHeight, osc = document.getElementById('oscPane'), oh = osc.clientHeight, x = drawX(d.p1.t); const oscX = window.__drwOscDbg && window.__drwOscDbg.lastX, oscTimeX = oscChart.timeScale().timeToCoordinate(bars[k].time); return { n: drawings.length, type: d && d.type, hasP: d && ('p' in d.p1), col: window.__colDark('chart', Math.round(x), 20, H - 30), oscCol: window.__colDark('oscPane', Math.round(oscX), 4, oh - 4), oscOk: window.__drwOsc && window.__drwOsc.ok, aligned: Math.abs(oscX - oscTimeX) < 1 }; }, k);
     report('G37', r.n === 1 && r.type === 'vline' && !r.hasP && r.col > 0.9 && r.oscCol > 0.8 && r.oscOk && r.aligned, `1 click -> time-only {t} (no price); dark column spans the main pane(${r.col.toFixed(2)}) AND the RSI oscillator pane(${r.oscCol.toFixed(2)}, aligned to the same bar=${r.aligned}) via oscVlineAttach`);
   }
@@ -575,7 +576,7 @@ try {
   await clear();
   {
     const x = await barX(k2); const y = await priceY(geo.pMid);
-    await page.click('#drwCross'); await clickChart(x, y); await page.waitForTimeout(400);
+    await clickTool('#drwCross'); await clickChart(x, y); await page.waitForTimeout(400);
     const r = await page.evaluate(({ k2 }) => { const d = drawings[0], x1 = drawX(d.p1.t), y1 = drawY(d.p1.p), H = document.getElementById('chart').clientHeight, PW = window.__paneW('chart'); return { n: drawings.length, type: d && d.type, row: window.__rowDark('chart', Math.round(y1), 5, PW - 2), col: window.__colDark('chart', Math.round(x1), 20, H - 30), hitH: drawingAt(30, y1) === d, hitV: drawingAt(x1, H * 0.15) === d }; }, { k2 });
     report('G38', r.n === 1 && r.type === 'cross' && r.row > 0.9 && r.col > 0.9 && r.hitH && r.hitV, `1 click -> full-width row(${r.row.toFixed(2)}) + full-height column(${r.col.toFixed(2)}) through that point, both arms clickable`);
   }
@@ -728,7 +729,7 @@ try {
   await clear();
   {
     const ks = await page.evaluate(() => { const out = []; for (let i = idx - 45; i < idx - 5 && out.length < 2; i++) if (bars[i].time % 300 !== 0) { out.push(i); i += 12; } return out; });
-    await page.click('#drwTL');
+    await clickTool('#drwTL');
     await clickChart(await barX(ks[0]), geo.H * 0.45); await clickChart(await barX(ks[1]), geo.H * 0.6);
     const before = await page.evaluate(() => ({ n: drawings.length, t1: drawings[0] && drawings[0].p1.t, t2: drawings[0] && drawings[0].p2.t, onBar: drawings[0] && bars.some(b => Math.abs(b.time - drawings[0].p1.t) <= 8) }));
     await page.evaluate(() => { const s = document.getElementById('tfSelect'); s.value = '5'; s.dispatchEvent(new Event('change')); });

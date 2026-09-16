@@ -664,8 +664,10 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 /* ===================== Left drawing toolbar (TradingView-style vertical strip) ===================== */
 #leftbar{
   display:flex; flex-direction:column; align-items:center; gap:2px;
-  padding:6px 0; background:var(--bg); border-right:1px solid var(--line); overflow:hidden;
+  padding:6px 0; background:var(--bg); border-right:1px solid var(--line); overflow-y:auto; overflow-x:hidden; scrollbar-width:none;
 }
+#leftbar::-webkit-scrollbar{ display:none; }
+#leftbar > *{ flex:none; }   /* TV: buttons keep their size; the bar scrolls instead of squashing */
 .lt-btn{
   width:34px; height:34px; padding:0; display:inline-flex; align-items:center; justify-content:center;
   background:transparent; border:1px solid transparent; border-radius:6px; color:var(--dim);
@@ -1176,3 +1178,12 @@ input, select, button{ -webkit-tap-highlight-color:transparent; }
 
 /* ===================== NT8 is square everywhere ===================== */
 *{border-radius:0!important}
+
+/* TradingView-style tool flyout: icon + label + hotkey per row */
+.popover.lt-tools{ min-width:210px; }
+.popover.lt-tools .pop-row{ width:100%; background:transparent; border:0; text-align:left; font:inherit; color:var(--txt); }
+.popover.lt-tools .pop-row .material-symbols-outlined{ font-size:18px; color:var(--dim); }
+.popover.lt-tools .pop-row.active{ background:var(--hover); }
+.popover.lt-tools .pop-row.active .material-symbols-outlined{ color:var(--brand); }
+.popover.lt-tools .pop-lbl{ flex:1; }
+.popover.lt-tools .pop-key{ color:var(--dim); font-size:11px; }

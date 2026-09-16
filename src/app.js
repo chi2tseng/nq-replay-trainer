@@ -1481,7 +1481,7 @@ function handleDrawClick(t, time, price, y, ev) {   // time = free epoch seconds
     drawings.push(newDrawing({ type: 'rr', p1: { t: time, p: entry }, p2: { t: rb ? rb.time : time, p: entry }, stop, target, color: '' }));   // '' = default entry-line black until recoloured (G17)
     selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return;
   }
-  if (!pendingPt) { pendingPt = { t: time, p: price }; previewXY = null; repaintOverlays(); toast('Click the second point'); return; }
+  if (!pendingPt) { pendingPt = { t: time, p: price }; previewXY = null; repaintOverlays(); return; }   // TV shows no hint toast; the rubber-band preview is the cue
   drawings.push(newDrawing({ type: t, p1: pendingPt, p2: { t: time, p: price }, color: t === 'box' ? '#6495ED' : t === 'fib' ? '#CC4400' : t === 'measure' ? '' : '#000000' }));   // measure: '' = auto green/red until recoloured (G17)
   pendingPt = null; previewXY = null; selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw();
 }
@@ -1756,7 +1756,12 @@ function removeMarker(hit) {
   if (hit.src === 'ann') { snapshot(); annotations.splice(hit.i, 1); saveJSON('rt_annotations', annotations); } else markers.splice(hit.i, 1);
   refreshMarkers(); toast('Arrow removed');
 }
-function updateToolUI() { Object.values(TOOLBTN).forEach(id => { const b = $(id); if (b) b.classList.remove('active'); }); const b = $(TOOLBTN[tool]); if (b) b.classList.add('active'); const cur = $('toolCursor'); if (cur) cur.classList.toggle('active', !tool); $('chart').style.cursor = tool ? 'crosshair' : ''; }
+const LINE_TOOLS = { tl: ['show_chart', 'Trend line — click two points (Alt+T)'], ray: ['north_east', 'Ray — two points, extends in that direction'], hl: ['horizontal_rule', 'Horizontal line — one click (Alt+H)'], hray: ['line_start_circle', 'Horizontal ray — one click, extends right (Alt+J)'], vline: ['align_horizontal_center', 'Vertical line — one click, spans all panes (Alt+V)'], cross: ['add', 'Cross line — one click (Alt+C)'] };
+let lastLineTool = loadJSON('rt_lastline', 'tl'); if (!LINE_TOOLS[lastLineTool]) lastLineTool = 'tl';
+function syncLinesGroup() {   // TV: the group button shows the last-used line tool and lights up while one is armed
+  const g = $('drwLines'); if (!g) return; const [icon, title] = LINE_TOOLS[lastLineTool]; g.querySelector('span').textContent = icon; g.title = title; g.classList.toggle('active', !!LINE_TOOLS[tool]);
+}
+function updateToolUI() { Object.values(TOOLBTN).forEach(id => { const b = $(id); if (b) b.classList.remove('active'); }); const b = $(TOOLBTN[tool]); if (b) b.classList.add('active'); const cur = $('toolCursor'); if (cur) cur.classList.toggle('active', !tool); $('chart').style.cursor = tool ? 'crosshair' : ''; if (LINE_TOOLS[tool]) { lastLineTool = tool; saveJSON('rt_lastline', tool); } syncLinesGroup(); }
 function setTool(t) { tool = (tool === t) ? '' : t; pendingPt = null; previewXY = null; repaintOverlays(); updateToolUI(); }
 function draggableLines() { return orderLines().filter(o => o.drag).map(o => o.drag); }   // derived from the rendered order set (entry / stop / targets)
 function nearestLine(y) { let best = null, bd = 7; for (const L of draggableLines()) { const ly = candle.priceToCoordinate(L.get()); if (ly == null) continue; const d = Math.abs(ly - y); if (d < bd) { bd = d; best = L; } } return best; }
@@ -2038,6 +2043,9 @@ function initLeftbarMenus() {   // Hide + Remove flyouts, same open/close patter
   };
   wire('btnHideMenu', 'hidePopover', [['hideDrawings', () => toggleHide('drawings')], ['hideIndicators', () => toggleHide('indicators')], ['hidePositions', () => toggleHide('positions')], ['hideAll', () => toggleHide('all')]]);
   wire('btnRemoveMenu', 'removePopover', [['rmDrawings', clearDrawings], ['rmDrawingsInd', removeDrawingsAndIndicators]]);
+  wire('btnLinesMenu', 'linesPopover', Object.keys(LINE_TOOLS).map(t => [TOOLBTN[t], () => { if (tool !== t) setTool(t); }]));
+  const gl = $('drwLines'); if (gl) gl.onclick = () => setTool(lastLineTool);
+  syncLinesGroup();
   $('btnHideDrw').onclick = () => toggleHide('drawings');
   const al = $('rmAlwaysLocked'); if (al) { al.checked = alwaysRemoveLocked; al.onchange = (e) => { alwaysRemoveLocked = e.target.checked; saveJSON('rt_alwaysrmlocked', alwaysRemoveLocked); }; }
   hideBtnUI();
