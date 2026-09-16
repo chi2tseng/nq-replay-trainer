@@ -269,19 +269,28 @@ $('chart').addEventListener('dblclick', (e) => { if (overPriceAxis(e.clientX)) f
 
 // ---------- resizable layout (drag gutters to size #side width & #bottom height) ----------
 // Single source of truth = two CSS vars (--side-w, --bottom-h) the grid reads; JS just sets them.
-const LAYOUT_DEFAULTS = { side: 320, bottom: 252 }, LAYOUT_MIN = { side: 240, bottom: 130 }, SIDE_MIN_CHART = 420, BOTTOM_MIN_MAIN = 240, TOOLBAR_H = 46, GUTTER = 6;
+const LAYOUT_DEFAULTS = { side: 320, bottom: 252 }, LAYOUT_MIN = { side: 240, bottom: 96 }, SIDE_MIN_CHART = 420, BOTTOM_MIN_MAIN = 240, GUTTER = 6;
+function toolbarH() { const t = $('toolbar'); return t ? t.getBoundingClientRect().height : 46; }   // measured: the toolbar is 1-2 rows depending on width/pointer
+function tabsH() { const t = $('tabs'); return t ? Math.ceil(t.getBoundingClientRect().height) : 41; }   // tab strip only = the smallest useful bottom panel
 let layout = Object.assign({}, LAYOUT_DEFAULTS, loadJSON('rt_layout2', {}));   // rt_layout2: fresh key (old saved values were degenerate)
 // A hard 320px side panel is 25% of a 1280 laptop and 8% of a 4K screen. Until the user drags the
 // gutter themselves (layout.sideUser), the panel tracks the viewport instead — and goes back to
 // tracking it if they double-click the gutter to reset.
 function autoSideW() { return Math.round(Math.min(430, Math.max(300, window.innerWidth * 0.20))); }
-function autoBottomH() { return Math.round(Math.min(300, Math.max(170, window.innerHeight * 0.24))); }   // same idea vertically: 252px is a third of a 768-tall laptop
+function autoBottomH() {   // content-aware: an empty trades table needs no room; the dashboard needs at least 300 (46vh on a portrait tablet)
+  const vh = window.innerHeight, dash = $('panelDash') && !$('panelDash').classList.contains('hidden');
+  if (dash) return Math.round(Math.max(300, vh * (window.innerWidth < vh ? 0.46 : 0.24)));
+  if (!trades.length) return vh <= 800 ? tabsH() : 96;   // 720p/768p: a header-only table is dead space — tab strip only, the chart and #side get the 55px
+  const h = Math.round(Math.min(300, Math.max(170, vh * 0.24)));
+  return vh <= 800 ? Math.min(h, 170) : h;   // short laptops: cap the trades panel so the chart keeps >=460px
+}
 function clampLayout(L) {
   const vw = window.innerWidth, vh = window.innerHeight;
   const maxSide = Math.max(LAYOUT_MIN.side, vw - SIDE_MIN_CHART - GUTTER);
-  const maxBottom = Math.max(LAYOUT_MIN.bottom, vh - TOOLBAR_H - GUTTER - BOTTOM_MIN_MAIN);
+  const minBottom = Math.min(LAYOUT_MIN.bottom, tabsH());
+  const maxBottom = Math.max(minBottom, vh - toolbarH() - GUTTER - BOTTOM_MIN_MAIN);
   L.side = Math.round(Math.min(maxSide, Math.max(LAYOUT_MIN.side, L.side)));
-  L.bottom = Math.round(Math.min(maxBottom, Math.max(LAYOUT_MIN.bottom, L.bottom)));
+  L.bottom = Math.round(Math.min(maxBottom, Math.max(minBottom, L.bottom)));
   return L;
 }
 let _rzRAF = 0;
@@ -290,6 +299,8 @@ function applyLayout(persist) {
   if (!layout.bottomUser) layout.bottom = autoBottomH();
   clampLayout(layout);
   const r = document.documentElement.style;
+  const changed = r.getPropertyValue('--side-w') !== layout.side + 'px' || r.getPropertyValue('--bottom-h') !== layout.bottom + 'px';
+  if (!changed && !persist) return;   // called from every render — only touch the grid when a size actually moved
   r.setProperty('--side-w', layout.side + 'px');
   r.setProperty('--bottom-h', layout.bottom + 'px');
   if (persist) saveJSON('rt_layout2', { side: layout.side, bottom: layout.bottom, sideUser: !!layout.sideUser, bottomUser: !!layout.bottomUser });
@@ -530,9 +541,11 @@ function renderIndLegend(i) {
 let _modeBadgeTxt = null;
 function updateModeBadge() {   // what the tape really is: TBBO (trade+quote), TICK (trades only), or 15s chunks
   const el = $('modeBadge'); if (!el) return;
-  const t = tickMode ? (tickBid ? 'TBBO' : 'TICK') + (tickSrcLoaded ? ' · ' + tickSrcLoaded.toUpperCase() : '') : (baseBars.length ? '15s' : '');
+  const kind = tickMode ? (tickBid ? 'TBBO' : 'TICK') : (baseBars.length ? '15s' : ''), srcTag = tickMode && tickSrcLoaded ? tickSrcLoaded.toUpperCase() : '';
+  const t = kind + (srcTag ? ' · ' + srcTag : '');
   if (t === _modeBadgeTxt) return; _modeBadgeTxt = t;
-  el.textContent = t; el.className = 'mode-badge ' + (tickMode ? 'live' : 'coarse');
+  el.innerHTML = kind + (srcTag ? `<span class="mb-src"> · ${srcTag}</span>` : ''); el.className = 'mode-badge ' + (tickMode ? 'live' : 'coarse');   // <=1799 the CSS hides .mb-src
+  const sr = $('indSrc'); if (sr) sr.textContent = t ? (tickMode ? t : '15s bars') : '—';   // permanent, touch-reachable copy in the Indicators popover
   if (tickMode && curTickDay && dbTickDays.has(curTickDay) && ntTickDays.has(curTickDay)) el.classList.add('has-sel');   // the picker names the source; badge yields its slot
   const src = tickSrcLoaded === 'nt' ? 'NinjaTrader export' : 'Databento';
   el.title = tickMode ? (tickBid ? `${src} — every trade with the bid × ask in force before it; market orders cross the real spread` : `${src} — every trade; fills at the last print`) : '15-second bars — no intrabar tape on this day';
@@ -1432,9 +1445,9 @@ let annotations = loadJSON('rt_annotations', []);   // {baseTime, position, colo
 let drawings = loadJSON('rt_drawings', []);         // {type:'hl'|'tl'|'ray'|'box', p1:{t,p}, p2?:{t,p}, color}
 let pendingPt = null;                                // first click of a 2-point drawing
 const ANN = {
-  au:    { position: 'belowBar', color: '#21B116', shape: 'arrowUp',   text: '' },
+  au:    { position: 'belowBar', color: '#127209', shape: 'arrowUp',   text: '' },
   ad:    { position: 'aboveBar', color: '#D40605', shape: 'arrowDown', text: '' },
-  long:  { position: 'belowBar', color: '#21B116', shape: 'arrowUp',   text: 'LONG' },
+  long:  { position: 'belowBar', color: '#127209', shape: 'arrowUp',   text: 'LONG' },
   short: { position: 'aboveBar', color: '#D40605', shape: 'arrowDown', text: 'SHORT' },
 };
 const TOOLBTN = { start: 'btnPickStart', au: 'annUp', ad: 'annDown', long: 'annLong', short: 'annShort', hl: 'drwHL', tl: 'drwTL', ray: 'drwRay', box: 'drwBox', fib: 'drwFib', measure: 'drwMeasure', rr: 'drwRR' };
@@ -2639,8 +2652,8 @@ function quizAnswer(ans) {
   baseIdx = Math.min(baseBars.length - 1, Math.max(baseIdx, end));
   syncIdxFromBase(); hardReveal();
   markers = [                                                               // reveal what you actually did
-    { baseTime: q.entryTime, position: q.side === 'long' ? 'belowBar' : 'aboveBar', color: q.side === 'long' ? '#21B116' : '#D40605', shape: q.side === 'long' ? 'arrowUp' : 'arrowDown', text: `YOU ${q.side === 'long' ? 'LONG' : 'SHORT'} ${f2(q.entry)}` },
-    { baseTime: q.exitTime, position: q.side === 'long' ? 'aboveBar' : 'belowBar', color: q.pnl >= 0 ? '#21B116' : '#D40605', shape: q.side === 'long' ? 'arrowDown' : 'arrowUp', text: `${usd(q.pnl)}` }
+    { baseTime: q.entryTime, position: q.side === 'long' ? 'belowBar' : 'aboveBar', color: q.side === 'long' ? '#127209' : '#D40605', shape: q.side === 'long' ? 'arrowUp' : 'arrowDown', text: `YOU ${q.side === 'long' ? 'LONG' : 'SHORT'} ${f2(q.entry)}` },
+    { baseTime: q.exitTime, position: q.side === 'long' ? 'aboveBar' : 'belowBar', color: q.pnl >= 0 ? '#127209' : '#D40605', shape: q.side === 'long' ? 'arrowDown' : 'arrowUp', text: `${usd(q.pnl)}` }
   ];
   refreshMarkers(); fitRecent(110); renderAll();
   renderQuizCard();
@@ -2787,7 +2800,7 @@ function openPosition(side, px, t, atmName, mult, bracket) {
   orders = [];
   if (sl > 0) orders.push({ type: 'stop', price: stopPrice, qty: totalQty });
   tps.forEach(tg => orders.push({ type: 'target', ticks: tg.ticks, qty: tg.qty, price: tg.price }));
-  addMarker(t, side === 'long' ? 'belowBar' : 'aboveBar', side === 'long' ? '#21B116' : '#D40605', side === 'long' ? 'arrowUp' : 'arrowDown', `${side === 'long' ? 'L' : 'S'}${totalQty} ${f2(px)}`);
+  addMarker(t, side === 'long' ? 'belowBar' : 'aboveBar', side === 'long' ? '#127209' : '#D40605', side === 'long' ? 'arrowUp' : 'arrowDown', `${side === 'long' ? 'L' : 'S'}${totalQty} ${f2(px)}`);
   drawLines(); renderLive();
 }
 
@@ -2900,7 +2913,7 @@ function exitQty(q, px, t, type) {
   const pnl = netTicks * INSTR.tickValue * q;
   const risk = (position.slTicks || 0) * INSTR.tickValue * q;
   trades.push({ entryTime: position.entryTime, exitTime: t, side: position.side, qty: q, entry: position.entry, exit: px, ticks: netTicks, pnl, R: risk > 0 ? pnl / risk : null, atm: position.atm, exitType: type, tf: tfTicks ? 't' + tfTicks : (typeof tf === 'number' ? tf : BASE_TF), sym: INSTR.symbol, stop: position.stopPrice, stopTicks: position.slTicks, tps: (position.tps || []).map(p => ({ ticks: p.ticks, price: p.price })), planSl: position.planSl, planTp: position.planTp, planRR: position.planRR, chart: captureTradeChart(position.entryTime, t) });
-  addMarker(t, long ? 'aboveBar' : 'belowBar', pnl >= 0 ? '#21B116' : '#D40605', long ? 'arrowDown' : 'arrowUp', usd(pnl));
+  addMarker(t, long ? 'aboveBar' : 'belowBar', pnl >= 0 ? '#127209' : '#D40605', long ? 'arrowDown' : 'arrowUp', usd(pnl));
   saveJSON('rt_trades', trades);
   position.qty -= q;
   if (position.qty <= 0) { position = null; orders = []; }
@@ -2948,14 +2961,17 @@ function setShowTrades(on) {
 // ---------- rendering ----------
 function renderAll() { renderLive(); renderTrades(); renderDash(); }
 function renderLive() {
-  $('clock').textContent = baseBars.length ? (blindDate() ? tFmt(curBaseT()).replace(/^\d\d\/\d\d\s*/, '') : tFmt(curBaseT())) : '--:--';   // blind modes: time only, date hidden
+  { const ck = $('clock'), full = baseBars.length ? tFmt(curBaseT()) : '', tOnly = full.replace(/^\d\d\/\d\d\s*/, '');   // blind modes: time only, date hidden; <=1799 the CSS hides .ck-d too
+    ck.innerHTML = !full ? '--:--' : blindDate() ? tOnly : `<span class="ck-d">${full.slice(0, 6)}</span>${tOnly}`; ck.title = blindDate() ? '' : full; }
   $('clockPrice').textContent = baseBars.length ? f2(curPx()) : '--';
   const bt = $('bboTag');   // live BBO readout on TBBO days: the quote in force at the current print
   if (bt) {
-    if (tickBid && tickAsk && baseIdx < tickBid.length) {
+    const showBbo = !!(tickBid && tickAsk && baseIdx < tickBid.length);
+    if (showBbo) {
       bt.style.display = '';
-      bt.innerHTML = `<span style="color:#21B116">${f2(tickBid[baseIdx])}</span><span style="color:#58595B"> × </span><span style="color:#D40605">${f2(tickAsk[baseIdx])}</span>`;
+      bt.innerHTML = `<span class="bid">${f2(tickBid[baseIdx])}</span><span class="x"> × </span><span class="ask">${f2(tickAsk[baseIdx])}</span>`;
     } else bt.style.display = 'none';
+    $('clockPrice').style.display = showBbo ? 'none' : '';   // the last price is already the bid×ask midpoint — never show both
   }
   maybeUpdateVP();   // recompute the prior-day volume profile when the trading day changes
   updateAlertBar();  // keep the alert-time vertical line anchored to the current session
@@ -2993,7 +3009,8 @@ function renderLive() {
   const _db = $('dateBtn'); if (_db) _db.disabled = lock || rndMode;   // random mode keeps day-jump + scrub blinded
   const _pn = $('btnPrevDay'), _nn = $('btnNextDay'), _ps = $('btnPickStart');
   if (_pn) _pn.disabled = rndMode; if (_nn) _nn.disabled = rndMode; if (_ps) _ps.disabled = rndMode;
-  const _dl = $('dateLabel'); if (_dl) { const _s = sessions[currentSessionIdx()]; _dl.textContent = blindDate() ? '· · ·' : (_s ? _s.key : '—'); }
+  const _dl = $('dateLabel'); if (_dl) { const _s = sessions[currentSessionIdx()], _k = _s ? _s.key : '—';   // "2026-09-15": the year span is hidden <=1799, ISO stays in the title
+    _dl.innerHTML = blindDate() ? '· · ·' : (_k.length === 10 ? `<span class="dl-y">${_k.slice(0, 5)}</span>${_k.slice(5)}` : _k); if (_db) _db.title = 'Jump to trading day' + (blindDate() ? '' : ' — ' + _k); }
   $('entryPriceRow').style.display = $('entryType').value === 'market' ? 'none' : '';
   renderRiskReadout();
 }
@@ -3007,6 +3024,7 @@ function todayStats() {
 }
 function fmtPlanRR(t) { return t.planRR == null ? '–' : '1:' + (Math.round(t.planRR * 100) / 100).toFixed(2).replace(/\.?0+$/, ''); }   // "1:2" / "1:1.5" — the R:R planned at entry
 function renderTrades() {
+  applyLayout(false);   // bottom panel auto-height is content-aware (96px while empty)
   $('tradesTable').querySelector('tbody').innerHTML = trades.map((t, i) => `<tr>
     <td>${i + 1}</td><td class="${t.side === 'long' ? 'long-tag' : 'short-tag'}">${t.side === 'long' ? 'L' : 'S'}</td><td>${t.qty}</td>
     <td>${tFmt(t.entryTime)}</td><td>${tFmt(t.exitTime)}</td>
@@ -3156,9 +3174,9 @@ function drawTradeChart(c, t) {
   const head = `${t.sym || INSTR.symbol} · ${tfLab(t.tf)}`;
   ctx.fillStyle = '#E6E7E8'; ctx.fillRect(0, 0, W, TH);
   ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.font = '700 12px sans-serif'; ctx.fillStyle = '#000000'; ctx.fillText(head, L + 2, TH / 2);
-  ctx.fillStyle = long ? '#21B116' : '#D40605'; ctx.fillText(`  ${long ? 'LONG' : 'SHORT'} ${t.qty}`, L + 2 + ctx.measureText(head).width, TH / 2);
+  ctx.fillStyle = long ? '#127209' : '#D40605'; ctx.fillText(`  ${long ? 'LONG' : 'SHORT'} ${t.qty}`, L + 2 + ctx.measureText(head).width, TH / 2);
   if (W > 360) {
-    ctx.textAlign = 'right'; ctx.fillStyle = t.pnl >= 0 ? '#21B116' : '#D40605'; ctx.font = '700 12px ui-monospace,monospace';
+    ctx.textAlign = 'right'; ctx.fillStyle = t.pnl >= 0 ? '#127209' : '#D40605'; ctx.font = '700 12px ui-monospace,monospace';
     ctx.fillText(`${usd(t.pnl)} · ${t.ticks >= 0 ? '+' : ''}${t.ticks}t · ${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + 'R'}`, W - 6, TH / 2);
     ctx.textAlign = 'left';
   }
@@ -3308,8 +3326,8 @@ function drawEquity() {   // cumulative R (each trade's P&L divided by its own p
   ctx.font = '10px ui-monospace,monospace'; ctx.fillStyle = '#58595B'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
   const step = rng <= 4 ? 1 : rng <= 10 ? 2 : rng <= 25 ? 5 : 10;   // R grid lines
   for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) { ctx.strokeStyle = v === 0 ? '#BCBDBF' : '#EDEDED'; ctx.beginPath(); ctx.moveTo(PAD_L, y(v)); ctx.lineTo(W, y(v)); ctx.stroke(); ctx.fillText((v > 0 ? '+' : '') + v + 'R', PAD_L - 4, y(v)); }
-  ctx.strokeStyle = s >= 0 ? '#21B116' : '#D40605'; ctx.lineWidth = 1.5; ctx.beginPath(); eq.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))); ctx.stroke();
-  ctx.fillStyle = s >= 0 ? '#21B116' : '#D40605'; ctx.textAlign = 'left'; ctx.font = '700 11px ui-monospace,monospace';
+  ctx.strokeStyle = s >= 0 ? '#127209' : '#D40605'; ctx.lineWidth = 1.5; ctx.beginPath(); eq.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))); ctx.stroke();
+  ctx.fillStyle = s >= 0 ? '#127209' : '#D40605'; ctx.textAlign = 'left'; ctx.font = '700 11px ui-monospace,monospace';
   ctx.fillText(`${s >= 0 ? '+' : ''}${s.toFixed(2)}R · ${trades.length} trades`, PAD_L + 4, 10);
 }
 
@@ -3707,15 +3725,17 @@ const HELP_KEYS = [
   ['Orders', [['B', 'Buy market'], ['S', 'Sell market'], ['F', 'Buy stop above the bar'], ['J', 'Sell stop below the bar'], ['X', 'Flatten']]],
   ['Drawings', [['Esc', 'Drop tool / deselect'], ['Del', 'Delete selected drawing'], ['Shift+Del', 'Clear all drawings']]],
 ];
+const HELP_TOUCH = ['Touch', [['Tap ▶', 'Play / pause'], ['Tap ›', 'Next bar'], ['Drag chart', 'Pan'], ['Pinch', 'Zoom'], ['Drag seam', 'Resize panels'], ['Drag card', 'Move HUD / quiz card']]];
 function toggleHelp(on) {
   const el = $('helpModal'); if (!el) return;
   const open = on == null ? !el.classList.contains('open') : on;
   if (!open) { el.classList.remove('open'); el.innerHTML = ''; return; }
+  const touch = matchMedia('(pointer:coarse)').matches;   // tablets get a Touch column (no keys there)
   el.innerHTML = `<div class="dd-card help-card"><div class="dd-h"><span class="dd-date">Keyboard shortcuts</span><button class="mini ico-btn" id="helpClose"><span class="material-symbols-outlined">close</span></button></div>` +
-    `<div class="help-body">${HELP_KEYS.map(([g, rows]) => `<div class="help-grp"><div class="help-gh">${g}</div>${rows.map(([k, d]) => `<div class="help-row"><kbd>${k}</kbd><span>${d}</span></div>`).join('')}</div>`).join('')}</div></div>`;
+    `<div class="help-body${touch ? ' touch' : ''}">${(touch ? HELP_KEYS.concat([HELP_TOUCH]) : HELP_KEYS).map(([g, rows]) => `<div class="help-grp"><div class="help-gh">${g}</div>${rows.map(([k, d]) => `<div class="help-row"><kbd>${k}</kbd><span>${d}</span></div>`).join('')}</div>`).join('')}</div></div>`;
   el.classList.add('open'); $('helpClose').onclick = () => toggleHelp(false);
 }
-function switchTab(t) { $('tabTrades').classList.toggle('active', t); $('tabDash').classList.toggle('active', !t); $('panelTrades').classList.toggle('hidden', !t); $('panelDash').classList.toggle('hidden', t); if (!t) renderDash(); }
+function switchTab(t) { $('tabTrades').classList.toggle('active', t); $('tabDash').classList.toggle('active', !t); $('panelTrades').classList.toggle('hidden', !t); $('panelDash').classList.toggle('hidden', t); if (!t) renderDash(); applyLayout(false); }   // the bottom panel's auto height depends on the tab
 
 // debug hook (harmless; used for automated verification)
 window.__rt = { state: () => ({ tf, idx, baseIdx, bars: bars.length, base: baseBars.length, pos: position && { ...position }, orders: orders.map(o => ({ ...o })), entryOrder }), bar: (i) => bars[i], sub: (i) => baseBars[i], agg: (m) => aggregate(baseBars, m), dresize: (w, h) => chart.resize(w, h, true), sc: sizeChart, chartOpts: () => chart.options(), priceToY: (p) => candle.priceToCoordinate(p), coordToPrice: (y) => candle.coordinateToPrice(y), chartRect: () => $('chart').getBoundingClientRect(), setTool: (t) => setTool(t), getTool: () => tool, placeAnn: (t, time) => placeAnnotation(t, time), annCount: () => annotations.length, ripster: () => ({ on: ripsterOn, clouds: ripsterData.length }), drawCount: () => drawings.length, addDraw: (t, time, price) => handleDrawClick(t, time, price), rthOpenET: (i) => etMinutes(baseBars[rthOpenIdx(sessions[i])].time), nextDay, prevDay, curSession: () => currentSessionIdx(),
