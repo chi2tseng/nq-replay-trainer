@@ -206,7 +206,7 @@ chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } })
 // Volume histogram toggle (Indicators menu). On tick-count bars every bar holds ~the same volume, so the
 // histogram is a flat strip that only eats chart height: it auto-hides there regardless of the switch.
 let volOn = loadJSON('rt_vol', false);
-function applyVolVisible() { vol.applyOptions({ visible: !!volOn && !tfTicks }); const c = $('indVol'); if (c) { c.checked = volOn; c.disabled = !!tfTicks; c.title = tfTicks ? 'Hidden on tick-count bars' : ''; } }
+function applyVolVisible() { vol.applyOptions({ visible: !!volOn && !tfTicks && !hideFlags.indicators }); /* Hide > Indicators is a mask, volOn stays as set (G45) */ const c = $('indVol'); if (c) { c.checked = volOn; c.disabled = !!tfTicks; c.title = tfTicks ? 'Hidden on tick-count bars' : ''; } }
 function setVolOn(v) { volOn = !!v; saveJSON('rt_vol', volOn); applyVolVisible(); }
 function sizeChart() {
   const el = $('chart'); const w = el.clientWidth, h = el.clientHeight; if (!w || !h) return;
@@ -593,7 +593,7 @@ const ripsterPrimitive = {
   paneViews: () => [{
     zOrder: () => 'bottom',
     renderer: () => ({ draw: (target) => {
-      if (!ripsterOn || !ripsterData.length) return;
+      if (hideFlags.indicators || !ripsterOn || !ripsterData.length) return;   // G45
       try {
         target.useMediaCoordinateSpace((scope) => {
           const ctx = scope.context, ts = chart.timeScale(), range = ts.getVisibleLogicalRange();
@@ -779,7 +779,10 @@ function oscBuildSeries() {
     macdLine = oscChart.addLineSeries({ color: OSC_COL.macd, lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
     sigLine  = oscChart.addLineSeries({ color: OSC_COL.signal, lineWidth: 1, priceLineVisible: false, lastValueVisible: true });
   }
+  oscVlineAttach();   // vline / cross drawings span the oscillator pane (G37)
+  applyOscHidden();   // Hide > Indicators mask (G45) survives a series rebuild
 }
+function applyOscHidden() { [rsiSeries, macdHist, macdLine, sigLine, atrSeries, atrHalfSeries].forEach(s => { if (s) try { s.applyOptions({ visible: !hideFlags.indicators }); } catch (e) {} }); }
 
 // ---- reveal helpers (mirror the candle reveal) ---------------------------
 // full hard reveal: slice 0..idx, like hardReveal() does for the candle.
@@ -954,7 +957,7 @@ const indicatorPrimitive = {
   paneViews: () => [{
     zOrder: () => 'bottom',
     renderer: () => ({ draw: (target) => {
-      if (!vwapOn && !bbOn && !emaOn) return;
+      if (hideFlags.indicators || (!vwapOn && !bbOn && !emaOn)) return;   // G45 guard inside the draw callback (LWC repaints on pan / zoom without repaintOverlays)
       if (!bars.length) return;
       try {
         target.useMediaCoordinateSpace((scope) => {
@@ -1166,7 +1169,7 @@ const vpPrimitive = {
   attached(p) { this._req = () => p.requestUpdate(); },   // wrap: keep p as receiver so the repaint request can't lose its binding
   updateAllViews() {},
   paneViews: () => [{ zOrder: () => 'bottom', renderer: () => ({ draw: (target) => {
-    if ((!vpP.on || !vpPData) && (!vpO.on || !vpOData) && (!vpD.on || !vpDData)) return;
+    if (hideFlags.indicators || ((!vpP.on || !vpPData) && (!vpO.on || !vpOData) && (!vpD.on || !vpDData))) return;   // G45
     try {
       target.useMediaCoordinateSpace((scope) => {
         const ctx = scope.context, ts = chart.timeScale(), paneW = (scope.mediaSize && scope.mediaSize.width) || 99999;
@@ -1188,44 +1191,141 @@ function setVpCfg(which, patch) {   // which: 'p'|'o'|'d' — toggle or recolor 
 }
 
 // ---------- drawings (horizontal line / trend line / ray / rectangle) ----------
+// ---- drawing coordinate layer (TV_DRAWING_GAP Stage 1) ----
+// Drawings store {t,p} = real epoch seconds + price (SPEC §7: TV binds to timestamps, never bar index).
+// Rendering maps t -> a FRACTIONAL logical index computed on the fly (relative to seriesFrom, which
+// feedWindow()/maybeReWindow() move -> never store it) so a point can sit between bars, after the last
+// bar (future space, G7) or on a time that no longer exists after a timeframe switch (G47).
+function barSpanSec() {   // seconds per bar: from tf for time bars; median gap of the last bars for tick bars
+  const n = bars.length;
+  if (!tfTicks && tf > 0) return Math.round(tf * 60);
+  const gaps = []; for (let i = Math.max(1, n - 20); i < n; i++) { const g = bars[i].time - bars[i - 1].time; if (g > 0) gaps.push(g); }
+  if (!gaps.length) return 60;
+  gaps.sort((a, b) => a - b); return gaps[gaps.length >> 1];
+}
+function barIndexLE(t) {   // index of the last bar with time <= t (binary search), -1 if t precedes bars[0]
+  let lo = 0, hi = bars.length - 1, r = -1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (bars[m].time <= t) { r = m; lo = m + 1; } else hi = m - 1; }
+  return r;
+}
+function nearestBarIdx(t) {   // G47: nearest bar by |dt| — binary-search insertion point, then compare the two neighbours
+  const n = bars.length; if (!n || t == null) return -1;
+  const i = barIndexLE(t);
+  if (i < 0) return 0; if (i >= n - 1) return n - 1;
+  return (t - bars[i].time) <= (bars[i + 1].time - t) ? i : i + 1;
+}
+function nearestBarTime(t) { const i = nearestBarIdx(t); return i < 0 ? null : bars[i].time; }
+function timeToLogical(t) {   // t -> fractional logical index relative to the fed window (exact / interpolated / extrapolated)
+  const n = bars.length; if (!n || t == null) return null;
+  const i = barIndexLE(t);
+  if (i < 0) return (t - bars[0].time) / barSpanSec() - seriesFrom;
+  if (bars[i].time === t) return i - seriesFrom;
+  if (i >= n - 1) return (n - 1 - seriesFrom) + (t - bars[n - 1].time) / barSpanSec();
+  return (i - seriesFrom) + (t - bars[i].time) / (bars[i + 1].time - bars[i].time);
+}
+function logicalToTime(lg) {   // inverse of timeToLogical (used by free-time placement, Stage 2)
+  const n = bars.length; if (!n || lg == null) return null;
+  const a = lg + seriesFrom;
+  if (a <= 0) return bars[0].time + a * barSpanSec();
+  if (a >= n - 1) return bars[n - 1].time + (a - (n - 1)) * barSpanSec();
+  const i = Math.floor(a); return bars[i].time + (a - i) * (bars[i + 1].time - bars[i].time);
+}
+function logicalToX(ts, lg) {   // LWC v4 logicalToCoordinate() returns 0 for a NON-integer logical (integer guard in the lib), so interpolate between floor/ceil
+  if (lg == null || !isFinite(lg)) return null;
+  const f = Math.floor(lg), a = ts.logicalToCoordinate(f), b = ts.logicalToCoordinate(f + 1);
+  if (a == null || b == null) return null;
+  return a + (lg - f) * (b - a);
+}
+function drawX(t) {   // time -> x on the main chart: logical path (sub-bar + future space), nearest-bar fallback (G7 + G47)
+  const ts = chart.timeScale(), c = logicalToX(ts, timeToLogical(t));
+  if (c != null && isFinite(c)) return c;
+  const nt = nearestBarTime(t); const c2 = nt == null ? null : ts.timeToCoordinate(nt);
+  return c2 != null && isFinite(c2) ? c2 : null;
+}
+function drawY(p) {   // price -> y. LWC v4 priceToCoordinate is a linear map that already extrapolates outside the visible range (null only while the series is empty)
+  if (p == null) return null;
+  const y = candle.priceToCoordinate(p); return y != null && isFinite(y) ? y : null;
+}
 const drawingsPrimitive = {
   attached(p) { this._req = p.requestUpdate; },
   updateAllViews() {},
   paneViews: () => [{
     zOrder: () => 'top',
     renderer: () => ({ draw: (target) => {
-      if (!drawings.length && !pendingPt) return;
+      if (hideFlags.drawings || (!drawings.length && !pendingPt)) { placeDrawToolbar(null); window.__drwDbg = { hidden: !!hideFlags.drawings, drawn: 0, handles: 0 }; return; }   // G33/G45: guard lives INSIDE the draw callback
       try {
         target.useMediaCoordinateSpace((scope) => {
-          const ctx = scope.context, W = scope.mediaSize.width, ts = chart.timeScale();
-          const X = (t) => ts.timeToCoordinate(t), Y = (p) => candle.priceToCoordinate(p);
-          for (const d of drawings) {
-            ctx.strokeStyle = d.color; ctx.fillStyle = d.color; ctx.lineWidth = 1.5;
-            if (d.type === 'hl') { const y = Y(d.p1.p); if (y == null) continue; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); continue; }
+          const ctx = scope.context, W = scope.mediaSize.width, H = (scope.mediaSize && scope.mediaSize.height) || 9999;
+          const X = drawX, Y = drawY, dbg = { lastX: null, drawn: 0, handles: 0 }, px = (v) => v == null ? null : Math.round(v - 0.75) + 0.75;   // 1.5px line centred at n+0.75 covers one full column + one half -> crisp (integer centre would split 75%/75%)
+          const bb = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity, n: 0, bad: false };   // selection bbox (pixels) -> #drawToolbar anchor (G13); any null coordinate marks it bad -> toolbar hidden
+          const bbAdd = (x, y) => { if (x == null || y == null) { bb.bad = true; return; } bb.n++; bb.x0 = Math.min(bb.x0, x); bb.y0 = Math.min(bb.y0, y); bb.x1 = Math.max(bb.x1, x); bb.y1 = Math.max(bb.y1, y); };
+          for (const d of drawings) {   // axis-aligned one-point lines render at Math.round() pixels (crisp, like TV); free {t,p} stays fractional in the data
+            if (!drawingVisible(d)) continue;   // G42 per-timeframe visibility / hidden flag (continue, never return: the handle pass below shares this callback)
+            applyStyle(ctx, d); dbg.drawn++;
+            const sel = isSelected(d) || d === hoverDrawing;   // G12: measure / rr draw their own grab points only when selected or hovered
+            if (d.type === 'hl') { const y = px(Y(d.p1.p)); if (y == null) continue; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); continue; }
+            if (d.type === 'vline') { const x = px(X(d.p1.t)); if (x == null) continue; dbg.lastX = x; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); continue; }   // G37: time only, full height (oscChart pane via oscVlinePrimitive)
+            if (d.type === 'hray') { const x = px(X(d.p1.t)), y = px(Y(d.p1.p)); if (x == null || y == null) continue; dbg.lastX = x; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(W, y); ctx.stroke(); continue; }   // G36: one point, extends right only
+            if (d.type === 'cross') { const x = px(X(d.p1.t)), y = px(Y(d.p1.p)); if (x == null || y == null) continue; dbg.lastX = x; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); continue; }   // G38: full-width + full-height through one point
             if (d.type === 'fib') { drawFib(ctx, d, X, Y, W); continue; }
-            if (d.type === 'measure') { drawMeasure(ctx, d, X, Y); continue; }
-            if (d.type === 'rr') { drawRR(ctx, d, X, Y, W); continue; }
+            if (d.type === 'measure') { drawMeasure(ctx, d, X, Y, sel); continue; }
+            if (d.type === 'rr') { drawRR(ctx, d, X, Y, W, sel); continue; }
             const x1 = X(d.p1.t), y1 = Y(d.p1.p), x2 = X(d.p2.t), y2 = Y(d.p2.p);
             if (x1 == null || y1 == null || x2 == null || y2 == null) continue;
-            if (d.type === 'box') { const x = Math.min(x1, x2), y = Math.min(y1, y2), w = Math.abs(x2 - x1), h = Math.abs(y2 - y1); ctx.globalAlpha = 0.12; ctx.fillRect(x, y, w, h); ctx.globalAlpha = 1; ctx.strokeRect(x, y, w, h); }
-            else { ctx.beginPath(); ctx.moveTo(x1, y1); if (d.type === 'ray') { const dx = x2 - x1, dy = y2 - y1, tx = dx >= 0 ? W : 0, s = dx !== 0 ? (tx - x1) / dx : 0; ctx.lineTo(dx !== 0 ? tx : x2, dx !== 0 ? y1 + dy * s : y2); } else ctx.lineTo(x2, y2); ctx.stroke(); }
+            dbg.lastX = x1;
+            if (d.type === 'box') {   // G39: Extend left/right clamp each side independently to the chart edge; Middle line = horizontal line at the price midpoint (TV does not state the direction; assumed horizontal)
+              const r = boxRect(d, x1, y1, x2, y2, W); ctx.globalAlpha = 0.12; ctx.fillRect(r.x, r.y, r.w, r.h); ctx.globalAlpha = 1; ctx.strokeRect(r.x, r.y, r.w, r.h);
+              if (d.middleLine) { const ym = Y((d.p1.p + d.p2.p) / 2); if (ym != null) { ctx.beginPath(); ctx.moveTo(r.x, ym); ctx.lineTo(r.x + r.w, ym); ctx.stroke(); } }
+            } else {   // tl / ray: Extend none/left/right/both (G34) via pixel extrapolation; optional arrowheads at the visible ends
+              const s = tlSeg(d, x1, y1, x2, y2, W, H); ctx.beginPath(); ctx.moveTo(s.ax, s.ay); ctx.lineTo(s.bx, s.by); ctx.stroke();
+              if (d.arrowStart) arrowHead(ctx, s.bx, s.by, s.ax, s.ay, ctx.lineWidth); if (d.arrowEnd) arrowHead(ctx, s.ax, s.ay, s.bx, s.by, ctx.lineWidth);
+            }
           }
-          // editable anchor handles (small dots) so placed drawings can be grabbed + dragged
+          ctx.setLineDash([]); ctx.lineWidth = 1.5;
+          // anchor handles only for the hovered drawing (white) and the selected set (blue) — G12 / G19
+          const hpts = (d) => {
+            if (d.type === 'hl') return [{ x: W / 2, y: Y(d.p1.p) }];
+            if (d.type === 'vline') return [{ x: X(d.p1.t), y: H / 2 }];
+            if (d.type === 'rr') { const { xa, xb } = rrRange(d, X); return [xa, xb].flatMap(x => [{ x, y: Y(d.p1.p) }, { x, y: Y(d.stop) }, { x, y: Y(d.target) }]); }
+            const out = [{ x: X(d.p1.t), y: Y(d.p1.p) }]; if (d.p2) out.push({ x: X(d.p2.t), y: Y(d.p2.p) });
+            if (d.type === 'box' && d.p2) out.push({ x: X(d.p2.t), y: Y(d.p1.p) }, { x: X(d.p1.t), y: Y(d.p2.p) });
+            return out;
+          };
+          if (hoverDrawing && !isSelected(hoverDrawing) && drawings.includes(hoverDrawing) && drawingVisible(hoverDrawing) && hoverDrawing.type !== 'measure' && hoverDrawing.type !== 'rr') {
+            for (const pt of hpts(hoverDrawing)) { if (pt.x == null || pt.y == null) continue; ctx.beginPath(); ctx.arc(pt.x, pt.y, 3.5, 0, 7); ctx.fillStyle = '#FFFFFF'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = (hoverDrawing.style && hoverDrawing.style.color) || hoverDrawing.color || '#000000'; ctx.stroke(); dbg.handles++; }
+          }
           for (const d of drawings) {
-            if (d.type === 'hl' || d.type === 'measure' || d.type === 'rr') continue;   // these draw their own grab points / lines
-            const hs = [d.p1]; if (d.p2) hs.push(d.p2);
-            if (d.type === 'box' && d.p2) { hs.push({ t: d.p2.t, p: d.p1.p }, { t: d.p1.t, p: d.p2.p }); }
-            for (const pt of hs) { const hx = X(pt.t), hy = Y(pt.p); if (hx == null || hy == null) continue; ctx.beginPath(); ctx.arc(hx, hy, 3.5, 0, 7); ctx.fillStyle = '#FFFFFF'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = d.color || '#000000'; ctx.stroke(); }
+            if (!isSelected(d) || !drawingVisible(d)) continue;
+            const pts = hpts(d); if (!pts.length) bb.bad = true;
+            for (const pt of pts) {
+              bbAdd(pt.x, pt.y); if (pt.x == null || pt.y == null) continue;
+              if (d.type === 'measure' || d.type === 'rr') continue;   // those renderers already drew their selected-state handles
+              ctx.beginPath(); ctx.arc(pt.x, pt.y, 5, 0, 7); ctx.fillStyle = '#6495ED'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = '#000000'; ctx.stroke(); dbg.handles++;
+            }
+            if (d.type === 'hl') { bb.x0 = 0; bb.x1 = W; } if (d.type === 'vline') { bb.y0 = 0; bb.y1 = H; }
           }
-          // selected drawing: emphasise its anchors in brand amber (signals selected + draggable + deletable)
-          if (selDrawing && drawings.includes(selDrawing)) {
-            const d = selDrawing, hpts = [];
-            if (d.type === 'hl') hpts.push({ t: null, p: d.p1.p });
-            else if (d.type === 'rr') { hpts.push({ t: d.p1.t, p: d.p1.p }, { t: d.p1.t, p: d.stop }, { t: d.p1.t, p: d.target }); }
-            else { if (d.p1) hpts.push(d.p1); if (d.p2) hpts.push(d.p2); }
-            for (const pt of hpts) { const hx = pt.t == null ? W / 2 : X(pt.t), hy = Y(pt.p); if (hx == null || hy == null) continue; ctx.beginPath(); ctx.arc(hx, hy, 5, 0, 7); ctx.fillStyle = '#6495ED'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = '#000000'; ctx.stroke(); }
-          }
+          dbg.bbox = bb.n ? { ...bb } : null;
           if (pendingPt) { const x = X(pendingPt.t), y = Y(pendingPt.p); if (x != null && y != null) { ctx.fillStyle = '#CC4400'; ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fill(); } }
+          // G2 rubber-band preview: first point -> cursor, in pixel space (no time/price round-trip) while the second click is pending
+          if (pendingPt && previewXY && tool) {
+            const x1 = X(pendingPt.t), y1 = Y(pendingPt.p), x2 = previewXY.x, y2 = previewXY.y;
+            dbg.preview = null;
+            if (x1 != null && y1 != null) {
+              dbg.preview = { x1, y1, x2, y2, tool };
+              ctx.save(); ctx.lineWidth = 1.5;
+              if (tool === 'fib' || tool === 'measure') {   // these renderers need {t,p} for their level labels / delta text: hand them a throw-away p2
+                const tmp = { type: tool, p1: pendingPt, p2: { t: xToFreeTime(x2), p: candle.coordinateToPrice(y2) }, color: tool === 'fib' ? '#CC4400' : '' };
+                if (tmp.p2.t != null && tmp.p2.p != null) { if (tool === 'fib') drawFib(ctx, tmp, X, Y, W); else drawMeasure(ctx, tmp, X, Y); }
+              } else {
+                ctx.strokeStyle = tool === 'box' ? '#6495ED' : '#000000'; ctx.fillStyle = ctx.strokeStyle;   // same look as the finished object (TV previews with the final style)
+                if (tool === 'box') { const x = Math.min(x1, x2), y = Math.min(y1, y2), w = Math.abs(x2 - x1), h = Math.abs(y2 - y1); ctx.globalAlpha = 0.12; ctx.fillRect(x, y, w, h); ctx.globalAlpha = 1; ctx.strokeRect(x, y, w, h); }
+                else { ctx.beginPath(); ctx.moveTo(x1, y1); if (tool === 'ray') { const e = rayEnd(x1, y1, x2, y2, W, H); ctx.lineTo(e.x, e.y); } else ctx.lineTo(x2, y2); ctx.stroke(); }
+              }
+              ctx.restore();
+            }
+          }
+          dbg.toolbar = placeDrawToolbar(bb, W, H);   // G13: floating toolbar follows the selection bbox on every paint (pan / zoom / replay), hidden when off-screen or a coordinate is null
+          window.__drwDbg = dbg;
         });
         window.__drw = { n: ((window.__drw || {}).n || 0) + 1, ok: true };
       } catch (e) { window.__drw = { err: String(e) }; }
@@ -1233,6 +1333,64 @@ const drawingsPrimitive = {
   }],
 };
 if (candle.attachPrimitive) candle.attachPrimitive(drawingsPrimitive);
+// ray end point on the chart edge, shared by renderer + hit-test (G35: dx===0 extends vertically instead of stopping at p2)
+function rayEnd(x1, y1, x2, y2, W, H) {
+  const dx = x2 - x1, dy = y2 - y1;
+  if (dx === 0) return { x: x1, y: dy >= 0 ? H : 0 };
+  const tx = dx >= 0 ? W : 0; return { x: tx, y: y1 + dy * ((tx - x1) / dx) };
+}
+// trend line / ray end points after Extend (G34): 'left'/'right' are screen sides; a ray always extends past p2. Shared by renderer + hit-test.
+function tlSeg(d, x1, y1, x2, y2, W, H) {
+  const ex = d.extend || 'none';
+  const extA = ex === 'both' || (ex === 'left' ? x1 <= x2 : ex === 'right' ? x1 > x2 : false);
+  const extB = d.type === 'ray' || ex === 'both' || (ex === 'right' ? x2 >= x1 : ex === 'left' ? x2 < x1 : false);
+  const a = extA ? rayEnd(x2, y2, x1, y1, W, H) : { x: x1, y: y1 }, b = extB ? rayEnd(x1, y1, x2, y2, W, H) : { x: x2, y: y2 };
+  return { ax: a.x, ay: a.y, bx: b.x, by: b.y };
+}
+function boxRect(d, x1, y1, x2, y2, W) {   // G39: Extend left / right clamp each side to the chart edge independently
+  const l = d.extendLeft ? 0 : Math.min(x1, x2), r = d.extendRight ? W : Math.max(x1, x2);
+  return { x: l, y: Math.min(y1, y2), w: Math.max(0, r - l), h: Math.abs(y2 - y1) };
+}
+function arrowHead(ctx, fx, fy, tx, ty, lw) {   // filled triangle at (tx,ty) pointing away from (fx,fy)
+  const a = Math.atan2(ty - fy, tx - fx), L = 7 + (lw || 1.5) * 2.5, w = Math.PI / 7;
+  ctx.save(); ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(tx - L * Math.cos(a - w), ty - L * Math.sin(a - w)); ctx.lineTo(tx - L * Math.cos(a + w), ty - L * Math.sin(a + w)); ctx.closePath(); ctx.fill(); ctx.restore();
+}
+const DASHES = [[], [6, 4], [2, 3]];   // style.dash: 0 solid, 1 dashed, 2 dotted
+function dashArr(v) { return DASHES[v | 0] || []; }
+function styleColor(d, fallback) { return (d.style && d.style.color) || d.color || fallback || '#000000'; }
+function applyStyle(ctx, d) { const s = d.style || {}; ctx.strokeStyle = ctx.fillStyle = styleColor(d); ctx.lineWidth = s.width || 1.5; ctx.setLineDash(dashArr(s.dash)); }
+function shiftConstrain(t, x1, y1, x2, y2) {   // Shift while placing the 2nd point: trend line snaps to the nearest 45° multiple (G14), rectangle becomes a square (G16). Pixel space.
+  const dx = x2 - x1, dy = y2 - y1;
+  if (t === 'box') { const m = Math.max(Math.abs(dx), Math.abs(dy)); return { x: x1 + (dx < 0 ? -m : m), y: y1 + (dy < 0 ? -m : m) }; }
+  const L = Math.hypot(dx, dy), a = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+  return { x: x1 + L * Math.cos(a), y: y1 + L * Math.sin(a) };
+}
+const SHIFT_TOOLS = { tl: 1, ray: 1, box: 1, fib: 1, measure: 1 };
+// G37: vertical lines must cross the oscillator pane too — oscChart is a separate createChart() instance whose
+// time scale is kept in logical-range sync with the main chart, so the same fractional logical maps to the same column.
+const oscVlinePrimitive = {
+  attached(p) { this._req = p.requestUpdate; },
+  updateAllViews() {},
+  paneViews: () => [{ zOrder: () => 'top', renderer: () => ({ draw: (target) => {
+    if (!oscChart || !drawings.length || hideFlags.drawings) return;   // G45
+    try { target.useMediaCoordinateSpace((scope) => {
+      const ctx = scope.context, H = (scope.mediaSize && scope.mediaSize.height) || 9999, ts = oscChart.timeScale(), dbg = { lastX: null };
+      // the osc series starts late (indicator warm-up), so its logical 0 is NOT the main chart's: anchor on the last revealed bar BY TIME
+      // (exactly what the crosshair mirror does) and walk fractional logicals from there with the osc pane's own bar spacing
+      const at = bars[Math.min(idx, bars.length - 1)]; if (!at) return;
+      const xa = ts.timeToCoordinate(at.time), la = timeToLogical(at.time), sp = ts.options().barSpacing;
+      if (xa == null || la == null || !sp) return;
+      for (const d of drawings) {
+        if ((d.type !== 'vline' && d.type !== 'cross') || !drawingVisible(d)) continue;
+        const lg = timeToLogical(d.p1.t); if (lg == null) continue;
+        const x = Math.round(xa + (lg - la) * sp - 0.75) + 0.75; dbg.lastX = x;
+        applyStyle(ctx, d); ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); ctx.setLineDash([]);
+      }
+      window.__drwOscDbg = dbg;
+    }); window.__drwOsc = { ok: true }; } catch (e) { window.__drwOsc = { err: String(e) }; }
+  } }) }],
+};
+function oscVlineAttach() { const s = rsiSeries || macdLine || atrSeries; if (s && s.attachPrimitive) s.attachPrimitive(oscVlinePrimitive); }
 
 // ---------- Tradovate-style order bracket: full-width lines + draggable tags w/ live $ + cancel ✕ ----------
 let orderHits = [];   // tag cancel hit-boxes captured each paint: {spec, x, y, w, h}
@@ -1296,6 +1454,7 @@ const orderPrimitive = {
   attached(p) { this._req = p.requestUpdate; },
   updateAllViews() {},
   paneViews: () => [{ zOrder: () => 'top', renderer: () => ({ draw: (target) => {
+    if (hideFlags.positions) { orderHits = []; return; }   // G45 Hide > Positions and orders (no tags -> no ✕ hit-boxes either)
     try { target.useMediaCoordinateSpace((scope) => drawOrderBrackets(scope.context, scope.mediaSize.width)); window.__ord = { n: ((window.__ord || {}).n || 0) + 1, ok: true }; }
     catch (e) { window.__ord = { err: String(e) }; }
   } }) }],
@@ -1303,61 +1462,102 @@ const orderPrimitive = {
 if (candle.attachPrimitive) candle.attachPrimitive(orderPrimitive);
 function orderRepaint() { if (orderPrimitive._req) orderPrimitive._req(); }
 function orderCancelAt(x, y) { for (const hb of orderHits) { if (x >= hb.x && x <= hb.x + hb.w && y >= hb.y && y <= hb.y + hb.h) return hb.spec; } return null; }
-function repaintOverlays() { if (ripsterPrimitive._req) ripsterPrimitive._req(); if (drawingsPrimitive._req) drawingsPrimitive._req(); indicatorRepaint(); orderRepaint(); }
-function handleDrawClick(t, time, price) {
-  price = magnetPrice(time, price);   // magnet on -> snap to nearest OHLC; off -> rnd(price)
-  if (t === 'hl') { drawings.push({ type: 'hl', p1: { t: time, p: price }, color: '#000000' }); selDrawing = drawings[drawings.length - 1]; saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return; }
+function repaintOverlays() { if (ripsterPrimitive._req) ripsterPrimitive._req(); if (drawingsPrimitive._req) drawingsPrimitive._req(); if (oscChart && oscVlinePrimitive._req) oscVlinePrimitive._req(); indicatorRepaint(); orderRepaint(); }
+function handleDrawClick(t, time, price, y, ev) {   // time = free epoch seconds (xToFreeTime), price = free; y + ev (modifier keys) feed the magnet (G5/G6/G8/G9)
+  const snap = magnetSnap(time, price, y, !!(ev && (ev.ctrlKey || ev.metaKey))); time = snap.t; price = snap.p;
+  if (pendingPt && ev && ev.shiftKey && SHIFT_TOOLS[t]) {   // G14 / G16: Shift constrains the 2nd point in pixel space, then back to free {t,p}
+    const x1 = drawX(pendingPt.t), y1 = drawY(pendingPt.p), x2 = drawX(time), y2 = drawY(price);
+    if (x1 != null && y1 != null && x2 != null && y2 != null) { const c = shiftConstrain(t, x1, y1, x2, y2), nt = xToFreeTime(c.x), np = candle.coordinateToPrice(c.y); if (nt != null && np != null) { time = nt; price = np; } }
+  }
+  if (pendingPt || t === 'hl' || t === 'vline' || t === 'hray' || t === 'cross' || t === 'rr') snapshot();   // G21: every branch below that pushes a drawing (the first click of a 2-point tool only arms pendingPt)
+  if (t === 'hl') { drawings.push(newDrawing({ type: 'hl', p1: { t: time, p: price }, color: '#000000' })); selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return; }
+  if (t === 'vline') { drawings.push(newDrawing({ type: 'vline', p1: { t: time }, color: '#000000' })); selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return; }   // G37: time only
+  if (t === 'hray' || t === 'cross') { drawings.push(newDrawing({ type: t, p1: { t: time, p: price }, color: '#000000' })); selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return; }   // G36 / G38: one point
   if (t === 'rr') {   // Long/Short position — ONE click: entry here, default risk below, target at 2R (then drag to adjust)
     const entry = price, riskT = rrDefaultRiskTicks();
     const stop = rnd(entry - riskT * TICK), target = rnd(entry + riskT * RR_DEFAULT * TICK);
-    const ci = bars.findIndex(b => b.time === time), hi = Math.min(idx, bars.length - 1);
+    const ci = nearestBarIdx(time), hi = Math.min(idx, bars.length - 1);
     const rb = bars[Math.max(0, Math.min(hi, (ci < 0 ? hi : ci) + 20))];
-    drawings.push({ type: 'rr', p1: { t: time, p: entry }, p2: { t: rb ? rb.time : time, p: entry }, stop, target, color: '#CC4400' });
-    selDrawing = drawings[drawings.length - 1]; saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return;
+    drawings.push(newDrawing({ type: 'rr', p1: { t: time, p: entry }, p2: { t: rb ? rb.time : time, p: entry }, stop, target, color: '' }));   // '' = default entry-line black until recoloured (G17)
+    selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return;
   }
-  if (!pendingPt) { pendingPt = { t: time, p: price }; repaintOverlays(); toast('Click the second point'); return; }
-  drawings.push({ type: t, p1: pendingPt, p2: { t: time, p: price }, color: t === 'box' ? '#6495ED' : t === 'fib' ? '#CC4400' : '#000000' });
-  pendingPt = null; selDrawing = drawings[drawings.length - 1]; saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw();
+  if (!pendingPt) { pendingPt = { t: time, p: price }; previewXY = null; repaintOverlays(); toast('Click the second point'); return; }
+  drawings.push(newDrawing({ type: t, p1: pendingPt, p2: { t: time, p: price }, color: t === 'box' ? '#6495ED' : t === 'fib' ? '#CC4400' : t === 'measure' ? '' : '#000000' }));   // measure: '' = auto green/red until recoloured (G17)
+  pendingPt = null; previewXY = null; selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw();
 }
 function clearDrawings() {   // wipe everything drawn with the toolbar: lines / rays / h-lines / boxes / fib / measure / R:R AND the up/down/long/short arrow markers
   const n = drawings.length + annotations.length;
   if (!n) return toast('No drawings to clear');
   if (!confirm(`Clear all ${n} drawing${n === 1 ? '' : 's'} (lines, shapes, arrows) from the chart?`)) return;
-  drawings = []; pendingPt = null; selDrawing = null; annotations = [];
+  wipeDrawings(); toast(`Cleared ${n} drawing${n === 1 ? '' : 's'}`);
+}
+function wipeDrawings() {   // no confirm: shared by Remove Drawings / Remove Drawings & Indicators (G46); undo-able (G21)
+  snapshot(); drawings = []; pendingPt = null; clearSelection(); hoverDrawing = null; annotations = [];
   saveJSON('rt_drawings', drawings); saveJSON('rt_annotations', annotations);
-  repaintOverlays(); refreshMarkers(); toast(`Cleared ${n} drawing${n === 1 ? '' : 's'}`);
+  if ($('drawSettings').classList.contains('open')) closeDrawSettings(); repaintOverlays(); refreshMarkers(true);
+}
+function resetAllIndicators() {   // G46: every indicator off THROUGH its own setter (the checkboxes only work via their onchange handlers), then mirror the checkbox state
+  setVwap(false); setBB(false); setEMA(false); setVolOn(false);
+  ripsterOn = false; saveJSON('rt_ripster', false); ripsterRepaint(); const rt = $('ripsterToggle'); if (rt) rt.checked = false;
+  setVpCfg('p', { on: false }); setVpCfg('o', { on: false }); setVpCfg('d', { on: false });
+  setOscMode('off'); const os = $('oscSelect'); if (os) os.value = 'off';
+  [['indVwap', false], ['indBB', false], ['indEma', false], ['indVol', false], ['indVpP', false], ['indVpO', false], ['indVpD', false]].forEach(([id, v]) => { const c = $(id); if (c) c.checked = v; });
+  if (typeof renderIndLegend === 'function') renderIndLegend();
+}
+function removeDrawingsAndIndicators() {
+  const n = drawings.length + annotations.length;
+  if (!confirm(`Remove all drawings${n ? ` (${n})` : ''} AND switch every indicator off?`)) return;
+  wipeDrawings(); resetAllIndicators(); toast('Drawings & indicators removed');
 }
 // ---- Fibonacci retracement (drawing type 'fib', 2-point) ----
 const FIB_LEVELS = [
   { lv: 0, c: '#58595B' }, { lv: 0.236, c: '#0B5FA5' }, { lv: 0.382, c: '#1E8A1E' }, { lv: 0.5, c: '#B26A00' },
   { lv: 0.618, c: '#C2185B' }, { lv: 0.786, c: '#7B1FA2' }, { lv: 1, c: '#0F7A6B' }, { lv: 1.272, c: '#B30000' }, { lv: 1.618, c: '#000000' },
 ];
-const FIB_FILL_A = 0.05, FIB_LINE_A = 0.85;
+const FIB_FILL_A = 0.05, FIB_LINE_A = 0.85, FIB_DEFAULT = [0.236, 0.382, 0.618, 1];   // TV default = 4 levels (SPEC §6); the rest are selectable in Settings (G40)
+function fibLevels(d) { const lv = Array.isArray(d.fibLevels) ? d.fibLevels : FIB_DEFAULT; return FIB_LEVELS.filter(f => lv.some(v => Math.abs(v - f.lv) < 1e-6)); }
+function fibGeom(d, X, W) {   // anchor (p0) + span honour Reverse; x range honours Extend left / right (default: between the two anchors, like TV)
+  const xa = X(d.p1.t), xb = X(d.p2.t); if (xa == null || xb == null) return null;
+  const p0 = d.reverse ? d.p2.p : d.p1.p, span = d.reverse ? d.p1.p - d.p2.p : d.p2.p - d.p1.p;
+  return { xa, xb, p0, span, xL: d.extendLeft ? 0 : Math.min(xa, xb), xR: d.extendRight ? W : Math.max(xa, xb) };
+}
 function drawFib(ctx, d, X, Y, W) {
-  const p1y = Y(d.p1.p), p2y = Y(d.p2.p), xa = X(d.p1.t), xb = X(d.p2.t);
-  if (p1y == null || p2y == null) return;
-  let xL = Math.min(xa == null ? 0 : xa, xb == null ? 0 : xb); if (!isFinite(xL) || xL < 0) xL = 0;
-  const span = d.p2.p - d.p1.p, ys = FIB_LEVELS.map(f => Y(d.p1.p + span * f.lv));
+  const g = fibGeom(d, X, W); if (!g) return;
+  const p1y = Y(d.p1.p), p2y = Y(d.p2.p); if (p1y == null || p2y == null) return;
+  const lv = fibLevels(d), ys = lv.map(f => Y(g.p0 + g.span * f.lv)), col = styleColor(d, '#CC4400'), lw = (d.style && d.style.width) || 1;
   ctx.save();
-  for (let i = 0; i < FIB_LEVELS.length - 1; i++) { const y0 = ys[i], y1 = ys[i + 1]; if (y0 == null || y1 == null) continue; ctx.globalAlpha = FIB_FILL_A; ctx.fillStyle = FIB_LEVELS[i].c; ctx.fillRect(xL, Math.min(y0, y1), Math.max(1, W - xL), Math.abs(y1 - y0)); }
-  ctx.globalAlpha = FIB_LINE_A; ctx.lineWidth = 1; ctx.font = '10px "SF Mono",Consolas,monospace'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
-  for (let i = 0; i < FIB_LEVELS.length; i++) { const y = ys[i]; if (y == null) continue; const f = FIB_LEVELS[i]; ctx.strokeStyle = f.c; ctx.setLineDash(f.lv === 0 || f.lv === 1 ? [] : [4, 3]); ctx.beginPath(); ctx.moveTo(xL, y); ctx.lineTo(W, y); ctx.stroke(); const price = d.p1.p + span * f.lv; ctx.fillStyle = f.c; ctx.fillText(`${f.lv.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')}  ${f2(price)}`, xL + 4, y - 6); }
-  ctx.setLineDash([]); ctx.restore();
+  for (let i = 0; i < lv.length - 1; i++) { const y0 = ys[i], y1 = ys[i + 1]; if (y0 == null || y1 == null) continue; ctx.globalAlpha = FIB_FILL_A; ctx.fillStyle = lv[i].c; ctx.fillRect(g.xL, Math.min(y0, y1), Math.max(1, g.xR - g.xL), Math.abs(y1 - y0)); }
+  ctx.globalAlpha = FIB_LINE_A; ctx.lineWidth = lw; ctx.font = '10px "SF Mono",Consolas,monospace'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.strokeStyle = col; ctx.fillStyle = col;
+  ctx.setLineDash(dashArr(d.style && d.style.dash));
+  for (let i = 0; i < lv.length; i++) { const y = ys[i]; if (y == null) continue; ctx.beginPath(); ctx.moveTo(g.xL, y); ctx.lineTo(g.xR, y); ctx.stroke(); }
+  ctx.setLineDash([3, 3]); ctx.globalAlpha = 0.6; ctx.beginPath(); ctx.moveTo(g.xa, p1y); ctx.lineTo(g.xb, p2y); ctx.stroke();   // the anchor-to-anchor trend segment (TV draws it dashed)
+  ctx.setLineDash([]); ctx.globalAlpha = 1;
+  // Labels sit LEFT of the band (outside it, like TV) so neither the level lines nor the dashed connector strike through the text;
+  // when levels are closer than one text row (tight 1-min retracements) they are spread apart to >= LH px, keeping the group centred on its levels.
+  const LH = 12, items = lv.map((f, i) => ({ y: ys[i], txt: `${f.lv.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')}  ${f2(g.p0 + g.span * f.lv)}` })).filter(it => it.y != null).sort((a, b) => a.y - b.y);
+  if (items.length) {
+    items[0].ly = items[0].y; for (let i = 1; i < items.length; i++) items[i].ly = Math.max(items[i].y, items[i - 1].ly + LH);
+    const shift = items.reduce((s, it) => s + it.ly - it.y, 0) / items.length; items.forEach(it => { it.ly -= shift; it.w = ctx.measureText(it.txt).width; });
+    const outside = g.xL - 6 - Math.max(...items.map(it => it.w)) >= 2, tx = outside ? g.xL - 6 : g.xL + 6;   // no room on the left (Extend left / near edge) -> fall back inside the band
+    ctx.textAlign = outside ? 'right' : 'left';
+    for (const it of items) { ctx.fillStyle = '#FFFFFF'; ctx.globalAlpha = 0.8; ctx.fillRect((outside ? tx - it.w : tx) - 2, it.ly - LH / 2, it.w + 4, LH); ctx.globalAlpha = 1; ctx.fillStyle = col; ctx.fillText(it.txt, tx, it.ly); }
+  }
+  ctx.restore();
 }
 // ---- Measure / ruler (drawing type 'measure', 2-point) ----
 function fmtDur(sec) { if (sec < 60) return Math.round(sec) + 's'; const m = Math.round(sec / 60); if (m < 60) return m + 'm'; const h = Math.floor(m / 60), rm = m % 60; if (h < 24) return rm ? `${h}h ${pad(rm)}m` : `${h}h`; const d = Math.floor(h / 24), rh = h % 24; return rh ? `${d}d ${pad(rh)}h` : `${d}d`; }
-function drawMeasure(ctx, d, X, Y) {
+function drawMeasure(ctx, d, X, Y, selected) {   // selected: draw the two grab dots (G12)
   const x1 = X(d.p1.t), y1 = Y(d.p1.p), x2 = X(d.p2.t), y2 = Y(d.p2.p);
   if (x1 == null || y1 == null || x2 == null || y2 == null) return;
   const dPts = d.p2.p - d.p1.p, dTicks = tcount(d.p2.p, d.p1.p), dPct = d.p1.p ? (dPts / d.p1.p) * 100 : 0;
-  const i1 = bars.findIndex(b => b.time === d.p1.t), i2 = bars.findIndex(b => b.time === d.p2.t);
-  const nBars = (i1 >= 0 && i2 >= 0) ? Math.abs(i2 - i1) : 0, dSec = Math.abs(d.p2.t - d.p1.t), up = dPts >= 0;
-  const bx = Math.min(x1, x2), by = Math.min(y1, y2), bw = Math.max(1, Math.abs(x2 - x1)), bh = Math.max(1, Math.abs(y2 - y1)), col = up ? '#1E8A1E' : '#B30000';
-  ctx.save();
+  const l1 = timeToLogical(d.p1.t), l2 = timeToLogical(d.p2.t);   // points may sit between bars (free time, G6) -> fractional logical distance
+  const nBars = (l1 != null && l2 != null) ? Math.round(Math.abs(l2 - l1)) : 0, dSec = Math.abs(d.p2.t - d.p1.t), up = dPts >= 0;
+  const bx = Math.min(x1, x2), by = Math.min(y1, y2), bw = Math.max(1, Math.abs(x2 - x1)), bh = Math.max(1, Math.abs(y2 - y1)), col = styleColor(d, up ? '#1E8A1E' : '#B30000');   // style.color overrides the auto up/down colour once set (G17)
+  ctx.save(); ctx.setLineDash([]);
   ctx.globalAlpha = 0.14; ctx.fillStyle = col; ctx.fillRect(bx, by, bw, bh); ctx.globalAlpha = 1;
   ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.strokeRect(bx, by, bw, bh);
   ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-  ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x1, y1, 3.5, 0, 7); ctx.fill(); ctx.beginPath(); ctx.arc(x2, y2, 3.5, 0, 7); ctx.fill();
+  if (selected) { ctx.fillStyle = '#6495ED'; ctx.strokeStyle = '#000000'; ctx.lineWidth = 1.5; for (const [hx, hy] of [[x1, y1], [x2, y2]]) { ctx.beginPath(); ctx.arc(hx, hy, 5, 0, 7); ctx.fill(); ctx.stroke(); } ctx.strokeStyle = col; }
   const sgn = dPts >= 0 ? '+' : '';
   const label = `Δ ${sgn}${f2(dPts)} (${sgn}${dTicks}t) ${sgn}${dPct.toFixed(2)}%  •  ${nBars} bars  •  ${fmtDur(dSec)}`;
   ctx.font = '600 12px ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif'; ctx.textBaseline = 'middle';
@@ -1384,23 +1584,23 @@ function rrDefaultRiskTicks() {          // a visible default = ~25% of the last
   const range = (isFinite(hi) && isFinite(lo)) ? hi - lo : 0;
   return Math.max(8, Math.round((range * 0.25) / TICK) || 8);
 }
-function drawRR(ctx, d, X, Y, W) {
+function drawRR(ctx, d, X, Y, W, selected) {   // selected: draw the corner / edge handles (G12); style.color drives the entry line + border (G17)
   const ye = Y(d.p1.p), ys = Y(d.stop), yt = Y(d.target);
   if (ye == null || ys == null || yt == null) return;
-  const { xa, xb } = rrRange(d, X), w = Math.max(2, xb - xa), cx = (xa + xb) / 2;
-  ctx.save();
+  const { xa, xb } = rrRange(d, X), w = Math.max(2, xb - xa), cx = (xa + xb) / 2, col = styleColor(d, '#000000');
+  ctx.save(); ctx.setLineDash([]);
   ctx.globalAlpha = 0.16;
   ctx.fillStyle = '#32CD32'; ctx.fillRect(xa, Math.min(ye, yt), w, Math.abs(yt - ye));   // reward zone
   ctx.fillStyle = '#FF0000'; ctx.fillRect(xa, Math.min(ye, ys), w, Math.abs(ys - ye));   // risk zone
   ctx.globalAlpha = 1;
-  ctx.strokeStyle = 'rgba(88,89,91,0.45)'; ctx.lineWidth = 1; ctx.strokeRect(xa, Math.min(yt, ys), w, Math.abs(yt - ys));
+  ctx.strokeStyle = col; ctx.globalAlpha = 0.45; ctx.lineWidth = 1; ctx.strokeRect(xa, Math.min(yt, ys), w, Math.abs(yt - ys)); ctx.globalAlpha = 1;
   const hline = (yy, col) => { ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(xa, yy); ctx.lineTo(xb, yy); ctx.stroke(); };
   hline(yt, '#1E8A1E'); hline(ys, '#B30000');
-  ctx.setLineDash([5, 3]); hline(ye, '#000000'); ctx.setLineDash([]);
+  ctx.setLineDash([5, 3]); hline(ye, col); ctx.setLineDash([]);
   // blue handles — squares at the 4 box corners, circles at the entry edges
   const sq = (x, y) => { ctx.fillStyle = '#6495ED'; ctx.strokeStyle = '#000000'; ctx.lineWidth = 1.5; ctx.fillRect(x - 3.5, y - 3.5, 7, 7); ctx.strokeRect(x - 3.5, y - 3.5, 7, 7); };
   const ci = (x, y) => { ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fillStyle = '#6495ED'; ctx.fill(); ctx.strokeStyle = '#000000'; ctx.lineWidth = 1.5; ctx.stroke(); };
-  sq(xa, yt); sq(xb, yt); sq(xa, ys); sq(xb, ys); ci(xa, ye); ci(xb, ye);
+  if (selected) { sq(xa, yt); sq(xb, yt); sq(xa, ys); sq(xb, ys); ci(xa, ye); ci(xb, ye); }
   // metrics + centered label pills — matches TradingView's Long/Short position tool
   const qty = Math.max(1, parseInt(($('qty') || {}).value, 10) || 1);
   const long = d.target >= d.p1.p, pv = INSTR.tickValue / INSTR.tickSize;          // $ per point
@@ -1426,23 +1626,109 @@ function drawRR(ctx, d, X, Y, W) {
   pill(`Stop: ${f2(d.stop)} (${sgn(sPct)}${sPct.toFixed(2)}%) ${sPts.toFixed(2)}, Amount: ${usd(riskT * INSTR.tickValue * qty)}`, ys, '#D3D3D3', '#B30000');
   ctx.restore();
 }
-function resetToolAfterDraw() { tool = ''; pendingPt = null; updateToolUI(); }   // revert to cursor after a completed drawing (TradingView default)
+function resetToolAfterDraw() { if (!keepDrawing) tool = ''; pendingPt = null; previewXY = null; updateToolUI(); }   // revert to cursor after a completed drawing (TradingView default) unless Keep drawing is on (G3/G4; applies to the arrow-marker tools too)
 
 // ---------- chart tools: drag stop/target/entry lines + click tools (set-start / annotations) ----------
 let tool = '', drag = null, dragH = null;   // dragH = drawing-anchor being dragged (endpoint edit)
 let vpan = null;                            // vertical price-pan: {y0, s0} while dragging empty chart space up/down
-let magnet = loadJSON('rt_magnet', false);  // snap drawing points to the nearest OHLC of the hovered bar (TradingView magnet)
+// Magnet (TV_DRAWING_GAP G8-G11): three states 'off' | 'weak' | 'strong'. rt_magnet used to be a boolean -> migrate (true = 'strong', the old no-threshold behaviour).
+let magnet = (v => v === true ? 'strong' : v === false ? 'off' : (v === 'weak' || v === 'strong' ? v : 'off'))(loadJSON('rt_magnet', false));
+if (typeof loadJSON('rt_magnet', false) !== 'string') saveJSON('rt_magnet', magnet);
+let magnetMode = loadJSON('rt_magnet_mode', magnet === 'strong' ? 'strong' : 'weak');   // last chosen strength; the button body toggles off <-> magnetMode
+let magnetInd = loadJSON('rt_magnet_ind', false);   // Snap to indicators (SPEC §3): overlay indicator values join O/H/L/C as snap targets
+let keepDrawing = loadJSON('rt_keepdraw', false);   // Keep drawing / Stay in Drawing Mode (SPEC §1)
+let previewXY = null;                               // rubber-band preview: cursor position in chart pixels while a 2-point tool waits for its second click (G2)
+const MAGNET_WEAK_PX = 12;                          // weak magnet pulls only when the cursor is within this many pixels of a snap value (TV does not publish its number)
 function barByTime(t) { let lo = 0, hi = bars.length - 1; while (lo <= hi) { const m = (lo + hi) >> 1; if (bars[m].time === t) return bars[m]; if (bars[m].time < t) lo = m + 1; else hi = m - 1; } return null; }
-function magnetPrice(time, raw) {
-  if (!magnet) return rnd(raw);
-  const b = barByTime(time); if (!b) return rnd(raw);
-  let best = b.close, bd = Infinity;
-  for (const v of [b.open, b.high, b.low, b.close]) { const d = Math.abs(v - raw); if (d < bd) { bd = d; best = v; } }
-  return rnd(best);
+function magnetBarIdx(t) {   // nearest REVEALED bar for the magnet (logical-rounding, G10); -1 in future space / past the last revealed bar -> no snap
+  const last = Math.min(idx, bars.length - 1); if (last < 0 || t == null) return -1;
+  const i = nearestBarIdx(t); if (i < 0 || i > last) return -1;
+  if (i === last && t - bars[last].time > barSpanSec() / 2) return -1;
+  return i;
 }
-let dragBody = null, selDrawing = null;     // dragBody = whole-drawing move; selDrawing = currently selected drawing
+function magnetTargets(i) {   // snap candidates of bar i: O/H/L/C (+ overlay indicator values when Snap to indicators is on)
+  const b = bars[i], v = [b.open, b.high, b.low, b.close];
+  if (magnetInd) {
+    if (vwapOn && vwapData[i] != null) v.push(vwapData[i]);
+    if (bbOn) for (const a of [bbData.up, bbData.mid, bbData.lo]) if (a[i] != null) v.push(a[i]);
+    if (emaOn) for (const e of emaData) if (e.arr[i] != null) v.push(e.arr[i]);
+    if (ripsterOn) for (const r of ripsterData) { if (r.fast[i] != null) v.push(r.fast[i]); if (r.slow[i] != null) v.push(r.slow[i]); }
+  }
+  return v;
+}
+// magnetSnap(time, price, y, invert) -> {t, p}. off: both free (G5/G6). strong: always the nearest target of the nearest bar.
+// weak: only when the nearest target is within MAGNET_WEAK_PX (pixel distance via priceToCoordinate, so zoom does not change the feel).
+// invert (Ctrl/Cmd held, G9) flips off <-> the last chosen strength for this one action. y == null (programmatic) treats weak as strong.
+function magnetSnap(time, raw, y, invert) {
+  const mode = invert ? (magnet === 'off' ? magnetMode : 'off') : magnet;
+  if (mode === 'off' || raw == null) return { t: time, p: raw };
+  const i = magnetBarIdx(time); if (i < 0) return { t: time, p: raw };
+  let best = null, bd = Infinity;
+  for (const v of magnetTargets(i)) { const d = Math.abs(v - raw); if (d < bd) { bd = d; best = v; } }
+  if (best == null) return { t: time, p: raw };
+  if (mode === 'weak' && y != null) { const by = candle.priceToCoordinate(best); if (by == null || Math.abs(by - y) > MAGNET_WEAK_PX) return { t: time, p: raw }; }
+  return { t: bars[i].time, p: best };
+}
+let dragBody = null, selDrawing = null;     // dragBody = whole-drawing move; selDrawing = primary selected drawing (always a member of selSet)
+const selSet = new Set();                   // G19 multiselect — object references (drawings are passed by reference everywhere; no ids needed)
+let hoverDrawing = null;                    // G12: the drawing under the cursor shows its anchors
+let drawingsLocked = loadJSON('rt_lockdrw', false);   // G43 Lock all drawings: blocks drag (anchor + body + clone), never select (delete confirm = Stage 4)
+let ctrlPress = null;                       // Ctrl/Cmd + pointerdown on a body: release without motion = toggle multiselect (G19), motion = clone + drag (G18)
+function selectDrawing(d, add) { if (!add) selSet.clear(); if (d) selSet.add(d); selDrawing = d || (selSet.size ? [...selSet].pop() : null); }
+function clearSelection() { selSet.clear(); selDrawing = null; }
+function isSelected(d) { return d === selDrawing || selSet.has(d); }
+function selectedList() { const s = new Set(selSet); if (selDrawing) s.add(selDrawing); return [...s].filter(d => drawings.includes(d)); }
+function canDrag(d) { return !drawingsLocked && !(d && d.locked); }
+function drawingVisible(d) { return !d.hidden && (!Array.isArray(d.visibleTFs) || (!tfTicks && d.visibleTFs.some(v => Math.abs(v - tf) < 1e-6))); }   // G42: visibleTFs in minutes, null = every timeframe
+function cloneDrawing(d) { const c = JSON.parse(JSON.stringify(d)); c.id = ''; c.z = null; return newDrawing(c); }   // G18: deep copy (pure data) with a fresh id / z
+let alwaysRemoveLocked = loadJSON('rt_alwaysrmlocked', false);   // G44: skip the "Remove locked drawing?" confirm (Remove menu checkbox)
+let hideFlags = Object.assign({ drawings: false, indicators: false, positions: false }, loadJSON('rt_hide', null) || {});   // G45 Hide menu: temporary masks, never touch the indicator settings themselves
+// ---- undo / redo (G21 / G22): snapshots of {drawings, annotations} taken BEFORE every mutation (incl. pointerdown of a drag) ----
+const undoStack = [], redoStack = [], UNDO_MAX = 100;
+function snapshot() { const key = JSON.stringify(drawings); undoStack.push({ key, drawings: JSON.parse(key), annotations: JSON.parse(JSON.stringify(annotations)) }); if (undoStack.length > UNDO_MAX) undoStack.shift(); redoStack.length = 0; }
+function dropNoopSnapshot() { const top = undoStack[undoStack.length - 1]; if (top && top.key === JSON.stringify(drawings)) undoStack.pop(); }   // a drag that never moved (plain click) leaves no history entry
+function restoreSnapshot(s) {
+  drawings = migrateDrawings(s.drawings); annotations = s.annotations; clearSelection(); hoverDrawing = null; dragBody = null; dragH = null; ctrlPress = null;
+  saveJSON('rt_drawings', drawings); saveJSON('rt_annotations', annotations); if ($('drawSettings').classList.contains('open')) closeDrawSettings(); repaintOverlays(); refreshMarkers(true);
+}
+function undo() { if (!undoStack.length) return toast('Nothing to undo'); const cur = { key: JSON.stringify(drawings), drawings: JSON.parse(JSON.stringify(drawings)), annotations: JSON.parse(JSON.stringify(annotations)) }; redoStack.push(cur); restoreSnapshot(undoStack.pop()); toast('Undo'); }
+function redo() { if (!redoStack.length) return toast('Nothing to redo'); const cur = { key: JSON.stringify(drawings), drawings: JSON.parse(JSON.stringify(drawings)), annotations: JSON.parse(JSON.stringify(annotations)) }; undoStack.push(cur); restoreSnapshot(redoStack.pop()); toast('Redo'); }
+// ---- copy / paste (G24): pasted copies land a few bars to the right, clamped to the revealed bar idx (never onto unrevealed future bars) ----
+let clipboardDrawings = null;
+function copyDrawing() { const l = selectedList(); if (!l.length) return; clipboardDrawings = JSON.parse(JSON.stringify(l)); toast(l.length > 1 ? `${l.length} drawings copied` : 'Drawing copied'); }
+function pasteDrawing() {
+  if (!clipboardDrawings || !clipboardDrawings.length) return;
+  const hi = Math.min(idx, bars.length - 1); if (hi < 0) return;
+  snapshot(); clearSelection();
+  for (const src of clipboardDrawings) {
+    const c = cloneDrawing(JSON.parse(JSON.stringify(src))), tf_ = drawingFields(c).filter(f => f.kind === 't');
+    let maxA = -Infinity; for (const f of tf_) { const l = timeToLogical(f.obj[f.key]); if (l != null) maxA = Math.max(maxA, l + seriesFrom); }
+    const shift = Math.max(0, Math.min(5, hi - maxA));   // +5 bars, less when that would cross idx
+    for (const f of tf_) { const l = timeToLogical(f.obj[f.key]); if (l == null) continue; const nt = logicalToTime(Math.min(hi, l + seriesFrom + shift) - seriesFrom); if (nt != null) f.obj[f.key] = nt; }
+    drawings.push(c); selSet.add(c); selDrawing = c;
+  }
+  saveJSON('rt_drawings', drawings); repaintOverlays(); toast('Pasted');
+}
+function nudgeSelection(key) {   // G23: arrow keys move the selection one bar (left / right) or one tick (up / down); locked drawings stay put
+  const l = selectedList().filter(canDrag); if (!l.length) return;
+  const hi = Math.min(idx, bars.length - 1); snapshot();
+  for (const d of l) for (const f of drawingFields(d)) {
+    if (f.kind === 'p') { if (key === 'ArrowUp') f.obj[f.key] += TICK; else if (key === 'ArrowDown') f.obj[f.key] -= TICK; }
+    else if (key === 'ArrowLeft' || key === 'ArrowRight') {
+      const l0 = timeToLogical(f.obj[f.key]); if (l0 == null) continue; const a = l0 + seriesFrom; let na = a + (key === 'ArrowRight' ? 1 : -1);
+      if (na < 0) na = 0; if (na > hi) na = Math.max(a, hi);   // never nudge onto unrevealed bars; a point already in future space stays where it is
+      const nt = logicalToTime(na - seriesFrom); if (nt != null) f.obj[f.key] = nt;
+    }
+  }
+  dropNoopSnapshot(); saveJSON('rt_drawings', drawings); repaintOverlays();
+}
 let annotations = loadJSON('rt_annotations', []);   // {baseTime, position, color, shape, text}
-let drawings = loadJSON('rt_drawings', []);         // {type:'hl'|'tl'|'ray'|'box', p1:{t,p}, p2?:{t,p}, color}
+let drawings = loadJSON('rt_drawings', []);         // {type:'hl'|'tl'|'ray'|'box'|'fib'|'measure'|'rr'|'hray'|'vline'|'cross', p1:{t,p}, p2?:{t,p}, color, style:{color,width,dash}, locked, hidden, z, visibleTFs, id}
+// rt_drawings v0 -> v1 (TV_DRAWING_GAP §1.3): add style/locked/hidden/z/visibleTFs/id; keep color + p1/p2/stop/target untouched so older builds still read the file
+let _drwSeq = 0;
+function newDrawing(d) { const n = _drwSeq++; d.style = d.style || { color: d.color != null ? d.color : '#000000', width: 1.5, dash: 0 }; if (d.locked == null) d.locked = false; if (d.hidden == null) d.hidden = false; if (d.z == null) d.z = n; if (d.visibleTFs === undefined) d.visibleTFs = null; if (!d.id) d.id = 'd' + Date.now().toString(36) + '_' + n; return d; }
+function migrateDrawings(arr) { for (const d of arr) { if (!d.style) newDrawing(d); else _drwSeq = Math.max(_drwSeq, (d.z | 0) + 1); } return arr; }
+if (Array.isArray(drawings)) { migrateDrawings(drawings); if (loadJSON('rt_drawings_v', 0) < 1) { saveJSON('rt_drawings', drawings); saveJSON('rt_drawings_v', 1); } } else drawings = [];
 let pendingPt = null;                                // first click of a 2-point drawing
 const ANN = {
   au:    { position: 'belowBar', color: '#127209', shape: 'arrowUp',   text: '' },
@@ -1450,9 +1736,9 @@ const ANN = {
   long:  { position: 'belowBar', color: '#127209', shape: 'arrowUp',   text: 'LONG' },
   short: { position: 'aboveBar', color: '#D40605', shape: 'arrowDown', text: 'SHORT' },
 };
-const TOOLBTN = { start: 'btnPickStart', au: 'annUp', ad: 'annDown', long: 'annLong', short: 'annShort', hl: 'drwHL', tl: 'drwTL', ray: 'drwRay', box: 'drwBox', fib: 'drwFib', measure: 'drwMeasure', rr: 'drwRR' };
-function placeAnnotation(t, baseTime) { const a = ANN[t]; if (!a) return; annotations.push({ baseTime, ...a }); saveJSON('rt_annotations', annotations); refreshMarkers(); }
-function clearAnnotations() { annotations = []; markers = []; saveJSON('rt_annotations', annotations); refreshMarkers(); toast('Markers cleared'); }   // clears placed arrows AND in-session trade entry/exit arrows
+const TOOLBTN = { start: 'btnPickStart', au: 'annUp', ad: 'annDown', long: 'annLong', short: 'annShort', hl: 'drwHL', tl: 'drwTL', ray: 'drwRay', box: 'drwBox', fib: 'drwFib', measure: 'drwMeasure', rr: 'drwRR', hray: 'drwHRay', vline: 'drwVLine', cross: 'drwCross' };
+function placeAnnotation(t, baseTime) { const a = ANN[t]; if (!a) return; snapshot(); annotations.push({ baseTime, ...a }); saveJSON('rt_annotations', annotations); refreshMarkers(); }
+function clearAnnotations() { snapshot(); annotations = []; markers = []; saveJSON('rt_annotations', annotations); refreshMarkers(); toast('Markers cleared'); }   // clears placed arrows AND in-session trade entry/exit arrows
 // click directly on a placed arrow (annotation OR trade marker) to delete just that one — TradingView-style
 function markerXY(m) {
   const t = mBucket(m.baseTime), x = chart.timeScale().timeToCoordinate(t); if (x == null) return null;
@@ -1467,21 +1753,23 @@ function markerAt(px, py) {
   return null;
 }
 function removeMarker(hit) {
-  if (hit.src === 'ann') { annotations.splice(hit.i, 1); saveJSON('rt_annotations', annotations); } else markers.splice(hit.i, 1);
+  if (hit.src === 'ann') { snapshot(); annotations.splice(hit.i, 1); saveJSON('rt_annotations', annotations); } else markers.splice(hit.i, 1);
   refreshMarkers(); toast('Arrow removed');
 }
 function updateToolUI() { Object.values(TOOLBTN).forEach(id => { const b = $(id); if (b) b.classList.remove('active'); }); const b = $(TOOLBTN[tool]); if (b) b.classList.add('active'); const cur = $('toolCursor'); if (cur) cur.classList.toggle('active', !tool); $('chart').style.cursor = tool ? 'crosshair' : ''; }
-function setTool(t) { tool = (tool === t) ? '' : t; pendingPt = null; repaintOverlays(); updateToolUI(); }
+function setTool(t) { tool = (tool === t) ? '' : t; pendingPt = null; previewXY = null; repaintOverlays(); updateToolUI(); }
 function draggableLines() { return orderLines().filter(o => o.drag).map(o => o.drag); }   // derived from the rendered order set (entry / stop / targets)
 function nearestLine(y) { let best = null, bd = 7; for (const L of draggableLines()) { const ly = candle.priceToCoordinate(L.get()); if (ly == null) continue; const d = Math.abs(ly - y); if (d < bd) { bd = d; best = L; } } return best; }
 // ---- drawing endpoint editing: hit-test + drag the anchors of placed drawings ----
 // Each handle exposes apply(time, price) that writes back into the drawing's p1/p2 in place.
 // HL = horizontal full-width line, so only price is editable (horiz:true, time ignored).
 function drawingHandles() {
-  const out = [], ts = chart.timeScale();
-  const X = (t) => ts.timeToCoordinate(t), Y = (p) => candle.priceToCoordinate(p);
+  const out = [], X = drawX, Y = drawY;
+  if (hideFlags.drawings) return out;   // hidden drawings can't be grabbed (G45)
   for (const d of drawings) {
+    if (!drawingVisible(d)) continue;
     if (d.type === 'hl') { const y = Y(d.p1.p); if (y != null) out.push({ d, horiz: true, hy: y, apply: (t, p) => { d.p1.p = p; } }); continue; }
+    if (d.type === 'vline') { const x = X(d.p1.t); if (x != null) out.push({ d, vert: true, hx: x, apply: (t, p) => { if (t != null) d.p1.t = t; } }); continue; }   // G37: time only (mirror of hl's horiz)
     if (d.type === 'rr') {   // entry handle shifts all 3 levels; stop/target move individually; grabbable at both box edges
       const { xa, xb } = rrRange(d, X), eY = Y(d.p1.p), sY = Y(d.stop), tY = Y(d.target);
       [xa, xb].forEach(hx => {
@@ -1508,24 +1796,29 @@ function pointSegDist(px, py, ax, ay, bx, by) {
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 function drawingAt(x, y) {
-  const ts = chart.timeScale(), W = $('chart').clientWidth, TH = 6;
-  const X = (t) => ts.timeToCoordinate(t), Y = (p) => candle.priceToCoordinate(p);
+  if (hideFlags.drawings) return null;   // G45
+  const W = $('chart').clientWidth, H = $('chart').clientHeight, TH = 6, X = drawX, Y = drawY;
   for (let k = drawings.length - 1; k >= 0; k--) {   // topmost first
     const d = drawings[k];
+    if (!drawingVisible(d)) continue;
     if (d.type === 'hl') { const yy = Y(d.p1.p); if (yy != null && Math.abs(yy - y) < TH) return d; continue; }
+    if (d.type === 'vline') { const xx = X(d.p1.t); if (xx != null && Math.abs(xx - x) < TH) return d; continue; }
     const x1 = X(d.p1.t), y1 = Y(d.p1.p);
+    if (d.type === 'hray') { if (x1 != null && y1 != null && x >= x1 - TH && Math.abs(y1 - y) < TH) return d; continue; }
+    if (d.type === 'cross') { if (x1 != null && y1 != null && (Math.abs(y1 - y) < TH || Math.abs(x1 - x) < TH)) return d; continue; }
     if (d.type === 'rr') { const { xa, xb } = rrRange(d, X); if (x < xa - 4 || x > xb + 4) continue; const yt = Y(d.target), ys = Y(d.stop); if (yt != null && ys != null && y >= Math.min(yt, ys) - TH && y <= Math.max(yt, ys) + TH) return d; continue; }
     if (x1 == null || y1 == null) continue;
-    if (d.type === 'fib') { const x2 = X(d.p2.t), xL = Math.min(x1, x2 == null ? x1 : x2); if (x < xL - 4) continue; const span = d.p2.p - d.p1.p; for (const f of FIB_LEVELS) { const yy = Y(d.p1.p + span * f.lv); if (yy != null && Math.abs(yy - y) < TH) return d; } continue; }
+    if (d.type === 'fib') { const g = fibGeom(d, X, W); if (!g || x < g.xL - 4 || x > g.xR + 4) continue; for (const f of fibLevels(d)) { const yy = Y(g.p0 + g.span * f.lv); if (yy != null && Math.abs(yy - y) < TH) return d; } const y2 = Y(d.p2.p); if (y2 != null && pointSegDist(x, y, g.xa, y1, g.xb, y2) < TH) return d; continue; }
     const x2 = d.p2 ? X(d.p2.t) : null, y2 = d.p2 ? Y(d.p2.p) : null;
     if (x2 == null || y2 == null) continue;
-    if (d.type === 'box') { const xa = Math.min(x1, x2), xb = Math.max(x1, x2), ya = Math.min(y1, y2), yb = Math.max(y1, y2);
+    if (d.type === 'box') { const r = boxRect(d, x1, y1, x2, y2, W), xa = r.x, xb = r.x + r.w, ya = r.y, yb = r.y + r.h;   // same extend geometry as the renderer (G39)
       const nearV = (Math.abs(x - xa) < TH || Math.abs(x - xb) < TH) && y >= ya - TH && y <= yb + TH;
       const nearH = (Math.abs(y - ya) < TH || Math.abs(y - yb) < TH) && x >= xa - TH && x <= xb + TH;
-      if (nearV || nearH) return d; continue; }
-    let ex = x2, ey = y2;   // tl / ray / measure: segment (ray extends to the chart edge)
-    if (d.type === 'ray') { const dx = x2 - x1, dy = y2 - y1; if (dx !== 0) { const tx = dx >= 0 ? W : 0, s = (tx - x1) / dx; ex = tx; ey = y1 + dy * s; } }
-    if (pointSegDist(x, y, x1, y1, ex, ey) < TH) return d;
+      const ym = d.middleLine ? Y((d.p1.p + d.p2.p) / 2) : null, nearM = ym != null && Math.abs(y - ym) < TH && x >= xa - TH && x <= xb + TH;
+      if (nearV || nearH || nearM) return d; continue; }
+    let ax = x1, ay = y1, ex = x2, ey = y2;   // tl / ray: segment after Extend (G34); measure: plain segment
+    if (d.type === 'tl' || d.type === 'ray') { const sg = tlSeg(d, x1, y1, x2, y2, W, H); ax = sg.ax; ay = sg.ay; ex = sg.bx; ey = sg.by; }
+    if (pointSegDist(x, y, ax, ay, ex, ey) < TH) return d;
   }
   return null;
 }
@@ -1533,34 +1826,41 @@ function drawingAt(x, y) {
 function drawingFields(d) {
   const A = [];
   if (d.type === 'hl') { A.push({ obj: d.p1, key: 'p', kind: 'p' }); return A; }
+  if (d.type === 'vline') { A.push({ obj: d.p1, key: 't', kind: 't' }); return A; }
   if (d.type === 'rr') { A.push({ obj: d.p1, key: 'p', kind: 'p' }, { obj: d, key: 'stop', kind: 'p' }, { obj: d, key: 'target', kind: 'p' }, { obj: d.p1, key: 't', kind: 't' }); if (d.p2) A.push({ obj: d.p2, key: 't', kind: 't' }); return A; }
   A.push({ obj: d.p1, key: 'p', kind: 'p' }, { obj: d.p1, key: 't', kind: 't' });
   if (d.p2) A.push({ obj: d.p2, key: 'p', kind: 'p' }, { obj: d.p2, key: 't', kind: 't' });
   return A;
 }
-function startBodyDrag(d, x, y) {
-  const ts = chart.timeScale();
-  dragBody = { d, sp: candle.coordinateToPrice(y), sLog: ts.coordinateToLogical(x),
-    fields: drawingFields(d).map(f => f.kind === 'p' ? { ...f, orig: f.obj[f.key] } : { ...f, origIdx: bars.findIndex(b => b.time === f.obj[f.key]) }) };
+// whole-drawing move (G20 group move: one or many members share the same price / logical delta). Free price + free time via the
+// fractional logical (same mapping as placement, G5/G6/G7) — stored back as {t,p} timestamps, never as logical indexes.
+function startBodyDrag(ds, x, y) {
+  const list = (Array.isArray(ds) ? ds : [ds]).filter(Boolean), sp = candle.coordinateToPrice(y), sLog = xToLogical(x);
+  if (!list.length || sp == null || sLog == null) { dragBody = null; return; }
+  dragBody = { sx: x, sy: y, sp, sLog, members: list.map(d => ({ d, fields: drawingFields(d).map(f => ({ ...f, orig: f.obj[f.key], origLg: f.kind === 't' ? timeToLogical(f.obj[f.key]) : null })) })) };
 }
-function moveBody(x, y) {
-  const ts = chart.timeScale(), p = candle.coordinateToPrice(y), lg = ts.coordinateToLogical(x);
-  if (p == null || lg == null || !dragBody) return;
-  const dPrice = p - dragBody.sp, dIdx = Math.round(lg - dragBody.sLog), hi = Math.min(idx, bars.length - 1);
-  for (const f of dragBody.fields) {
-    if (f.kind === 'p') f.obj[f.key] = rnd(f.orig + dPrice);
-    else if (f.origIdx >= 0) { const ni = Math.max(0, Math.min(hi, f.origIdx + dIdx)); if (bars[ni]) f.obj[f.key] = bars[ni].time; }
+function moveBody(x, y, shiftKey) {
+  if (!dragBody) return;
+  const p = candle.coordinateToPrice(y), lg = xToLogical(x); if (p == null || lg == null) return;
+  let dPrice = p - dragBody.sp, dLg = lg - dragBody.sLog;
+  if (shiftKey) { if (Math.abs(x - dragBody.sx) >= Math.abs(y - dragBody.sy)) dPrice = 0; else dLg = 0; }   // G15: Shift locks to the dominant pixel axis
+  for (const m of dragBody.members) for (const f of m.fields) {
+    if (f.kind === 'p') f.obj[f.key] = f.orig + dPrice;
+    else if (f.origLg != null) { const nt = logicalToTime(f.origLg + dLg); if (nt != null) f.obj[f.key] = nt; }
   }
   repaintOverlays();
 }
-function deleteSelectedDrawing() {
-  if (!selDrawing) return;
-  const i = drawings.indexOf(selDrawing); if (i >= 0) drawings.splice(i, 1);
-  selDrawing = null; saveJSON('rt_drawings', drawings); repaintOverlays(); toast('Drawing deleted');
+function deleteSelectedDrawing() {   // deletes the whole selection (G20); locked members (per-drawing lock or Lock all) ask first unless "Always remove locked drawings" is on (G44)
+  const del = new Set(selectedList()); if (!del.size) return;
+  const nl = [...del].filter(d => d.locked || drawingsLocked).length;
+  if (nl && !alwaysRemoveLocked && !confirm(nl > 1 ? `Remove ${nl} locked drawings?` : 'Remove locked drawing?')) return;
+  snapshot();
+  for (let i = drawings.length - 1; i >= 0; i--) if (del.has(drawings[i])) drawings.splice(i, 1);
+  clearSelection(); hoverDrawing = null; saveJSON('rt_drawings', drawings); repaintOverlays(); toast(del.size > 1 ? `${del.size} drawings deleted` : 'Drawing deleted');
 }
 function nearestHandle(x, y) {
   let best = null, bd = 9;
-  for (const h of drawingHandles()) { const dd = h.horiz ? Math.abs(h.hy - y) : Math.hypot(h.hx - x, h.hy - y); if (dd < bd) { bd = dd; best = h; } }
+  for (const h of drawingHandles()) { const dd = h.horiz ? Math.abs(h.hy - y) : h.vert ? Math.abs(h.hx - x) : Math.hypot(h.hx - x, h.hy - y); if (dd < bd) { bd = dd; best = h; } }
   return best;
 }
 // map a chart-x pixel to the nearest revealed bar's time (snap to bar grid, clamp to 0..idx)
@@ -1569,36 +1869,61 @@ function xToTime(x) {
   let i = Math.round(lg) + seriesFrom; i = Math.max(0, Math.min(Math.min(idx, bars.length - 1), i));   // logical→absolute (windowed series)
   return bars[i] ? bars[i].time : null;
 }
+// free time for drawings (G6/G7): pixel -> fractional logical -> interpolated / extrapolated epoch seconds (may fall between bars or after the last one)
+// LWC v4 coordinateToLogical() rounds to an integer (Math.ceil in the lib) -> recover the fraction from the integer anchor + barSpacing (x is linear in logical)
+function xToLogical(x) { const ts = chart.timeScale(), l0 = ts.coordinateToLogical(x); if (l0 == null) return null; const x0 = ts.logicalToCoordinate(l0), sp = ts.options().barSpacing; return (x0 == null || !sp) ? l0 : l0 + (x - x0) / sp; }
+function xToFreeTime(x) { return logicalToTime(xToLogical(x)); }
 chart.subscribeClick(param => {
-  if (!tool || param.time == null) return;
-  const i = bars.findIndex(b => b.time === param.time);
-  if (i < 0) return;
-  if (tool === 'start') { if (!locked()) setStart(bars[i].subEnd); tool = ''; updateToolUI(); return; }
-  if (tool === 'au' || tool === 'ad' || tool === 'long' || tool === 'short') { placeAnnotation(tool, bars[i].time); resetToolAfterDraw(); return; }
-  const price = param.point ? candle.coordinateToPrice(param.point.y) : bars[i].close;   // hl / tl / ray / box
-  if (price != null) handleDrawClick(tool, param.time, price);
+  if (!tool || !param.point) return;   // param.time is null in the empty space after the last bar — drawings may still go there (G7)
+  if (tool === 'start' || tool === 'au' || tool === 'ad' || tool === 'long' || tool === 'short') {   // bar-bound tools keep the exact-bar check
+    if (param.time == null) return;
+    const i = bars.findIndex(b => b.time === param.time); if (i < 0) return;
+    if (tool === 'start') { if (!locked()) setStart(bars[i].subEnd); tool = ''; updateToolUI(); return; }
+    placeAnnotation(tool, bars[i].time); resetToolAfterDraw(); return;
+  }
+  const time = xToFreeTime(param.point.x), price = candle.coordinateToPrice(param.point.y);   // hl / tl / ray / box / fib / measure / rr / hray / vline / cross
+  if (time != null && price != null) handleDrawClick(tool, time, price, param.point.y, param.sourceEvent);
 });
 $('chart').addEventListener('pointerdown', e => {
+  if (e.button === 1) {                           // G25: middle-click on a drawing (anchor or body) deletes just that one; preventDefault keeps the browser's autoscroll away
+    if (tool) return; const r1 = $('chart').getBoundingClientRect(), mx = e.clientX - r1.left, my = e.clientY - r1.top;
+    const mh = nearestHandle(mx, my), md = mh ? mh.d : drawingAt(mx, my);
+    if (md) { e.preventDefault(); selectDrawing(md, false); deleteSelectedDrawing(); }
+    return;
+  }
   if (e.button !== 0 || tool) return;             // left-button only; while a tool is armed, clicks place points
   const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
   const _ocx = orderCancelAt(x, y); if (_ocx != null) { cancelOrder(_ocx); e.preventDefault(); return; }   // ✕ on an order tag → cancel that order
   const _mk = markerAt(x, y); if (_mk) { removeMarker(_mk); e.preventDefault(); return; }   // click an arrow marker → delete just that one
-  const h = nearestHandle(x, y);                  // 1) drawing anchor (endpoint) — most specific; also selects it
-  if (h) { dragH = h; selDrawing = h.d; chart.applyOptions({ handleScroll: false, handleScale: false }); repaintOverlays(); e.preventDefault(); return; }
-  const hd = drawingAt(x, y);                     // 2) drawing body — select + move the whole drawing
-  if (hd) { selDrawing = hd; startBodyDrag(hd, x, y); chart.applyOptions({ handleScroll: false, handleScale: false }); repaintOverlays(); e.preventDefault(); return; }
+  const h = (e.ctrlKey || e.metaKey) ? null : nearestHandle(x, y);   // 1) drawing anchor (endpoint) — most specific; also selects it (lock blocks the drag, not the select — G43). Ctrl/Cmd skips it: hl/vline anchors span the whole line, so the clone / multiselect branch below (G18 / G19) must own every Ctrl press; Ctrl pressed after mousedown still inverts the magnet mid-drag (G9)
+  if (h) { selectDrawing(h.d, false); if (canDrag(h.d)) { snapshot(); dragH = h; chart.applyOptions({ handleScroll: false, handleScale: false }); } repaintOverlays(); e.preventDefault(); return; }   // G21: snapshot at pointerdown — p1/p2 are rewritten in place during pointermove
+  const hd = drawingAt(x, y);                     // 2) drawing body — select + move the whole selection
+  if (hd) {
+    if (e.ctrlKey || e.metaKey) { ctrlPress = { d: hd, x, y, moved: false }; chart.applyOptions({ handleScroll: false, handleScale: false }); e.preventDefault(); return; }   // decided on pointerup / first motion (G18 / G19); the clone path snapshots when it actually clones
+    if (selSet.has(hd)) selDrawing = hd; else selectDrawing(hd, false);   // clicking a member keeps the group; anything else becomes a single selection
+    if (canDrag(hd)) { startBodyDrag(selectedList().filter(canDrag), x, y); if (dragBody) { snapshot(); chart.applyOptions({ handleScroll: false, handleScale: false }); } }   // G21: snapshot at pointerdown
+    repaintOverlays(); e.preventDefault(); return;
+  }
   if (locked()) { const L = nearestLine(y); if (L) { drag = L; chart.applyOptions({ handleScroll: false, handleScale: false }); e.preventDefault(); return; } }  // 3) stop/target/entry lines
-  if (selDrawing) { selDrawing = null; repaintOverlays(); }   // 4) empty space -> deselect (lets the chart pan)
+  if (selDrawing || selSet.size) { clearSelection(); repaintOverlays(); }   // 4) empty space -> deselect (lets the chart pan)
   if (!overPriceAxis(e.clientX)) vpan = { lx: x, ly: y };   // 5) start a free pan — price follows vertical motion, LWC pans time horizontally (never locked)
 });
 window.addEventListener('pointermove', e => {
   const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
-  if (dragH) {                                    // editing a drawing endpoint: snap price to tick, time to bar grid
-    const p = candle.coordinateToPrice(y);
-    if (p != null) { const st = xToTime(x); dragH.apply(dragH.horiz ? null : st, magnetPrice(st, p)); repaintOverlays(); }
+  if (dragH) {                                    // editing a drawing endpoint: free time + price, magnet (Ctrl/Cmd inverts it, G9) decides the snap
+    const p = candle.coordinateToPrice(y), ft = xToFreeTime(x);
+    if (p != null && ft != null) { const s = magnetSnap(ft, p, y, e.ctrlKey || e.metaKey); dragH.apply(dragH.horiz ? null : s.t, s.p); repaintOverlays(); }
     return;
   }
-  if (dragBody) { moveBody(x, y); return; }       // moving a whole drawing
+  if (ctrlPress) {                                // Ctrl held on a body: first motion beyond 3px turns the press into a clone-drag (G18)
+    if (!ctrlPress.moved && Math.hypot(x - ctrlPress.x, y - ctrlPress.y) > 3) {
+      ctrlPress.moved = true;
+      if (canDrag(ctrlPress.d)) { snapshot(); const c = cloneDrawing(ctrlPress.d); drawings.push(c); selectDrawing(c, false); startBodyDrag([c], ctrlPress.x, ctrlPress.y); }
+    }
+    if (dragBody) moveBody(x, y, e.shiftKey);
+    return;
+  }
+  if (dragBody) { moveBody(x, y, e.shiftKey); return; }   // moving the whole selection (Shift = axis lock, G15)
   if (vpan && !drag && !dragH) {                   // free 2D pan: price follows vertical motion (1:1), LWC pans time on horizontal motion — both work, neither locked
     const idy = y - vpan.ly, idx = x - vpan.lx; vpan.lx = x; vpan.ly = y;
     if (idy !== 0 && Math.abs(idy) >= Math.abs(idx)) {
@@ -1614,18 +1939,152 @@ window.addEventListener('pointermove', e => {
 });
 window.addEventListener('pointerup', () => {
   vpan = null;
-  if (dragH) { dragH = null; saveJSON('rt_drawings', drawings); chart.applyOptions({ handleScroll: true, handleScale: true }); return; }
-  if (dragBody) { dragBody = null; saveJSON('rt_drawings', drawings); chart.applyOptions({ handleScroll: true, handleScale: true }); return; }
+  if (dragH) { dragH = null; dropNoopSnapshot(); saveJSON('rt_drawings', drawings); chart.applyOptions({ handleScroll: true, handleScale: true }); return; }
+  if (ctrlPress) {                                // release without motion = Ctrl+click multiselect toggle (G19)
+    const cp = ctrlPress; ctrlPress = null; chart.applyOptions({ handleScroll: true, handleScale: true });
+    if (!cp.moved) { if (selSet.has(cp.d)) { selSet.delete(cp.d); selDrawing = selSet.size ? [...selSet].pop() : null; } else selectDrawing(cp.d, true); }
+    if (dragBody) { dragBody = null; saveJSON('rt_drawings', drawings); }
+    repaintOverlays(); return;
+  }
+  if (dragBody) { dragBody = null; dropNoopSnapshot(); saveJSON('rt_drawings', drawings); chart.applyOptions({ handleScroll: true, handleScale: true }); return; }
   if (drag) { drag = null; chart.applyOptions({ handleScroll: true, handleScale: true }); }
 });
 $('chart').addEventListener('pointermove', e => {
   if (drag || dragH || dragBody) return;
-  if (tool) { $('chart').style.cursor = 'crosshair'; return; }
+  if (tool) {   // G2: rubber-band preview follows the cursor (pixels); Shift previews the 45° / square constraint too (G14 / G16)
+    $('chart').style.cursor = 'crosshair';
+    if (pendingPt) { const r = $('chart').getBoundingClientRect(); let pv = { x: e.clientX - r.left, y: e.clientY - r.top };
+      if (e.shiftKey && SHIFT_TOOLS[tool]) { const x1 = drawX(pendingPt.t), y1 = drawY(pendingPt.p); if (x1 != null && y1 != null) pv = shiftConstrain(tool, x1, y1, pv.x, pv.y); }
+      previewXY = pv; if (drawingsPrimitive._req) drawingsPrimitive._req(); }
+    if (hoverDrawing) { hoverDrawing = null; repaintOverlays(); }
+    return;
+  }
   const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
-  if (nearestHandle(x, y) || drawingAt(x, y)) { $('chart').style.cursor = 'move'; return; }   // hovering a drawing/anchor
+  const hh = nearestHandle(x, y), hv = hh ? hh.d : drawingAt(x, y);
+  if (hv !== hoverDrawing) { hoverDrawing = hv; repaintOverlays(); }   // G12: anchors appear on hover
+  if (hv) { $('chart').style.cursor = canDrag(hv) ? (hh ? 'pointer' : 'move') : 'default'; return; }   // hovering a drawing/anchor
   if (orderCancelAt(x, y) != null) { $('chart').style.cursor = 'pointer'; return; }            // hovering an order ✕
   $('chart').style.cursor = (locked() && nearestLine(y)) ? 'ns-resize' : '';
 });
+
+// ---------- floating drawing toolbar (G13) + Settings panel: Style / Coordinates (G41) / Visibility (G42) ----------
+let _dtbKey = '', _dtbSel = null;
+function placeDrawToolbar(bb, W, H) {   // called from the drawings primitive on every paint; returns the state for __drwDbg. bb = selection bbox in chart pixels (null / .bad = hide)
+  const el = $('drawToolbar'); if (!el) return 'none';
+  const sel = selDrawing && drawings.includes(selDrawing) ? selDrawing : null;
+  const show = !!(sel && bb && bb.n > 0 && !bb.bad && bb.x1 >= 0 && bb.x0 <= W && bb.y1 >= 0 && bb.y0 <= H);   // any null coordinate or a bbox fully off the pane -> hidden
+  if (!show) { if (_dtbKey !== 'hide') { _dtbKey = 'hide'; el.hidden = true; } if (!sel && $('drawSettings').classList.contains('open')) closeDrawSettings(); return 'hidden'; }
+  if (sel !== _dtbSel) { _dtbSel = sel; syncDrawToolbar(); }
+  const r = $('chart').getBoundingClientRect();
+  const cx = Math.max(0, Math.min(W, (bb.x0 + bb.x1) / 2)), top = Math.max(0, Math.min(H, bb.y0)), bot = Math.max(0, Math.min(H, bb.y1));
+  const key = `${Math.round(cx)},${Math.round(top)},${Math.round(bot)},${Math.round(r.left)},${Math.round(r.top)}`;
+  if (key === _dtbKey && !el.hidden) return 'shown';
+  _dtbKey = key; el.hidden = false;
+  const tw = el.offsetWidth || 230, th = el.offsetHeight || 30;
+  let y = r.top + top - th - 12; if (y < r.top + 2) y = Math.min(r.top + H - th - 2, r.top + bot + 12);   // above the selection; below it when there is no room
+  el.style.left = Math.max(r.left + 2, Math.min(r.right - tw - 2, r.left + cx - tw / 2)) + 'px'; el.style.top = y + 'px';
+  return 'shown';
+}
+function syncDrawToolbar() {   // reflect the primary selection's style in the toolbar controls
+  const d = selDrawing; if (!d) return;
+  const s = d.style || {}; $('dtColor').value = /^#[0-9a-f]{6}$/i.test(s.color || '') ? s.color : '#000000';
+  $('dtWidth').value = String(s.width || 1.5); $('dtDash').value = String(s.dash | 0);
+  $('dtLock').classList.toggle('on', !!d.locked); $('dtLock').querySelector('span').textContent = d.locked ? 'lock' : 'lock_open'; $('dtLock').title = d.locked ? 'Unlock' : 'Lock';
+}
+function setDrawingStyle(patch) {   // batch style change over the whole selection (G20); writes style.* and mirrors color into d.color for older builds
+  snapshot(); for (const d of selectedList()) { d.style = d.style || {}; Object.assign(d.style, patch); if (patch.color != null) d.color = patch.color; }
+  saveJSON('rt_drawings', drawings); repaintOverlays();
+}
+function initDrawToolbar() {
+  const el = $('drawToolbar'); if (!el) return;
+  el.addEventListener('pointerdown', (e) => e.stopPropagation());   // keep popover-closing document handlers away
+  $('dtColor').oninput = (e) => setDrawingStyle({ color: e.target.value });
+  $('dtWidth').onchange = (e) => setDrawingStyle({ width: +e.target.value });
+  $('dtDash').onchange = (e) => setDrawingStyle({ dash: +e.target.value });
+  $('dtLock').onclick = () => { const on = !(selDrawing && selDrawing.locked); snapshot(); for (const d of selectedList()) d.locked = on; saveJSON('rt_drawings', drawings); syncDrawToolbar(); repaintOverlays(); toast(on ? 'Drawing locked' : 'Drawing unlocked'); };
+  $('dtDelete').onclick = () => deleteSelectedDrawing();
+  $('dtSettings').onclick = () => openDrawSettings(selDrawing);
+  $('chart').addEventListener('dblclick', (e) => { if (overPriceAxis(e.clientX) || tool) return; const r = $('chart').getBoundingClientRect(), d = drawingAt(e.clientX - r.left, e.clientY - r.top); if (d) { selectDrawing(d, false); repaintOverlays(); openDrawSettings(d); } });   // G17
+  $('drawSettings').onclick = (e) => { if (e.target === e.currentTarget) closeDrawSettings(); };
+  $('btnLockDrw').onclick = () => { drawingsLocked = !drawingsLocked; saveJSON('rt_lockdrw', drawingsLocked); lockBtnUI(); toast(drawingsLocked ? 'All drawings locked' : 'Drawings unlocked'); };
+  lockBtnUI();
+}
+function lockBtnUI() { const b = $('btnLockDrw'); if (!b) return; b.classList.toggle('active', drawingsLocked); b.querySelector('span').textContent = drawingsLocked ? 'lock' : 'lock_open'; }
+// ---- Hide menu (G33 / G45): Drawings / Indicators / Positions and orders / All — temporary masks checked inside every draw callback ----
+function toggleHide(which) {
+  if (which === 'all') { const on = !(hideFlags.drawings && hideFlags.indicators && hideFlags.positions); hideFlags.drawings = hideFlags.indicators = hideFlags.positions = on; }
+  else hideFlags[which] = !hideFlags[which];
+  saveJSON('rt_hide', hideFlags); applyHide();
+  toast(which === 'all' ? (hideFlags.drawings ? 'Everything hidden' : 'Everything shown') : `${which === 'positions' ? 'Positions & orders' : which[0].toUpperCase() + which.slice(1)} ${hideFlags[which] ? 'hidden' : 'shown'}`);
+}
+function applyHide() {
+  if (hideFlags.drawings) { clearSelection(); hoverDrawing = null; pendingPt = null; previewXY = null; if ($('drawSettings').classList.contains('open')) closeDrawSettings(); }
+  applyVolVisible(); applyOscHidden(); repaintOverlays(); refreshMarkers(true); hideBtnUI();
+}
+function hideBtnUI() {
+  const b = $('btnHideDrw'); if (!b) return; const any = hideFlags.drawings || hideFlags.indicators || hideFlags.positions;
+  b.classList.toggle('active', any); b.classList.toggle('lt-hide', any); b.querySelector('span').textContent = any ? 'visibility_off' : 'visibility';
+  b.title = (hideFlags.drawings ? 'Show all drawings' : 'Hide all drawings') + ' (Ctrl+Alt+H)';
+  [['hideDrawings', 'drawings'], ['hideIndicators', 'indicators'], ['hidePositions', 'positions']].forEach(([id, k]) => { const r = $(id); if (r) r.classList.toggle('sel', !!hideFlags[k]); });
+  const all = $('hideAll'); if (all) all.classList.toggle('sel', !!(hideFlags.drawings && hideFlags.indicators && hideFlags.positions));
+}
+function initLeftbarMenus() {   // Hide + Remove flyouts, same open/close pattern as the Magnet menu
+  const wire = (btnId, popId, rows) => {
+    const pop = $(popId), btn = $(btnId); if (!pop || !btn) return;
+    btn.onclick = (e) => { e.stopPropagation(); const open = !pop.classList.contains('open'); pop.classList.toggle('open', open); if (open) { const r = btn.parentElement.getBoundingClientRect(); pop.style.left = (r.right + 4) + 'px'; pop.style.top = Math.max(4, Math.min(r.top, window.innerHeight - pop.offsetHeight - 8)) + 'px'; } };   // keep the flyout inside the viewport (Remove sits at the bottom of the bar)
+    btn.onpointerdown = (e) => e.stopPropagation();
+    document.addEventListener('pointerdown', (e) => { if (pop.classList.contains('open') && !pop.contains(e.target) && !btn.contains(e.target)) pop.classList.remove('open'); });
+    for (const [id, fn] of rows) { const r = $(id); if (r) r.onclick = () => { pop.classList.remove('open'); fn(); }; }
+  };
+  wire('btnHideMenu', 'hidePopover', [['hideDrawings', () => toggleHide('drawings')], ['hideIndicators', () => toggleHide('indicators')], ['hidePositions', () => toggleHide('positions')], ['hideAll', () => toggleHide('all')]]);
+  wire('btnRemoveMenu', 'removePopover', [['rmDrawings', clearDrawings], ['rmDrawingsInd', removeDrawingsAndIndicators]]);
+  $('btnHideDrw').onclick = () => toggleHide('drawings');
+  const al = $('rmAlwaysLocked'); if (al) { al.checked = alwaysRemoveLocked; al.onchange = (e) => { alwaysRemoveLocked = e.target.checked; saveJSON('rt_alwaysrmlocked', alwaysRemoveLocked); }; }
+  hideBtnUI();
+}
+const TF_LABEL = (m) => m < 1 ? Math.round(m * 60) + 's' : m + 'm';
+let dsDrawing = null, dsTab = 'style';
+function closeDrawSettings() { const el = $('drawSettings'); el.classList.remove('open'); el.innerHTML = ''; dsDrawing = null; }
+function openDrawSettings(d, tab) {
+  if (!d || !drawings.includes(d)) return;
+  dsDrawing = d; if (tab) dsTab = tab; const s = d.style || (d.style = { color: d.color || '#000000', width: 1.5, dash: 0 });
+  const abs = (t) => { const l = timeToLogical(t); return l == null ? '' : +(l + seriesFrom).toFixed(2); };   // bar number = absolute bar index (fractional between bars, > last bar = future space)
+  const chk = (k, label, on) => `<label class="ds-row"><input type="checkbox" data-k="${k}" ${on ? 'checked' : ''}> ${label}</label>`;
+  const num = (k, label, v, step) => `<label class="ds-row ds-num"><span>${label}</span><input type="number" data-k="${k}" value="${v}" step="${step}"></label>`;
+  const pt = (n, obj, hasT, hasP) => `<div class="ds-grp"><div class="ds-gh">${n}</div>${hasT ? num('t:' + obj, 'Bar #', abs(d[obj].t), 1) : ''}${hasP ? num('p:' + obj, 'Price', +(+d[obj].p).toFixed(2), TICK) : ''}</div>`;
+  let style = `<label class="ds-row ds-num"><span>Color</span><input type="color" data-k="s:color" value="${/^#[0-9a-f]{6}$/i.test(s.color || '') ? s.color : '#000000'}"></label>` +
+    `<label class="ds-row ds-num"><span>Width</span><select data-k="s:width">${[1, 1.5, 2, 3, 4].map(w => `<option value="${w}" ${s.width == w ? 'selected' : ''}>${w}px</option>`).join('')}</select></label>` +
+    `<label class="ds-row ds-num"><span>Line</span><select data-k="s:dash">${['Solid', 'Dashed', 'Dotted'].map((n, i) => `<option value="${i}" ${(s.dash | 0) === i ? 'selected' : ''}>${n}</option>`).join('')}</select></label>`;
+  if (d.type === 'tl' || d.type === 'ray') style += `<label class="ds-row ds-num"><span>Extend</span><select data-k="d:extend">${['none', 'left', 'right', 'both'].map(v => `<option value="${v}" ${(d.extend || 'none') === v ? 'selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}</select></label>` + chk('d:arrowStart', 'Arrow at start', d.arrowStart) + chk('d:arrowEnd', 'Arrow at end', d.arrowEnd);
+  if (d.type === 'box') style += chk('d:extendLeft', 'Extend left', d.extendLeft) + chk('d:extendRight', 'Extend right', d.extendRight) + chk('d:middleLine', 'Middle line', d.middleLine);
+  if (d.type === 'fib') { const lv = Array.isArray(d.fibLevels) ? d.fibLevels : FIB_DEFAULT; style += `<div class="ds-gh">Levels</div><div class="ds-levels">${FIB_LEVELS.map(f => chk('fib:' + f.lv, f.lv, lv.some(v => Math.abs(v - f.lv) < 1e-6))).join('')}</div>` + chk('d:reverse', 'Reverse', d.reverse) + chk('d:extendLeft', 'Extend left', d.extendLeft) + chk('d:extendRight', 'Extend right', d.extendRight); }
+  let coords = '';
+  if (d.type === 'hl') coords = pt('Price', 'p1', false, true);
+  else if (d.type === 'vline') coords = pt('Point', 'p1', true, false);
+  else if (d.type === 'rr') coords = `<div class="ds-grp"><div class="ds-gh">Entry</div>${num('t:p1', 'Bar #', abs(d.p1.t), 1)}${num('p:p1', 'Entry', +(+d.p1.p).toFixed(2), TICK)}${num('d:stop', 'Stop', +(+d.stop).toFixed(2), TICK)}${num('d:target', 'Target', +(+d.target).toFixed(2), TICK)}</div>` + (d.p2 ? pt('Right edge', 'p2', true, false) : '');
+  else coords = pt(d.p2 ? 'Point 1' : 'Point', 'p1', true, true) + (d.p2 ? pt('Point 2', 'p2', true, true) : '');
+  const all = !Array.isArray(d.visibleTFs);
+  const vis = chk('v:all', 'All timeframes', all) + `<div class="ds-levels ${all ? 'ds-off' : ''}" id="dsTfs">${STD_TF.map(m => chk('tf:' + m, TF_LABEL(m), !all && d.visibleTFs.some(v => Math.abs(v - m) < 1e-6))).join('')}</div>`;
+  const tabs = [['style', 'Style'], ['coords', 'Coordinates'], ['vis', 'Visibility']];
+  $('drawSettings').innerHTML = `<div class="dd-card ds-card"><div class="dd-h"><span class="dd-date">${d.type.toUpperCase()} settings</span><button class="mini ico-btn" id="dsClose"><span class="material-symbols-outlined">close</span></button></div>` +
+    `<div class="ds-tabs">${tabs.map(([k, n]) => `<button class="ds-tab ${dsTab === k ? 'active' : ''}" data-tab="${k}">${n}</button>`).join('')}</div>` +
+    `<div class="ds-body"><div class="ds-pane" data-pane="style" ${dsTab === 'style' ? '' : 'hidden'}>${style}</div><div class="ds-pane" data-pane="coords" ${dsTab === 'coords' ? '' : 'hidden'}>${coords}</div><div class="ds-pane" data-pane="vis" ${dsTab === 'vis' ? '' : 'hidden'}>${vis}</div></div></div>`;
+  const el = $('drawSettings'); el.classList.add('open');
+  $('dsClose').onclick = closeDrawSettings;
+  el.querySelectorAll('.ds-tab').forEach(b => { b.onclick = () => { dsTab = b.dataset.tab; el.querySelectorAll('.ds-tab').forEach(x => x.classList.toggle('active', x === b)); el.querySelectorAll('.ds-pane').forEach(p => { p.hidden = p.dataset.pane !== dsTab; }); }; });
+  el.querySelectorAll('[data-k]').forEach(inp => { inp[inp.type === 'color' || inp.type === 'number' ? 'oninput' : 'onchange'] = () => applyDrawSetting(d, inp.dataset.k, inp.type === 'checkbox' ? inp.checked : inp.value); });
+}
+function applyDrawSetting(d, k, v) {   // live apply (TV applies as you edit); every change persists + repaints (+ undo snapshot, G21)
+  const [kind, key] = k.split(':'); snapshot();
+  if (kind === 's') { d.style[key] = key === 'color' ? v : +v; if (key === 'color') d.color = v; }
+  else if (kind === 'd') d[key] = (key === 'stop' || key === 'target') ? +v : (key === 'extend' ? v : !!v);
+  else if (kind === 'p') { const n = +v; if (isFinite(n)) d[key].p = n; }
+  else if (kind === 't') { const n = +v; if (isFinite(n)) { const t = logicalToTime(n - seriesFrom); if (t != null) d[key].t = t; } }   // bar number -> time (future bars allowed)
+  else if (kind === 'fib') { const lv = new Set(Array.isArray(d.fibLevels) ? d.fibLevels : FIB_DEFAULT); if (v) lv.add(+key); else lv.forEach(x => { if (Math.abs(x - +key) < 1e-6) lv.delete(x); }); d.fibLevels = [...lv].sort((a, b) => a - b); }
+  else if (kind === 'v') { d.visibleTFs = v ? null : [tf]; const box = $('dsTfs'); if (box) { box.classList.toggle('ds-off', !!v); box.querySelectorAll('input').forEach(i => { i.checked = !v && Math.abs(+i.dataset.k.slice(3) - tf) < 1e-6; }); } }
+  else if (kind === 'tf') { const set = new Set(Array.isArray(d.visibleTFs) ? d.visibleTFs : []); if (v) set.add(+key); else set.forEach(x => { if (Math.abs(x - +key) < 1e-6) set.delete(x); }); d.visibleTFs = [...set].sort((a, b) => a - b); }
+  saveJSON('rt_drawings', drawings); if (selDrawing === d) syncDrawToolbar(); repaintOverlays();
+}
 
 // ---------- timeframe aggregation ----------
 // Tick bars: a new bar every N ticks instead of every N minutes. Only meaningful when the base
@@ -2933,7 +3392,7 @@ function barIdxAtTime(t) {   // exact-match binary search over bars[] (sorted by
 }
 let _mkSig = null;
 function refreshMarkers(force) {
-  const ms = (showTrades ? markers : []).concat(annotations);
+  const ms = (showTrades ? markers : []).concat(hideFlags.drawings ? [] : annotations);   // Hide > Drawings covers the arrow markers too (G45); #btnHideTrades keeps its own showTrades switch
   // Only hand LWC markers whose bar is actually IN the fed series. A marker with a time the series
   // doesn't contain — a trade from another session, or one scrolled out of the RENDER_WINDOW — gets
   // clamped to the nearest edge, which stacked every such arrow onto the newest candle in one column.
@@ -3613,9 +4072,26 @@ function wire() {
   $('drwMeasure').onclick = () => setTool('measure');
   $('drwClear').onclick = clearDrawings;
   $('drwRR').onclick = () => setTool('rr');       // Long/Short position (R:R) tool
+  $('drwHRay').onclick = () => setTool('hray');   // one-point tools (TV: Horizontal ray / Vertical line / Crossline)
+  $('drwVLine').onclick = () => setTool('vline');
+  $('drwCross').onclick = () => setTool('cross');
   $('toolCursor').onclick = () => setTool('');   // deselect any active drawing/annotation tool
-  $('btnMagnet').classList.toggle('active', magnet);
-  $('btnMagnet').onclick = () => { magnet = !magnet; saveJSON('rt_magnet', magnet); $('btnMagnet').classList.toggle('active', magnet); toast(magnet ? 'Magnet on — snaps to OHLC' : 'Magnet off'); };
+  // Magnet: button body toggles off <-> last chosen strength; the chevron on its right edge opens Weak / Strong + Snap to indicators (G8/G11)
+  const magnetUI = () => { $('btnMagnet').classList.toggle('active', magnet !== 'off'); $('btnMagnet').title = 'Magnet — ' + (magnet === 'off' ? 'off' : magnet + ' (snaps to OHLC)') + '. Hold Ctrl to invert while placing / dragging'; $('magWeak').classList.toggle('sel', magnetMode === 'weak'); $('magStrong').classList.toggle('sel', magnetMode === 'strong'); $('magInd').checked = magnetInd; };
+  const setMagnet = (v) => { magnet = v; if (v !== 'off') { magnetMode = v; saveJSON('rt_magnet_mode', v); } saveJSON('rt_magnet', magnet); magnetUI(); toast(magnet === 'off' ? 'Magnet off' : (magnet === 'weak' ? 'Weak magnet — snaps near OHLC' : 'Strong magnet — always snaps to OHLC')); };
+  $('btnMagnet').onclick = () => setMagnet(magnet === 'off' ? magnetMode : 'off');
+  const magPop = $('magnetPopover');
+  $('btnMagnetMenu').onclick = (e) => { e.stopPropagation(); const open = !magPop.classList.contains('open'); if (open) { const r = $('btnMagnet').getBoundingClientRect(); magPop.style.top = r.top + 'px'; magPop.style.left = (r.right + 4) + 'px'; } magPop.classList.toggle('open', open); };
+  $('btnMagnetMenu').onpointerdown = (e) => e.stopPropagation();
+  $('magWeak').onclick = () => { setMagnet('weak'); magPop.classList.remove('open'); };
+  $('magStrong').onclick = () => { setMagnet('strong'); magPop.classList.remove('open'); };
+  $('magInd').onchange = (e) => { magnetInd = e.target.checked; saveJSON('rt_magnet_ind', magnetInd); };
+  document.addEventListener('pointerdown', (e) => { if (magPop.classList.contains('open') && !magPop.contains(e.target) && !$('btnMagnetMenu').contains(e.target)) magPop.classList.remove('open'); });
+  magnetUI();
+  $('btnKeepDraw').classList.toggle('active', keepDrawing);
+  initDrawToolbar();   // G13/G17/G41/G42/G43: floating toolbar, settings panel, dblclick, Lock all
+  initLeftbarMenus();  // G45/G46: Hide + Remove flyouts
+  $('btnKeepDraw').onclick = () => { keepDrawing = !keepDrawing; saveJSON('rt_keepdraw', keepDrawing); $('btnKeepDraw').classList.toggle('active', keepDrawing); toast(keepDrawing ? 'Keep drawing on — tool stays armed' : 'Keep drawing off'); };
   $('ripsterToggle').checked = ripsterOn;
   $('ripsterToggle').onchange = (e) => { ripsterOn = e.target.checked; saveJSON('rt_ripster', ripsterOn); ripsterRepaint(); renderIndLegend(); };
   initChartLegend();
@@ -3702,8 +4178,29 @@ function wire() {
   document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;   // letter shortcuts stay live with caps lock / shift
-    if (e.code === 'Space') { e.preventDefault(); pause(); stepAny(); }
-    else if (k === 'p') play(); else if (k === 'b') onEntryButton('long');
+    if (e.code === 'Space') { e.preventDefault(); pause(); stepAny(); return; }
+    // ---- modifier block FIRST (G21-G33): a plain-letter branch below would otherwise eat Alt+F / Alt+J and place a real order ----
+    if (e.ctrlKey || e.metaKey) {
+      if (e.altKey && k === 'h') { e.preventDefault(); return toggleHide('drawings'); }
+      if (e.altKey) return;   // any other Ctrl+Alt combo: not ours
+      if (k === 'z') { e.preventDefault(); return undo(); }
+      if (k === 'y') { e.preventDefault(); return redo(); }
+      if (k === 'c') { if (selDrawing || selSet.size) { e.preventDefault(); copyDrawing(); } return; }
+      if (k === 'v') { if (clipboardDrawings) { e.preventDefault(); pasteDrawing(); } return; }
+      return;   // never let Ctrl+<letter> fall through to the trading hotkeys
+    }
+    if (e.altKey) {
+      if (e.shiftKey && k === 'r') { e.preventDefault(); return setTool('box'); }
+      if (k === 't') { e.preventDefault(); return setTool('tl'); }
+      if (k === 'h') { e.preventDefault(); return setTool('hl'); }
+      if (k === 'j') { e.preventDefault(); return setTool('hray'); }
+      if (k === 'v') { e.preventDefault(); return setTool('vline'); }
+      if (k === 'c') { e.preventDefault(); return setTool('cross'); }
+      if (k === 'f') { e.preventDefault(); return setTool('fib'); }
+      return;   // Alt+<anything else>: browser / OS accelerator, not a trading key
+    }
+    if ((selDrawing || selSet.size) && k.startsWith('Arrow')) { e.preventDefault(); return nudgeSelection(k); }   // G23: arrows nudge the selection; only with nothing selected do Left/Right change the day
+    if (k === 'p') play(); else if (k === 'b') onEntryButton('long');
     else if (k === 's') onEntryButton('short');
     else if (k === 'f') { e.preventDefault(); placeBreakout('long'); }    // F / J sit under the index fingers
     else if (k === 'j') { e.preventDefault(); placeBreakout('short'); }
@@ -3712,9 +4209,9 @@ function wire() {
     else if (k === ']' || k === 'ArrowRight') { e.preventDefault(); nextDay(); }
     else if (k === '0') { e.preventDefault(); fitChart(); }
     else if (e.key === 'Delete' && e.shiftKey) { e.preventDefault(); clearDrawings(); }
-    else if ((e.key === 'Delete' || e.key === 'Backspace') && selDrawing) { e.preventDefault(); deleteSelectedDrawing(); }
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && (selDrawing || selSet.size)) { e.preventDefault(); deleteSelectedDrawing(); }
     else if (k === '?') { e.preventDefault(); toggleHelp(); }
-    else if (e.key === 'Escape') { if ($('helpModal').classList.contains('open')) toggleHelp(false); else if (tool) setTool(''); else if (selDrawing) { selDrawing = null; repaintOverlays(); } }
+    else if (e.key === 'Escape') { if ($('helpModal').classList.contains('open')) toggleHelp(false); else if ($('drawSettings').classList.contains('open')) closeDrawSettings(); else if (tool) setTool(''); else if (selDrawing || selSet.size) { clearSelection(); repaintOverlays(); } }
   });
   $('btnHelp').onclick = () => toggleHelp();
   $('helpModal').onclick = (e) => { if (e.target === e.currentTarget) toggleHelp(false); };
@@ -3723,7 +4220,9 @@ function wire() {
 const HELP_KEYS = [
   ['Replay', [['Space', 'Next bar / sub-bar'], ['P', 'Play / pause'], ['[  ]', 'Previous / next trading day'], ['0', 'Fit chart'], ['?', 'This sheet']]],
   ['Orders', [['B', 'Buy market'], ['S', 'Sell market'], ['F', 'Buy stop above the bar'], ['J', 'Sell stop below the bar'], ['X', 'Flatten']]],
-  ['Drawings', [['Esc', 'Drop tool / deselect'], ['Del', 'Delete selected drawing'], ['Shift+Del', 'Clear all drawings']]],
+  ['Drawings', [['Esc', 'Drop tool / deselect'], ['Del · Middle-click', 'Delete selected drawing'], ['Shift+Del', 'Clear all drawings'], ['Ctrl+Z · Y', 'Undo / redo'], ['Ctrl+C · V', 'Copy / paste selection'], ['Arrows', 'Nudge selection: bar / tick'], ['Ctrl+Alt+H', 'Hide / show all drawings']]],
+  ['Drawing tools', [['Alt+T', 'Trend line'], ['Alt+H', 'Horizontal line'], ['Alt+J', 'Horizontal ray'], ['Alt+V', 'Vertical line'], ['Alt+C', 'Cross line'], ['Alt+F', 'Fib retracement'], ['Shift+Alt+R', 'Rectangle']]],
+  ['Editing', [['Ctrl+Click', 'Multi-select'], ['Ctrl+Drag', 'Clone a drawing'], ['Shift+Drag', 'Move along one axis only'], ['Shift+Click', '2nd point: 45° line / square box'], ['Ctrl+Click (tool)', 'Invert magnet while placing']]],
 ];
 const HELP_TOUCH = ['Touch', [['Tap ▶', 'Play / pause'], ['Tap ›', 'Next bar'], ['Drag chart', 'Pan'], ['Pinch', 'Zoom'], ['Drag seam', 'Resize panels'], ['Drag card', 'Move HUD / quiz card']]];
 function toggleHelp(on) {
@@ -3742,11 +4241,11 @@ window.__rt = { state: () => ({ tf, idx, baseIdx, bars: bars.length, base: baseB
   instr: () => ({ ...INSTR, TICK }),
   handles: () => drawingHandles().map(h => ({ horiz: !!h.horiz, hx: h.hx, hy: h.hy })),
   drawingsList: () => drawings.map(d => ({ type: d.type, p1: d.p1 && { ...d.p1 }, p2: d.p2 && { ...d.p2 } })),
-  editAt: (x, y, nx, ny) => { const h = nearestHandle(x, y); if (!h) return null; const p = candle.coordinateToPrice(ny); if (p == null) return { noprice: true }; h.apply(h.horiz ? null : xToTime(nx), rnd(p)); saveJSON('rt_drawings', drawings); repaintOverlays(); return { moved: true }; },
+  editAt: (x, y, nx, ny) => { const h = nearestHandle(x, y); if (!h) return null; const p = candle.coordinateToPrice(ny); if (p == null) return { noprice: true }; snapshot(); h.apply(h.horiz ? null : xToTime(nx), rnd(p)); saveJSON('rt_drawings', drawings); repaintOverlays(); return { moved: true }; },
   selType: () => selDrawing && selDrawing.type,
-  setSel: (i) => { selDrawing = drawings[i] || null; repaintOverlays(); return selDrawing && selDrawing.type; },
+  setSel: (i) => { selectDrawing(drawings[i] || null, false); repaintOverlays(); return selDrawing && selDrawing.type; },
   drawingAtXY: (x, y) => { const d = drawingAt(x, y); return d ? d.type : null; },
-  moveSel: (x, y, nx, ny) => { const d = drawings[drawings.length - 1]; if (!d) return null; selDrawing = d; startBodyDrag(d, x, y); moveBody(nx, ny); dragBody = null; saveJSON('rt_drawings', drawings); return { moved: true }; },
+  moveSel: (x, y, nx, ny) => { const d = drawings[drawings.length - 1]; if (!d) return null; selectDrawing(d, false); snapshot(); startBodyDrag([d], x, y); moveBody(nx, ny); dragBody = null; saveJSON('rt_drawings', drawings); return { moved: true }; },
   deleteSel: () => { const n0 = drawings.length; deleteSelectedDrawing(); return { before: n0, after: drawings.length }; },
   lastDrawing: () => { const d = drawings[drawings.length - 1]; return d ? { type: d.type, entry: d.p1 && d.p1.p, stop: d.stop, target: d.target } : null; },
   entryOrderInfo: () => entryOrder && { side: entryOrder.side, kind: entryOrder.kind, price: entryOrder.price, slTicks: entryOrder.slTicks, tgts: entryOrder.tgts },

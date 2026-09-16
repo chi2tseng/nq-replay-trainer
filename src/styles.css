@@ -677,6 +677,50 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 .lt-btn.lt-green{ color:var(--pos); }
 .lt-btn.lt-red{ color:var(--neg); }
 .lt-sep{ width:22px; height:1px; background:var(--line); margin:3px 0; flex:none; }
+/* button + right-edge chevron (TradingView group arrow: 11px wide, shown on hover) — Magnet options menu */
+#leftbar .lt-group{ position:relative; width:var(--lb-ctl,34px); height:var(--lb-ctl,34px); flex:none; }
+#leftbar .lt-chev{
+  position:absolute; top:0; right:-1px; width:11px; height:100%; padding:0; margin:0;
+  display:inline-flex; align-items:center; justify-content:center; overflow:hidden;
+  background:var(--bg); border:1px solid transparent; border-radius:0; color:var(--dim);
+  opacity:0; pointer-events:none;
+}
+.lt-chev .material-symbols-outlined{ font-size:14px; }
+#leftbar .lt-group:hover .lt-chev, #leftbar .lt-chev:focus-visible{ opacity:1; pointer-events:auto; }
+#leftbar .lt-chev:hover{ background:var(--hover); color:var(--txt); }
+/* left-toolbar flyout menus sit outside #leftbar (it clips overflow) and are positioned from the button rect at open time */
+.popover.lt-pop{ position:fixed; top:0; left:0; min-width:172px; }
+.popover.lt-pop .pop-row{ padding:5px 8px; }
+.popover.lt-pop .pop-check{ font-size:16px; color:var(--brand); visibility:hidden; }
+.popover.lt-pop .pop-row.sel .pop-check{ visibility:visible; }
+.popover.lt-pop .pop-row.sel{ color:var(--brand); }
+#removePopover .pop-check{ visibility:visible; color:var(--dim); }   /* Remove menu rows carry an action icon, not a check mark */
+#leftbar .lt-btn.active.lt-hide{ color:var(--neg); }                /* Hide button lit = something is hidden */
+/* ===================== Floating drawing toolbar + Settings panel (TV_DRAWING_GAP G13 / G17 / G41 / G42) ===================== */
+.drw-tb{ position:fixed; z-index:150; display:flex; align-items:center; gap:4px; padding:3px 4px; background:var(--bg); border:1px solid var(--line); border-radius:var(--r-box); box-shadow:0 2px 8px rgba(0,0,0,.18); }
+.drw-tb[hidden]{ display:none; }
+.drw-tb input[type=color]{ width:26px; height:24px; padding:1px 2px; border:1px solid var(--line); background:var(--panel2); cursor:pointer; }
+.drw-tb select{ height:24px; min-width:64px; padding:1px 18px 1px 5px; font-size:11px; }
+.drw-tb .dt-btn{ width:26px; height:24px; padding:0; display:inline-flex; align-items:center; justify-content:center; background:transparent; border:1px solid transparent; color:var(--dim); }
+.drw-tb .dt-btn:hover:not(:disabled){ background:var(--panel2); border-color:var(--line); color:var(--txt); }
+.drw-tb .dt-btn .material-symbols-outlined{ font-size:18px; }
+.drw-tb .dt-btn.on{ color:var(--brand); }
+#dtDelete:hover:not(:disabled){ color:var(--neg); }
+.ds-card{ width:min(360px,100%); }
+.ds-tabs{ display:flex; gap:0; border-bottom:1px solid var(--line); padding:0 12px; }
+.ds-tabs button.ds-tab{ background:transparent; border:0; border-bottom:2px solid transparent; border-radius:0; padding:7px 10px; color:var(--dim); font-weight:500; }
+.ds-tabs button.ds-tab.active, .ds-tabs button.ds-tab.active:hover{ background:transparent; border-color:transparent; border-bottom-color:var(--brand); color:var(--brand); }   /* beats the global button.active fill */
+.ds-tabs button.ds-tab:hover:not(:disabled){ background:transparent; border-color:transparent; color:var(--txt); }
+.ds-body{ padding:10px 14px 14px; display:flex; flex-direction:column; gap:2px; overflow:auto; }
+.ds-row{ display:flex; align-items:center; gap:7px; padding:4px 0; cursor:pointer; }
+.ds-row.ds-num{ justify-content:space-between; cursor:default; }
+.ds-row.ds-num span{ color:var(--dim); }
+.ds-row.ds-num input,.ds-row.ds-num select{ width:130px; padding:3px 6px; font-size:12px; }
+.ds-row.ds-num input[type=color]{ width:40px; height:26px; padding:1px 2px; }
+.ds-gh{ font-size:11px; font-weight:600; color:var(--dim); text-transform:uppercase; letter-spacing:.5px; margin:8px 0 2px; }
+.ds-grp{ display:flex; flex-direction:column; }
+.ds-levels{ display:grid; grid-template-columns:repeat(3,1fr); gap:0 8px; }
+.ds-levels.ds-off{ opacity:.4; pointer-events:none; }
 
 /* ===================== Indicators dropdown (top toolbar) ===================== */
 .tb-ind{ position:relative; }
