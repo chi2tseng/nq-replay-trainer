@@ -119,7 +119,9 @@ def import_symbol(sym):
         later_day = any(d > day for d in days)                             # NT already holds a later day -> this one won't grow
         on_day = last_et.strftime('%Y-%m-%d') == day                        # the last tick must be on the trading day's own date: a tape ending at 19:xx the evening BEFORE is the first hour of a new day, not a close
         complete = later_day or (on_day and (last_et.hour > 16 or (last_et.hour == 16 and last_et.minute >= 59)))   # 16:59 close, or a holiday early close followed by more data
-        if day in have and not FORCE: continue
+        if day in have and not FORCE:
+            if parent == sym: _ratio[(parent, day)] = 1.0   # parent already accepted on an earlier run -> micros may inherit the verdict this run
+            continue
         if day in unstable: print(f"  skip {day}: an hour file was mid-write — next run"); continue
         if len(rows) < 5000: print(f"  skip {day}: {len(rows)} ticks"); continue
         if not (starts_ok and complete) and not FORCE: print(f"  skip {day}: incomplete in NT db (ticks {first_et:%m-%d %H:%M} .. {last_et:%m-%d %H:%M} ET) — will retry once NT has the rest"); continue
