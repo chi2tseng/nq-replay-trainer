@@ -309,7 +309,7 @@ async function run() {
             if (await safeClick(page, '#quizCard .qz-b.buy')) {
               await page.waitForTimeout(500);
               await page.evaluate(() => {
-                const v = document.querySelector('#quizCard .qz-verdict'); if (v) { v.className = 'qz-verdict good'; v.textContent = 'Correct - same side'; }
+                const v = document.querySelector('#quizCard .qz-verdict'); if (v) { v.className = 'qz-verdict good'; v.textContent = 'Took the winner again'; }
                 const r = document.querySelector('#quizCard .qz-res'); if (r) { r.className = 'qz-res pos'; r.textContent = '+$85.00'; }
                 const chip = document.querySelector('#quizCard .qz-chip'); if (chip) { chip.className = 'qz-chip good'; chip.textContent = '1'; }
                 const b = document.querySelector('#quizCard .qz-cmp b'); if (b) b.className = 'pos';

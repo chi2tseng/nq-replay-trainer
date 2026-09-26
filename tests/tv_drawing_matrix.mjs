@@ -40,6 +40,7 @@ async function load() {
     window.__ptInk = (rootId, x, y, rad = 2) => { const cs = canvases(rootId); for (let dx = -rad; dx <= rad; dx++) for (let dy = -rad; dy <= rad; dy++) if (isInk(rgbAt(cs, x + dx, y + dy))) return true; return false; };
     window.__rowInk = (rootId, y, x0, x1) => { const cs = canvases(rootId); let best = 0; for (let dy = -2; dy <= 2; dy++) { let n = 0; for (let x = x0; x < x1; x += 2) if (isInk(rgbAt(cs, x, y + dy))) n++; best = Math.max(best, n); } return best; };
     window.__segInk = (rootId, x1, y1, x2, y2, n = 12) => { let hit = 0; for (let k = 1; k < n; k++) { const t = k / n; if (window.__ptInk(rootId, Math.round(x1 + (x2 - x1) * t), Math.round(y1 + (y2 - y1) * t), 2)) hit++; } return hit / (n - 1); };
+    window.__rgbNear = (rootId, x, y, rad = 1) => { const cs = canvases(rootId), o = []; for (let dx = -rad; dx <= rad; dx++) for (let dy = -rad; dy <= rad; dy++) o.push((rgbAt(cs, Math.round(x) + dx, Math.round(y) + dy) || []).join(',')); return o.join(';'); };   // NT checks: raw neighbourhood for before/after pixel diffs (immune to candle ink)
     window.__colorNear = (rootId, x, y, test, rad = 2) => { const cs = canvases(rootId); const f = new Function('r', 'g', 'b', 'return ' + test); for (let dx = -rad; dx <= rad; dx++) for (let dy = -rad; dy <= rad; dy++) { const d = rgbAt(cs, x + dx, y + dy); if (d && d[3] > 80 && f(d[0], d[1], d[2])) return true; } return false; };
   });
 }
@@ -271,10 +272,11 @@ try {
     await paint();
     const m = await geomOf(0), r = await geomOf(1);
     const rrXa = await page.evaluate(() => rrRange(drawings[1], drawX).xa), rrYt = await page.evaluate(() => drawY(drawings[1].target));
-    const mUn = await page.evaluate(([x, y]) => window.__colorNear('chart', x - 3, y - 3, 'b > 180 && r < 140', 0), [m.x1, m.y1]);
+    // measure probe at (-2,-2) like tl/rr: the old (-3,-3) sat 4.24px out on the 5px dot's anti-aliased black ring, so it passed or failed with the sub-pixel chart geometry
+    const mUn = await page.evaluate(([x, y]) => window.__colorNear('chart', x - 2, y - 2, 'b > 180 && r < 140', 0), [m.x1, m.y1]);
     const rUn = await page.evaluate(([x, y]) => window.__colorNear('chart', x - 2, y - 2, 'b > 180 && r < 140', 0), [rrXa, rrYt]);
     await page.evaluate(() => { selectDrawing(drawings[0], false); repaintOverlays(); }); await paint();
-    const mSel = await page.evaluate(([x, y]) => window.__colorNear('chart', x - 3, y - 3, 'b > 180 && r < 140', 0), [m.x1, m.y1]);
+    const mSel = await page.evaluate(([x, y]) => window.__colorNear('chart', x - 2, y - 2, 'b > 180 && r < 140', 0), [m.x1, m.y1]);
     await page.evaluate(() => { selectDrawing(drawings[1], false); repaintOverlays(); }); await paint();
     const rSel = await page.evaluate(([x, y]) => window.__colorNear('chart', x - 2, y - 2, 'b > 180 && r < 140', 0), [rrXa, rrYt]);
     report('G12', tlOk && !mUn && !rUn && mSel && rSel, `tl: no handles unselected(${handlesUnsel === 0}), handles on hover(${hov.handles}) and on select(${dbg.handles}); measure/rr: handle ink appears only after select (measure ${mUn}->${mSel}, rr ${rUn}->${rSel})`);
@@ -741,6 +743,173 @@ try {
     await page.waitForTimeout(1500);
   }
 
+  // ================= NT1..NT18 NinjaTrader 8 Trend Channel (Ctrl+2) + Line (F2) — exports/NT8_TRENDCHANNEL_SPEC.md, IMPL_SPEC §A =================
+  // Ink checks are before/after pixel diffs of the same points (drawings shown vs hidden, or before vs after the preview mouse move) so candle ink never counts.
+  {
+    const e0 = errs.length;
+    const reset = () => page.evaluate(() => { drawings.length = 0; clearSelection(); hoverDrawing = null; pendingPt = null; pendingPt2 = null; previewXY = null; if (tool) setTool(''); saveJSON('rt_drawings', drawings); undoStack.length = 0; redoStack.length = 0; if ($('drawSettings').classList.contains('open')) closeDrawSettings(); repaintOverlays(); });
+    const segPts = (x1, y1, x2, y2, a = 0.15, b = 0.85, n = 9) => Array.from({ length: n }, (_, i) => { const t = a + (b - a) * i / (n - 1); return [x1 + (x2 - x1) * t, y1 + (y2 - y1) * t]; });
+    const sample = (pts) => page.evaluate((pts) => pts.map(([x, y]) => window.__rgbNear('chart', x, y)), pts);
+    const frac = (a, b) => a.filter((v, i) => v !== b[i]).length / a.length;
+    const inkDiff = (pts) => page.evaluate(async (pts) => {   // per point: did the drawings layer change these pixels? (selection + hover off so handles don't count)
+      const fr = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      clearSelection(); hoverDrawing = null; repaintOverlays(); await fr();
+      const on = pts.map(([x, y]) => window.__rgbNear('chart', x, y));
+      hideFlags.drawings = true; repaintOverlays(); await fr();
+      const off = pts.map(([x, y]) => window.__rgbNear('chart', x, y));
+      hideFlags.drawings = false; repaintOverlays(); await fr();
+      return on.map((v, i) => v !== off[i]);
+    }, pts);
+    const share = (a) => a.filter(Boolean).length / a.length;
+    const chan = () => page.evaluate(() => { const d = drawings.find(q => q.type === 'channel'); if (!d) return null; const el = document.getElementById('chart'); const g = chanGeom(d, drawX, drawY, el.clientWidth, el.clientHeight); return { p1: { ...d.p1 }, p2: { ...d.p2 }, p3: d.p3 && { ...d.p3 }, levels: d.levels, extend: d.extend, g, l1: timeToLogical(d.p1.t), l2: timeToLogical(d.p2.t), l3: timeToLogical(d.p3.t) }; });
+    const noTrade = () => page.evaluate(() => ({ pos: position ? position.side : null, entry: entryOrder ? entryOrder.side + '/' + entryOrder.kind : null }));
+    await reset(); await setMagnet('off');
+    await page.evaluate(() => { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); if (entryOrder) cancelOrder('entry'); if (position) closePosition(); });
+
+    // NT1 F2 = Line (NT8 default)
+    await key('F2'); const f2a = await st(); await key('F2'); const f2b = await st();
+    report('NT1', f2a.tool === 'tl' && f2b.tool === '', `F2 arms the trend line (tool='${f2a.tool}'), F2 again drops it (tool='${f2b.tool}'); flyout row label=${await page.evaluate(() => document.querySelector('#drwTL .pop-key').textContent)}`);
+
+    // NT2 Ctrl+2 / Alt+2 = Trend channel (CDP-dispatched keys: proves the JS binding only — a real Ctrl+2 in a Chrome tab is taken by the browser, see IMPL_SPEC §A.4)
+    await page.evaluate(() => { localStorage.removeItem('rt_hint_ctrl2'); const t = document.getElementById('toast'); if (t) t.textContent = ''; });
+    await key('Control+2'); const c2 = await st(); const toastAfterCtrl = await page.evaluate(() => (document.getElementById('toast') || {}).textContent || '');
+    await key('Escape'); await key('Alt+2'); const a2 = await st();
+    const hint1 = await page.evaluate(() => ({ text: (document.getElementById('toast') || {}).textContent || '', stored: localStorage.getItem('rt_hint_ctrl2') }));
+    await page.evaluate(() => { document.getElementById('toast').textContent = 'x'; });
+    await key('Escape'); await key('Alt+2'); const hint2 = await page.evaluate(() => document.getElementById('toast').textContent); await key('Escape');
+    const ico = await page.evaluate(() => { const w = (txt) => { const s = document.createElement('span'); s.className = 'material-symbols-outlined'; s.style.cssText = 'position:absolute;left:-999px;top:0'; s.textContent = txt; document.body.appendChild(s); const v = s.getBoundingClientRect().width; s.remove(); return v; }; return document.querySelector('#drwChannel .material-symbols-outlined') && w('stacked_line_chart') < w('zz_bogus_glyph_name') / 4 ? w('stacked_line_chart') : 0; });   // ligature resolved -> one glyph wide (a bogus name renders as long text)
+    report('NT2', c2.tool === 'channel' && a2.tool === 'channel' && !/Alt\+2/.test(toastAfterCtrl) && /Alt\+2/.test(hint1.text) && hint1.stored === 'true' && hint2 === 'x' && ico > 0 && ico < 40, `Control+2 -> tool='${c2.tool}' (no hint: a Ctrl+2 that arrives already works), Alt+2 fallback -> '${a2.tool}'; one-time hint shown once(${/Alt\+2/.test(hint1.text)}, not again=${hint2 === 'x'}); stacked_line_chart glyph width=${ico.toFixed(0)}px`);
+
+    // NT3 drawing hotkeys never trade; trading hotkeys still trade afterwards
+    const t0 = await noTrade(); await key('F2'); await key('Escape'); await key('Control+2'); await key('Escape'); await key('Alt+2'); await key('Escape'); const t1 = await noTrade();
+    await page.keyboard.press('b'); await page.waitForTimeout(200); const tb = await noTrade();
+    await page.keyboard.press('x'); await page.waitForTimeout(200); const tx = await noTrade();
+    await page.keyboard.press('f'); await page.waitForTimeout(200); const tf_ = await noTrade(); await page.evaluate(() => cancelOrder('entry'));
+    await page.keyboard.press('j'); await page.waitForTimeout(200); const tj = await noTrade(); await page.evaluate(() => cancelOrder('entry'));
+    await page.keyboard.press('s'); await page.waitForTimeout(200); const ts_ = await noTrade(); await page.keyboard.press('x'); await page.waitForTimeout(200);
+    await page.evaluate(() => { markers = []; refreshMarkers(true); });   // the 2 round trips above left trade arrows on the last bars; a click on one deletes it instead of grabbing a drawing
+    report('NT3', t0.pos === null && t0.entry === null && t1.pos === null && t1.entry === null && tb.pos === 'long' && tx.pos === null && tf_.entry === 'long/stop' && tj.entry === 'short/stop' && ts_.pos === 'short', `F2 / Ctrl+2 / Alt+2 placed nothing (pos=${t1.pos} entry=${t1.entry}); then B->${tb.pos} X->flat(${tx.pos === null}) F->${tf_.entry} J->${tj.entry} S->${ts_.pos}`);
+
+    // geometry for the placement / drag tests (all on revealed bars, magnet off)
+    const P1 = [await barX(k), Math.round(geo.H * 0.42)], P2 = [await barX(k + 20), Math.round(geo.H * 0.36)], P3 = [await barX(k + 5), Math.round(geo.H * 0.62)];
+    const P4 = [P3[0] + P2[0] - P1[0], P3[1] + P2[1] - P1[1]];
+    const cr = await chartRect();
+
+    // NT4 + NT5: 3-click placement with live preview after click 1 and after click 2; clicks 1-2 leave no undo entry
+    await reset();
+    await clickTool('#drwChannel');
+    const armed = await st();
+    await clickChart(...P1);
+    const s1 = await page.evaluate(() => ({ n: drawings.length, p1: !!pendingPt, p2: !!pendingPt2, u: undoStack.length }));
+    const band1 = segPts(...P1, ...P2), pre1 = await sample(band1);
+    await page.mouse.move(cr.left + P2[0], cr.top + P2[1], { steps: 4 }); await page.waitForTimeout(250);
+    const post1 = await sample(band1), dbg1 = await page.evaluate(() => window.__drwDbg && window.__drwDbg.preview);
+    await clickChart(...P2);
+    const s2 = await page.evaluate(() => ({ n: drawings.length, p1: !!pendingPt, p2: !!pendingPt2, u: undoStack.length }));
+    const railA = segPts(...P1, ...P2), railB = segPts(...P3, ...P4), preA = await sample(railA), preB = await sample(railB);
+    await page.mouse.move(cr.left + P3[0], cr.top + P3[1], { steps: 4 }); await page.waitForTimeout(250);
+    const postA = await sample(railA), postB = await sample(railB), dbg2 = await page.evaluate(() => window.__drwDbg && window.__drwDbg.preview);
+    await clickChart(...P3);
+    const s3 = await page.evaluate(() => { const d = drawings[0]; return { n: drawings.length, type: d && d.type, p3: !!(d && d.p3 && d.p3.t != null && d.p3.p != null), levels: d && JSON.stringify(d.levels), tool, pend: !!pendingPt || !!pendingPt2, u: undoStack.length, sel: selDrawing === d }; });
+    report('NT4', armed.tool === 'channel' && s1.n === 0 && s1.p1 && !s1.p2 && s2.n === 0 && s2.p1 && s2.p2 && s1.u === 0 && s2.u === 0 && s3.n === 1 && s3.type === 'channel' && s3.p3 && s3.levels === '[]' && s3.tool === '' && !s3.pend && s3.u === 1 && s3.sel, `flyout row arms 'channel'; click1 n=${s1.n}, click2 n=${s2.n} (undo entries ${s1.u}/${s2.u}), click3 n=${s3.n} type=${s3.type} p3=${s3.p3} levels=${s3.levels} -> one undo entry(${s3.u}), selected(${s3.sel}), tool back to cursor('${s3.tool}', Keep drawing off)`);
+    report('NT5', frac(pre1, post1) >= 0.7 && dbg1 && dbg1.tool === 'channel' && !dbg1.rails && frac(preA, postA) >= 0.7 && frac(preB, postB) >= 0.7 && dbg2 && dbg2.rails === 2, `after click 1: rubber band to the cursor (pixels changed on ${Math.round(frac(pre1, post1) * 100)}% of the p1->cursor path); after click 2: fixed trend rail + parallel rail from the cursor (changed ${Math.round(frac(preA, postA) * 100)}% / ${Math.round(frac(preB, postB) * 100)}%, __drwDbg.preview.rails=${dbg2 && dbg2.rails})`);
+
+    // NT6 render: both rails, no fill / no midline, 6 handles when selected
+    let c = await chan();
+    const inkA = share(await inkDiff(segPts(c.g.x1, c.g.y1, c.g.x2, c.g.y2))), inkB = share(await inkDiff(segPts(c.g.x3, c.g.y3, c.g.x4, c.g.y4)));
+    const mid = segPts((c.g.x1 + c.g.x3) / 2, (c.g.y1 + c.g.y3) / 2, (c.g.x2 + c.g.x4) / 2, (c.g.y2 + c.g.y4) / 2, 0.2, 0.8, 7), quarter = segPts(c.g.x1 + (c.g.x3 - c.g.x1) * 0.3, c.g.y1 + (c.g.y3 - c.g.y1) * 0.3, c.g.x2 + (c.g.x4 - c.g.x2) * 0.3, c.g.y2 + (c.g.y4 - c.g.y2) * 0.3, 0.2, 0.8, 7);
+    const inkMid = share(await inkDiff(mid)), inkQ = share(await inkDiff(quarter));
+    await page.evaluate(() => { selectDrawing(drawings[0], false); repaintOverlays(); }); const dSel = await paint();
+    report('NT6', inkA >= 0.8 && inkB >= 0.8 && inkMid === 0 && inkQ === 0 && dSel.handles === 6, `rail ink trend=${inkA.toFixed(2)} parallel=${inkB.toFixed(2)}; band interior untouched at the centre(${inkMid}) and 30% line(${inkQ}) = no fill, no midline (NT default); handles when selected=${dSel.handles} (NT: 3 per rail)`);
+
+    // NT7 parallel geometry holds at two zoom levels (pixel vector of rail b == rail a)
+    const zoom = [];
+    for (const sp of [geo.spacing, geo.spacing * 1.8]) {
+      await page.evaluate((sp) => chart.timeScale().applyOptions({ barSpacing: sp }), sp); await page.waitForTimeout(250);
+      const q = await chan(); const inkBz = share(await inkDiff(segPts(q.g.x3, q.g.y3, q.g.x4, q.g.y4)));
+      zoom.push({ sp, dx: Math.abs((q.g.x4 - q.g.x3) - (q.g.x2 - q.g.x1)), dy: Math.abs((q.g.y4 - q.g.y3) - (q.g.y2 - q.g.y1)), len: Math.hypot(q.g.x2 - q.g.x1, q.g.y2 - q.g.y1), ink: inkBz });
+    }
+    await page.evaluate((sp) => chart.timeScale().applyOptions({ barSpacing: sp }), geo.spacing); await page.waitForTimeout(250);
+    report('NT7', zoom.every(z => z.dx < 1 && z.dy < 1 && z.ink >= 0.8) && Math.abs(zoom[1].len - zoom[0].len) > 20, zoom.map(z => `barSpacing ${z.sp.toFixed(1)}: |Δvec|=(${z.dx.toFixed(2)},${z.dy.toFixed(2)})px, trend len ${z.len.toFixed(0)}px, parallel ink ${z.ink.toFixed(2)}`).join('; '));
+
+    // NT8 drag p3 (NT L2A1): parallel rail only
+    c = await chan(); await dragChart(c.g.x3, c.g.y3, c.g.x3 + 24, c.g.y3 + 30);
+    let c2_ = await chan();
+    report('NT8', JSON.stringify(c2_.p1) === JSON.stringify(c.p1) && JSON.stringify(c2_.p2) === JSON.stringify(c.p2) && c2_.p3.p !== c.p3.p && c2_.p3.t !== c.p3.t, `drag p3 (+24,+30)px: trend p1/p2 unchanged(${JSON.stringify(c2_.p1) === JSON.stringify(c.p1)}/${JSON.stringify(c2_.p2) === JSON.stringify(c.p2)}), p3 moved in time and price(${c2_.p3.t !== c.p3.t}/${c2_.p3.p !== c.p3.p})`);
+
+    // NT9 drag p2 (NT L1A2): p2 only; the parallel end follows because it is derived
+    c = await chan(); await dragChart(c.g.x2, c.g.y2, c.g.x2 + 30, c.g.y2 - 20);
+    c2_ = await chan();
+    report('NT9', JSON.stringify(c2_.p1) === JSON.stringify(c.p1) && JSON.stringify(c2_.p3) === JSON.stringify(c.p3) && c2_.p2.p !== c.p2.p && Math.abs((c2_.g.x4 - c2_.g.x3) - (c2_.g.x2 - c2_.g.x1)) < 1 && Math.abs(c2_.g.x4 - c.g.x4 - 30) < 2, `drag p2 (+30,-20)px: p1/p3 unchanged, p2 moved; parallel end p4 moved with it (Δx4=${(c2_.g.x4 - c.g.x4).toFixed(1)}px) and stays parallel`);
+
+    // NT10 drag p1 (NT L1A1): p3 rides along — offset vector p3-p1 fixed in price and in bars
+    c = await chan(); await dragChart(c.g.x1, c.g.y1, c.g.x1 - 26, c.g.y1 + 22);
+    c2_ = await chan();
+    const offP0 = c.p3.p - c.p1.p, offP1 = c2_.p3.p - c2_.p1.p, offL0 = c.l3 - c.l1, offL1 = c2_.l3 - c2_.l1;
+    report('NT10', c2_.p1.p !== c.p1.p && c2_.p1.t !== c.p1.t && JSON.stringify(c2_.p2) === JSON.stringify(c.p2) && Math.abs(offP1 - offP0) < 1e-6 && Math.abs(offL1 - offL0) < 0.01, `drag p1 (-26,+22)px: p1 moved, p2 unchanged; offset p3-p1 price ${offP0.toFixed(4)} -> ${offP1.toFixed(4)}, bars ${offL0.toFixed(3)} -> ${offL1.toFixed(3)} (both rails rotate together)`);
+
+    // NT11 body drag from the trend-rail midpoint and from the (non-anchor) parallel end p4: all 3 anchors shift by the same delta
+    const bodyMove = async (x, y) => { const a = await chan(); const what = await page.evaluate(([x, y]) => ({ h: !!nearestHandle(x, y), d: drawingAt(x, y) && drawingAt(x, y).type, mk: !!markerAt(x, y) }), [x, y]); await dragChart(x, y, x + 40, y + 25); const b = await chan(); const dp = [b.p1.p - a.p1.p, b.p2.p - a.p2.p, b.p3.p - a.p3.p], dl = [b.l1 - a.l1, b.l2 - a.l2, b.l3 - a.l3]; return { what, dp, dl, same: Math.max(...dp) - Math.min(...dp) < 1e-6 && Math.max(...dl) - Math.min(...dl) < 0.01 && Math.abs(dl[0]) > 0.5 && Math.abs(dp[0]) > 0 }; };
+    c = await chan(); const bm = await bodyMove((c.g.x1 + c.g.x2) / 2, (c.g.y1 + c.g.y2) / 2);
+    c = await chan(); const b4 = await bodyMove(c.g.x4, c.g.y4);
+    report('NT11', bm.same && b4.same, `trend midpoint grab: Δbars=${bm.dl.map(v => v.toFixed(2)).join('/')} Δprice=${bm.dp.map(v => v.toFixed(2)).join('/')}; p4 grab (not an anchor in NT, hit=${JSON.stringify(b4.what)}): Δbars=${b4.dl.map(v => v.toFixed(2)).join('/')} Δprice=${b4.dp.map(v => v.toFixed(2)).join('/')} -> whole channel translated`);
+
+    // NT12 Esc and right-click cancel an in-progress channel (no drawing, no undo entry, no trade menu)
+    await reset();
+    await clickTool('#drwChannel'); await clickChart(...P1); await clickChart(...P2); await key('Escape');
+    const esc = await page.evaluate(() => ({ n: drawings.length, p1: pendingPt, p2: pendingPt2, tool, u: undoStack.length }));
+    await clickTool('#drwChannel'); await clickChart(...P1); await clickChart(P2[0], P2[1], [], 'right');
+    const rc = await page.evaluate(() => ({ n: drawings.length, p1: pendingPt, p2: pendingPt2, tool, u: undoStack.length, menu: !!(document.getElementById('ctxMenu') && document.getElementById('ctxMenu').style.display === 'block') }));
+    await page.evaluate(() => { if (typeof hideCtx === 'function') hideCtx(); });
+    report('NT12', esc.n === 0 && esc.p1 === null && esc.p2 === null && esc.tool === '' && esc.u === 0 && rc.n === 0 && rc.p1 === null && rc.tool === '' && rc.u === 0 && !rc.menu, `Esc after click 2: n=${esc.n} pending=${esc.p1}/${esc.p2} tool='${esc.tool}' undo=${esc.u}; right-click after click 1: n=${rc.n} pending=${rc.p1} tool='${rc.tool}' trade menu shown=${rc.menu}`);
+
+    // NT13 Delete removes / NT14 undo + redo
+    await reset();
+    await clickTool('#drwChannel'); await clickChart(...P1); await clickChart(...P2); await clickChart(...P3);
+    const nPlaced = await n(); await key('Control+z'); const nU = await n(); await key('Control+y'); const nR = await n();
+    const redoP3 = await page.evaluate(() => !!(drawings[0] && drawings[0].type === 'channel' && drawings[0].p3));
+    report('NT14', nPlaced === 1 && nU === 0 && nR === 1 && redoP3, `placed ${nPlaced} -> one Ctrl+Z -> ${nU} (clicks 1-2 left no history) -> Ctrl+Y -> ${nR} with p3 intact(${redoP3})`);
+    await page.evaluate(() => window.__rt.setSel(0)); await key('Delete'); const nDel = await n(); await key('Control+z'); const nBack = await n();
+    report('NT13', nDel === 0 && nBack === 1, `select + Delete -> ${nDel}; Ctrl+Z brings it back -> ${nBack}`);
+
+    // NT15 Settings: Levels % (50 = midline), Extend right on both rails, Coordinates shows the Parallel start anchor
+    c = await chan();
+    await page.evaluate(() => { selectDrawing(drawings[0], false); openDrawSettings(drawings[0], 'style'); });
+    const title = await page.evaluate(() => document.querySelector('#drawSettings .dd-date').textContent);
+    await page.evaluate(() => { const i = document.querySelector('#drawSettings [data-k="lv:levels"]'); i.value = '50'; i.dispatchEvent(new Event('change', { bubbles: true })); });
+    const lvl = await page.evaluate(() => JSON.stringify(drawings[0].levels));
+    const inkMid50 = share(await inkDiff(segPts((c.g.x1 + c.g.x3) / 2, (c.g.y1 + c.g.y3) / 2, (c.g.x2 + c.g.x4) / 2, (c.g.y2 + c.g.y4) / 2, 0.2, 0.8, 7)));
+    await page.evaluate(() => { openDrawSettings(drawings[0], 'style'); const s = document.querySelector('#drawSettings [data-k="d:extend"]'); s.value = 'right'; s.dispatchEvent(new Event('change', { bubbles: true })); });
+    const PW = await page.evaluate(() => window.__paneW('chart'));
+    const xr = PW - 30, yA = c.g.y1 + (c.g.y2 - c.g.y1) * (xr - c.g.x1) / (c.g.x2 - c.g.x1), yB = c.g.y3 + (c.g.y4 - c.g.y3) * (xr - c.g.x3) / (c.g.x4 - c.g.x3);
+    const extInk = await inkDiff([[xr, yA], [xr, yB]]);
+    await page.evaluate(() => openDrawSettings(drawings[0], 'coords'));
+    const coords = await page.evaluate(() => ({ txt: document.getElementById('drawSettings').textContent, ks: [...document.querySelectorAll('#drawSettings [data-k]')].map(i => i.dataset.k) }));
+    await page.evaluate(() => closeDrawSettings());
+    report('NT15', title === 'Trend channel settings' && lvl === '[50]' && inkMid50 >= 0.8 && extInk[0] && extInk[1] && yA > 0 && yA < geo.H && yB > 0 && yB < geo.H && /Parallel start/.test(coords.txt) && coords.ks.includes('t:p3') && coords.ks.includes('p:p3'), `title='${title}'; Levels "50" -> levels=${lvl}, midline ink ${inkMid50.toFixed(2)}; Extend=right -> ink at x=${xr.toFixed(0)} on trend(${extInk[0]}) and parallel(${extInk[1]}); Coordinates has a Parallel start group (${coords.ks.filter(q => q.endsWith('p3')).join(',')})`);
+
+    // NT17 renders past the last bar (placement in future space) / NT16 persists across reload
+    await reset(); await page.evaluate(() => chart.timeScale().scrollToRealTime()); await page.waitForTimeout(250);   // last bar back at its rightOffset slot so 4 future bars are on the pane
+    const liveIdx = await page.evaluate(() => idx), xLast = await barX(liveIdx), sp = geo.spacing;   // live idx: G47's 1m->5m->1m round trip can leave idx != geo.idx
+    const F1 = [xLast - sp * 8, Math.round(geo.H * 0.3)], F2 = [xLast + sp * 4, Math.round(geo.H * 0.26)], F3 = [xLast - sp * 8, Math.round(geo.H * 0.5)];
+    await clickTool('#drwChannel'); await clickChart(...F1); await clickChart(...F2); await clickChart(...F3);
+    const fut = await page.evaluate(() => { const d = drawings[0]; return d && { t2: d.p2.t, lastT: bars[idx].time, native: chart.timeScale().timeToCoordinate(d.p2.t) }; });
+    const fA = segPts(...F1, ...F2, 0.78, 0.95, 5), fB = segPts(F3[0], F3[1], F3[0] + F2[0] - F1[0], F3[1] + F2[1] - F1[1], 0.78, 0.95, 5);
+    const futInk = [share(await inkDiff(fA)), share(await inkDiff(fB))];
+    report('NT17', fut && fut.t2 > fut.lastT && fut.native == null && futInk[0] >= 0.8 && futInk[1] >= 0.8, `click 2 at 4 bars past the last bar -> p2.t=${fut && fut.t2} > last bar ${fut && fut.lastT} (native timeToCoordinate=${fut && fut.native}); ink on the future part of both rails ${futInk.map(v => v.toFixed(2)).join('/')}`);
+    const saved = await chan();
+    await load();
+    const re = await chan();
+    const reLast = await page.evaluate(() => chart.timeScale().timeToCoordinate(bars[idx].time)), rA = re ? segPts(re.g.x1, re.g.y1, re.g.x2, re.g.y2, 0.78, 0.95, 5) : [], rB = re ? segPts(re.g.x3, re.g.y3, re.g.x4, re.g.y4, 0.78, 0.95, 5) : [];   // view resets on reload -> re-derive the probe pixels
+    const reInk = re && rA.concat(rB).every(([x]) => x > reLast) ? [share(await inkDiff(rA)), share(await inkDiff(rB))] : [0, 0];
+    report('NT16', !!re && JSON.stringify(re.p1) === JSON.stringify(saved.p1) && JSON.stringify(re.p2) === JSON.stringify(saved.p2) && JSON.stringify(re.p3) === JSON.stringify(saved.p3) && reInk[0] >= 0.8 && reInk[1] >= 0.8, `after a page reload the channel is back from rt_drawings with identical p1/p2/p3 (${!!re && JSON.stringify(re.p3) === JSON.stringify(saved.p3)}) and still renders past the last bar (${reInk.map(v => v.toFixed(2)).join('/')})`);
+
+    // NT18 no console errors / render errors across the whole NT block
+    const drwNT = await page.evaluate(() => window.__drw);
+    report('NT18', errs.length === e0 && drwNT && drwNT.ok && !drwNT.err, `console errors during NT1-NT17: ${errs.length - e0}${errs.length > e0 ? ' (' + errs.slice(e0).join(' | ').slice(0, 300) + ')' : ''}; window.__drw=${JSON.stringify(drwNT)}`);
+    await reset();
+  }
+
   // ================= Regression guards (Stage 5 doc, 4 of them) =================
   await clear();
   {
@@ -807,7 +976,7 @@ try {
   await browser.close();
 }
 
-const order = ['G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G16', 'G17', 'G18', 'G19', 'G20', 'G21', 'G22', 'G23', 'G24', 'G25', 'G26', 'G27', 'G28', 'G29', 'G30', 'G31', 'G32', 'G33', 'G34', 'G35', 'G36', 'G37', 'G38', 'G39', 'G40', 'G41', 'G42', 'G43', 'G44', 'G45', 'G46', 'G47', 'G48', 'REG1-no-render-err', 'REG2-trading-hotkeys', 'REG3-hide-trades-unchanged', 'REG4-no-drift-on-rewindow'];
+const order = ['G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G16', 'G17', 'G18', 'G19', 'G20', 'G21', 'G22', 'G23', 'G24', 'G25', 'G26', 'G27', 'G28', 'G29', 'G30', 'G31', 'G32', 'G33', 'G34', 'G35', 'G36', 'G37', 'G38', 'G39', 'G40', 'G41', 'G42', 'G43', 'G44', 'G45', 'G46', 'G47', 'G48', 'NT1', 'NT2', 'NT3', 'NT4', 'NT5', 'NT6', 'NT7', 'NT8', 'NT9', 'NT10', 'NT11', 'NT12', 'NT13', 'NT14', 'NT15', 'NT16', 'NT17', 'NT18', 'REG1-no-render-err', 'REG2-trading-hotkeys', 'REG3-hide-trades-unchanged', 'REG4-no-drift-on-rewindow'];
 const byId = Object.fromEntries(results.map(r => [r.id, r.status]));
 const pass = order.filter(id => byId[id] === 'PASS').length, fail = order.filter(id => byId[id] === 'FAIL').length, sk = order.filter(id => byId[id] === 'SKIP').length, missing = order.filter(id => !(id in byId));
 console.log(`\n${pass} PASS / ${fail} FAIL / ${sk} SKIP out of ${order.length}${missing.length ? ` (missing: ${missing.join(',')})` : ''}`);

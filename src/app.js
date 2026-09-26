@@ -42,6 +42,8 @@ const etHM = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', ho
 const etDMHMS = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
 function etP(ts) { const o = {}; for (const x of etDMHMS.formatToParts(new Date(ts * 1000))) o[x.type] = x.value; return o; }
 const tFmt = (ts) => { const o = etP(ts); return `${o.month}/${o.day} ${o.hour}:${o.minute}:${o.second} ET`; };  // US cash open reads 09:30:00 ET
+const tHM = (ts) => tFmt(ts).replace(/^\d\d\/\d\d\s*/, '');   // time only, for rows inside a single-day view
+const EXIT_LBL = { manual: 'Closed manually', stop: 'Stopped out', target: 'Target hit', reverse: 'Reversed' };
 const dayKey = (ts) => { const d = new Date(ts * 1000); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}`; };
 const _tdkCache = new Map();   // hour-bucket memo: buildSessions calls this once PER BAR — a two-month chunk load was 460k Intl.format calls (~seconds of freeze on every chunk-day switch)
 const tradingDayKey = (ts) => {
@@ -393,7 +395,7 @@ function renderRiskReadout() {
     const st = plannedStopTicks(side, kind, px), n = sizeForRisk(st);
     if (!n) return `<span class="rk ${cls}"><span>${lbl}</span><span>— set a stop</span></span>`;
     const d = atmUnit === 'pts' ? `${+(st * TICK).toFixed(2)}pt` : `${st}t`;   // quote the stop in whatever unit the ATM editor is set to
-    return `<span class="rk ${cls}"><span>${lbl} <b>${n}</b></span><span>${d} · ${usd(n * st * INSTR.tickValue)}</span></span>`;
+    return `<span class="rk ${cls}"><span>${lbl} <b>${n}</b></span><span>${d}, ${usd(n * st * INSTR.tickValue)}</span></span>`;
   };
   box.style.display = ''; box.innerHTML = cell('long', 'buy', 'BUY') + cell('short', 'sell', 'SELL');
 }
@@ -421,19 +423,24 @@ function placeEntryAt(side, kind, price) {
   }
   const mult = (riskOn && bracket.slTicks && sizeForRisk(bracket.slTicks)) || Math.max(1, parseInt($('qty').value, 10) || 1);
   entryOrder = { side, kind, price, atm: atmName, mult, ...bracket };
-  toast(`${side === 'long' ? 'Buy' : 'Sell'} ${kind === 'limit' ? 'Limit' : 'Stop'} @ ${f2(price)} · ${atmName === '40pt' ? '±' + CTX_BRACKET_PTS + 'pt' : atmName}`);
+  toast(`${side === 'long' ? 'Buy' : 'Sell'} ${kind === 'limit' ? 'Limit' : 'Stop'} @ ${f2(price)}, ${atmName === '40pt' ? '±' + CTX_BRACKET_PTS + 'pt' : atmLbl(atmName)}`);
   drawLines(); renderLive();
 }
 function moveStopTo(price) { if (!position) return; const s = orders.find(o => o.type === 'stop'); if (s) s.price = rnd(price); else orders.push({ type: 'stop', price: rnd(price), qty: position.qty }); drawLines(); renderLive(); toast('Stop → ' + f2(rnd(price))); }
 function moveTargetTo(price) { if (!position) return; const t = orders.find(o => o.type === 'target'); if (t) t.price = rnd(price); else orders.push({ type: 'target', price: rnd(price), qty: position.qty }); drawLines(); renderLive(); toast('Target → ' + f2(rnd(price))); }
 let ctxEl = null;
 function hideCtx() { if (ctxEl) ctxEl.style.display = 'none'; }
-function showCtx(clientX, clientY) {
-  const price = ctxPriceAt(clientY); if (price == null) return;
-  if (!ctxEl) { ctxEl = document.createElement('div'); ctxEl.id = 'ctxMenu'; document.body.appendChild(ctxEl); }
+function showCtx(clientX, clientY, drw) {   // drw: a drawing under the cursor -> NT's per-object menu (Properties / Remove / Lock) instead of the order menu
+  const price = drw ? 0 : ctxPriceAt(clientY); if (price == null) return;
+  if (!ctxEl) { ctxEl = document.createElement('div'); ctxEl.id = 'ctxMenu'; ctxEl.setAttribute('role', 'menu'); document.body.appendChild(ctxEl); }
   const p = f2(rnd(price)), it = [];
-  if (position) {
-    it.push({ h: `${position.side === 'long' ? 'LONG' : 'SHORT'} ${position.qty} @ ${f2(position.entry)}` });
+  if (drw) {
+    it.push({ h: ({ tl: 'Trend line', ray: 'Ray', hl: 'Horizontal line', hray: 'Horizontal ray', vline: 'Vertical line', cross: 'Cross line', box: 'Rectangle', fib: 'Fib retracement', measure: 'Measure', rr: 'Risk/reward', channel: 'Trend channel' })[drw.type] || drw.type });
+    it.push({ l: 'Properties…', f: () => openDrawSettings(drw) });
+    it.push({ l: 'Remove', f: () => { selectDrawing(drw, false); deleteSelectedDrawing(); } });
+    it.push({ l: drw.locked ? 'Unlock' : 'Lock', f: () => { snapshot(); drw.locked = !drw.locked; saveJSON('rt_drawings', drawings); syncDrawToolbar(); repaintOverlays(); toast(drw.locked ? 'Drawing locked' : 'Drawing unlocked'); } });
+  } else if (position) {
+    it.push({ h: `${position.side === 'long' ? 'Long' : 'Short'} ${position.qty} @ ${f2(position.entry)}` });
     it.push({ l: `Move stop here @ ${p}`, f: () => moveStopTo(price) });
     it.push({ l: `Move target here @ ${p}`, f: () => moveTargetTo(price) });
     it.push({ sep: 1 });
@@ -453,11 +460,11 @@ function showCtx(clientX, clientY) {
     it.push({ l: `Buy Stop @ ${p}`, cls: 'buy', f: () => placeEntryAt('long', 'stop', price) });
     it.push({ l: `Sell Stop @ ${p}`, cls: 'sell', f: () => placeEntryAt('short', 'stop', price) });
   }
-  const nDrw = drawings.length + annotations.length;   // always-available: wipe every drawing in one go
+  const nDrw = drw ? 0 : drawings.length + annotations.length;   // always-available: wipe every drawing in one go
   if (nDrw) { it.push({ sep: 1 }); it.push({ l: `Clear all drawings (${nDrw})`, f: () => clearDrawings() }); }
   ctxEl.innerHTML = '';
   it.forEach(x => {
-    const d = document.createElement('div');
+    const d = document.createElement(x.sep || x.h || x.atmSel ? 'div' : 'button');   // WIG: real actions are <button role=menuitem> for keyboard reachability; sep/head/atm-select stay <div>
     if (x.sep) { d.className = 'ctx-sep'; }
     else if (x.h) { d.className = 'ctx-head'; d.textContent = x.h; }
     else if (x.atmSel) {   // order-ATM selector row: change what the limit/stop entries use; doesn't close the menu
@@ -470,16 +477,26 @@ function showCtx(clientX, clientY) {
       sel.onchange = (e) => { ctxAtm = e.target.value; saveJSON('rt_ctx_atm', ctxAtm); };
       d.appendChild(sel); d.onclick = (e) => e.stopPropagation();
     }
-    else { d.className = 'ctx-item' + (x.cls ? ' ' + x.cls : ''); d.textContent = x.l; d.onclick = () => { x.f(); hideCtx(); }; }
+    else { d.type = 'button'; d.setAttribute('role', 'menuitem'); d.className = 'ctx-item' + (x.cls ? ' ' + x.cls : ''); d.textContent = x.l; d.onclick = () => { x.f(); hideCtx(); }; }
     ctxEl.appendChild(d);
   });
   ctxEl.style.display = 'block';
   ctxEl.style.left = Math.min(clientX, window.innerWidth - ctxEl.offsetWidth - 6) + 'px';
   ctxEl.style.top = Math.min(clientY, window.innerHeight - ctxEl.offsetHeight - 6) + 'px';
+  const _first = ctxEl.querySelector('button.ctx-item'); if (_first) _first.focus();   // WIG: keyboard reachability — land focus on the first real item (the ATM-select row is also .ctx-item but a non-focusable div)
 }
-$('chart').addEventListener('contextmenu', (e) => { e.preventDefault(); showCtx(e.clientX, e.clientY); });
+$('chart').addEventListener('contextmenu', (e) => { e.preventDefault(); if (tool && pendingPt) { setTool(''); return; }   // NT: right-click while placing cancels
+  const r = $('chart').getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, h = tool ? null : nearestHandle(x, y), d = tool ? null : (h ? h.d : drawingAt(x, y));
+  if (d) { selectDrawing(d, false); repaintOverlays(); }   // NT: right-click a drawing object selects it and opens its own menu
+  showCtx(e.clientX, e.clientY, d); });
 window.addEventListener('pointerdown', (e) => { if (ctxEl && ctxEl.style.display === 'block' && !ctxEl.contains(e.target)) hideCtx(); });
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideCtx(); });
+window.addEventListener('keydown', (e) => {   // WIG: ArrowUp/Down moves focus between context-menu items
+  if ((e.key !== 'ArrowDown' && e.key !== 'ArrowUp') || !ctxEl || ctxEl.style.display !== 'block') return;
+  const items = [...ctxEl.querySelectorAll('button.ctx-item')]; if (!items.length) return;
+  e.preventDefault(); const i = items.indexOf(document.activeElement);
+  items[(i < 0 ? 0 : i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus();
+});
 
 // ---------- chart legend overlay (OHLCV readout, follows crosshair) ----------
 function legendTfLabel() { return tf < 1 ? Math.round(tf * 60) + 's' : tf + 'm'; }
@@ -525,7 +542,7 @@ function renderIndLegend(i) {
     `<span class="il-name">${title}</span>` +
     (params ? `<span class="il-params">${params}</span>` : '') +
     (vals ? `<span class="il-vals">${vals}</span>` : '') +
-    `<span class="il-x material-symbols-outlined" data-del="${key}" title="Remove">close</span>` + `</div>`); };
+    `<button type="button" class="il-x material-symbols-outlined" data-del="${key}" title="Remove" aria-label="Remove ${title}">close</button>` + `</div>`); };
   add('rip', ripsterOn, 'Ripster EMA Clouds', '8·9 5·12 34·50 72·89 180·200', '');
   add('vwap', vwapOn, 'VWAP', '', tint(VWAP_COLOR, `<b>${fmtIndVal(vwapData[i])}</b>`));
   add('bb', bbOn, 'BB', '20 2', `${tint('var(--dim)', fmtIndVal(bbData.up[i]))} ${tint(BB_MID, '<b>' + fmtIndVal(bbData.mid[i]) + '</b>')} ${tint('var(--dim)', fmtIndVal(bbData.lo[i]))}`);
@@ -542,9 +559,9 @@ let _modeBadgeTxt = null;
 function updateModeBadge() {   // what the tape really is: TBBO (trade+quote), TICK (trades only), or 15s chunks
   const el = $('modeBadge'); if (!el) return;
   const kind = tickMode ? (tickBid ? 'TBBO' : 'TICK') : (baseBars.length ? '15s' : ''), srcTag = tickMode && tickSrcLoaded ? tickSrcLoaded.toUpperCase() : '';
-  const t = kind + (srcTag ? ' · ' + srcTag : '');
+  const t = kind + (srcTag ? ', ' + srcTag : '');
   if (t === _modeBadgeTxt) return; _modeBadgeTxt = t;
-  el.innerHTML = kind + (srcTag ? `<span class="mb-src"> · ${srcTag}</span>` : ''); el.className = 'mode-badge ' + (tickMode ? 'live' : 'coarse');   // <=1799 the CSS hides .mb-src
+  el.textContent = kind; el.className = 'mode-badge ' + (tickMode ? 'live' : 'coarse');   // the source (NT / Databento) is named in the title below + #indSrc
   const sr = $('indSrc'); if (sr) sr.textContent = t ? (tickMode ? t : '15s bars') : '—';   // permanent, touch-reachable copy in the Indicators popover
   if (tickMode && curTickDay && dbTickDays.has(curTickDay) && ntTickDays.has(curTickDay)) el.classList.add('has-sel');   // the picker names the source; badge yields its slot
   const src = tickSrcLoaded === 'nt' ? 'NinjaTrader export' : 'Databento';
@@ -832,6 +849,7 @@ function oscStepFwd() {
 function setOscMode(m) {
   oscMode = m; saveJSON('rt_oscMode', m);
   const tag = $('oscTag'); if (tag) tag.textContent = m === 'off' ? 'OSC' : (m === 'atr' ? 'ATR ' + atrLen : m.toUpperCase());
+  { const ar = $('atrLen') && $('atrLen').closest('.pop-row'); if (ar) ar.style.display = m === 'atr' ? '' : 'none'; }   // ATR period only matters in ATR mode
   if (m === 'off') {
     if (oscChart) { [rsiSeries, macdHist, macdLine, sigLine, atrSeries, atrHalfSeries].forEach(s => { if (s) try { oscChart.removeSeries(s); } catch (e) {} }); rsiSeries = macdHist = macdLine = sigLine = atrSeries = atrHalfSeries = null; }
     if ($('oscPane')) $('oscPane').style.display = 'none';
@@ -1268,8 +1286,9 @@ const drawingsPrimitive = {
             if (d.type === 'hray') { const x = px(X(d.p1.t)), y = px(Y(d.p1.p)); if (x == null || y == null) continue; dbg.lastX = x; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(W, y); ctx.stroke(); continue; }   // G36: one point, extends right only
             if (d.type === 'cross') { const x = px(X(d.p1.t)), y = px(Y(d.p1.p)); if (x == null || y == null) continue; dbg.lastX = x; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); continue; }   // G38: full-width + full-height through one point
             if (d.type === 'fib') { drawFib(ctx, d, X, Y, W); continue; }
-            if (d.type === 'measure') { drawMeasure(ctx, d, X, Y, sel); continue; }
+            if (d.type === 'measure') { drawMeasure(ctx, d, X, Y, sel, H); continue; }
             if (d.type === 'rr') { drawRR(ctx, d, X, Y, W, sel); continue; }
+            if (d.type === 'channel') { const g = chanGeom(d, X, Y, W, H); if (!g) continue; dbg.lastX = g.x1; ctx.beginPath(); for (const s of [g.a, g.b, ...g.lv]) { ctx.moveTo(s.ax, s.ay); ctx.lineTo(s.bx, s.by); } ctx.stroke(); continue; }   // no fill, no midline unless a Level is set (NT)
             const x1 = X(d.p1.t), y1 = Y(d.p1.p), x2 = X(d.p2.t), y2 = Y(d.p2.p);
             if (x1 == null || y1 == null || x2 == null || y2 == null) continue;
             dbg.lastX = x1;
@@ -1284,6 +1303,7 @@ const drawingsPrimitive = {
           ctx.setLineDash([]); ctx.lineWidth = 1.5;
           // anchor handles only for the hovered drawing (white) and the selected set (blue) — G12 / G19
           const hpts = (d) => {
+            if (d.type === 'channel') { const g = chanGeom(d, X, Y, W, H); return g ? [[g.x1, g.y1], [g.x2, g.y2], [(g.x1 + g.x2) / 2, (g.y1 + g.y2) / 2], [g.x3, g.y3], [g.x4, g.y4], [(g.x3 + g.x4) / 2, (g.y3 + g.y4) / 2]].map(([x, y]) => ({ x, y })) : []; }   // NT: 6 handles, 3 per rail
             if (d.type === 'hl') return [{ x: W / 2, y: Y(d.p1.p) }];
             if (d.type === 'vline') return [{ x: X(d.p1.t), y: H / 2 }];
             if (d.type === 'rr') { const { xa, xb } = rrRange(d, X); return [xa, xb].flatMap(x => [{ x, y: Y(d.p1.p) }, { x, y: Y(d.stop) }, { x, y: Y(d.target) }]); }
@@ -1306,6 +1326,7 @@ const drawingsPrimitive = {
           }
           dbg.bbox = bb.n ? { ...bb } : null;
           if (pendingPt) { const x = X(pendingPt.t), y = Y(pendingPt.p); if (x != null && y != null) { ctx.fillStyle = '#CC4400'; ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fill(); } }
+          if (pendingPt2) { const x = X(pendingPt2.t), y = Y(pendingPt2.p); if (x != null && y != null) { ctx.fillStyle = '#CC4400'; ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fill(); } }
           // G2 rubber-band preview: first point -> cursor, in pixel space (no time/price round-trip) while the second click is pending
           if (pendingPt && previewXY && tool) {
             const x1 = X(pendingPt.t), y1 = Y(pendingPt.p), x2 = previewXY.x, y2 = previewXY.y;
@@ -1313,9 +1334,12 @@ const drawingsPrimitive = {
             if (x1 != null && y1 != null) {
               dbg.preview = { x1, y1, x2, y2, tool };
               ctx.save(); ctx.lineWidth = 1.5;
-              if (tool === 'fib' || tool === 'measure') {   // these renderers need {t,p} for their level labels / delta text: hand them a throw-away p2
+              if (tool === 'channel' && pendingPt2) {   // clicks 2->3: fixed trend line + parallel rail starting at the cursor
+                const x2c = X(pendingPt2.t), y2c = Y(pendingPt2.p);
+                if (x2c != null && y2c != null) { ctx.strokeStyle = '#000000'; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2c, y2c); ctx.moveTo(x2, y2); ctx.lineTo(x2 + x2c - x1, y2 + y2c - y1); ctx.stroke(); dbg.preview.rails = 2; }
+              } else if (tool === 'fib' || tool === 'measure') {   // these renderers need {t,p} for their level labels / delta text: hand them a throw-away p2
                 const tmp = { type: tool, p1: pendingPt, p2: { t: xToFreeTime(x2), p: candle.coordinateToPrice(y2) }, color: tool === 'fib' ? '#CC4400' : '' };
-                if (tmp.p2.t != null && tmp.p2.p != null) { if (tool === 'fib') drawFib(ctx, tmp, X, Y, W); else drawMeasure(ctx, tmp, X, Y); }
+                if (tmp.p2.t != null && tmp.p2.p != null) { if (tool === 'fib') drawFib(ctx, tmp, X, Y, W); else drawMeasure(ctx, tmp, X, Y, false, H); }
               } else {
                 ctx.strokeStyle = tool === 'box' ? '#6495ED' : '#000000'; ctx.fillStyle = ctx.strokeStyle;   // same look as the finished object (TV previews with the final style)
                 if (tool === 'box') { const x = Math.min(x1, x2), y = Math.min(y1, y2), w = Math.abs(x2 - x1), h = Math.abs(y2 - y1); ctx.globalAlpha = 0.12; ctx.fillRect(x, y, w, h); ctx.globalAlpha = 1; ctx.strokeRect(x, y, w, h); }
@@ -1347,6 +1371,14 @@ function tlSeg(d, x1, y1, x2, y2, W, H) {
   const a = extA ? rayEnd(x2, y2, x1, y1, W, H) : { x: x1, y: y1 }, b = extB ? rayEnd(x1, y1, x2, y2, W, H) : { x: x2, y: y2 };
   return { ax: a.x, ay: a.y, bx: b.x, by: b.y };
 }
+// NT8 Trend Channel geometry (pixel space): rail a = p1->p2, rail b = p3 -> p3+(p2-p1); levels = rail a shifted by f% of (p3-p1). Shared by renderer + hit-test.
+function chanGeom(d, X, Y, W, H) {
+  const x1 = X(d.p1.t), y1 = Y(d.p1.p), x2 = X(d.p2.t), y2 = Y(d.p2.p), x3 = d.p3 ? X(d.p3.t) : null, y3 = d.p3 ? Y(d.p3.p) : null;
+  if ([x1, y1, x2, y2, x3, y3].some(v => v == null)) return null;
+  const ox = x3 - x1, oy = y3 - y1, x4 = x2 + ox, y4 = y2 + oy, seg = (ax, ay, bx, by) => tlSeg(d, ax, ay, bx, by, W, H);
+  const lv = (Array.isArray(d.levels) ? d.levels : []).map(f => seg(x1 + ox * f / 100, y1 + oy * f / 100, x2 + ox * f / 100, y2 + oy * f / 100));
+  return { a: seg(x1, y1, x2, y2), b: seg(x3, y3, x4, y4), lv, x1, y1, x2, y2, x3, y3, x4, y4 };
+}
 function boxRect(d, x1, y1, x2, y2, W) {   // G39: Extend left / right clamp each side to the chart edge independently
   const l = d.extendLeft ? 0 : Math.min(x1, x2), r = d.extendRight ? W : Math.max(x1, x2);
   return { x: l, y: Math.min(y1, y2), w: Math.max(0, r - l), h: Math.abs(y2 - y1) };
@@ -1365,7 +1397,7 @@ function shiftConstrain(t, x1, y1, x2, y2) {   // Shift while placing the 2nd po
   const L = Math.hypot(dx, dy), a = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
   return { x: x1 + L * Math.cos(a), y: y1 + L * Math.sin(a) };
 }
-const SHIFT_TOOLS = { tl: 1, ray: 1, box: 1, fib: 1, measure: 1 };
+const SHIFT_TOOLS = { tl: 1, ray: 1, box: 1, fib: 1, measure: 1, channel: 1 };
 // G37: vertical lines must cross the oscillator pane too — oscChart is a separate createChart() instance whose
 // time scale is kept in logical-range sync with the main chart, so the same fractional logical maps to the same column.
 const oscVlinePrimitive = {
@@ -1465,9 +1497,15 @@ function orderCancelAt(x, y) { for (const hb of orderHits) { if (x >= hb.x && x 
 function repaintOverlays() { if (ripsterPrimitive._req) ripsterPrimitive._req(); if (drawingsPrimitive._req) drawingsPrimitive._req(); if (oscChart && oscVlinePrimitive._req) oscVlinePrimitive._req(); indicatorRepaint(); orderRepaint(); }
 function handleDrawClick(t, time, price, y, ev) {   // time = free epoch seconds (xToFreeTime), price = free; y + ev (modifier keys) feed the magnet (G5/G6/G8/G9)
   const snap = magnetSnap(time, price, y, !!(ev && (ev.ctrlKey || ev.metaKey))); time = snap.t; price = snap.p;
-  if (pendingPt && ev && ev.shiftKey && SHIFT_TOOLS[t]) {   // G14 / G16: Shift constrains the 2nd point in pixel space, then back to free {t,p}
+  if (pendingPt && !pendingPt2 && ev && ev.shiftKey && SHIFT_TOOLS[t]) {   // G14 / G16: Shift constrains the 2nd point in pixel space, then back to free {t,p}
     const x1 = drawX(pendingPt.t), y1 = drawY(pendingPt.p), x2 = drawX(time), y2 = drawY(price);
     if (x1 != null && y1 != null && x2 != null && y2 != null) { const c = shiftConstrain(t, x1, y1, x2, y2), nt = xToFreeTime(c.x), np = candle.coordinateToPrice(c.y); if (nt != null && np != null) { time = nt; price = np; } }
+  }
+  if (t === 'channel') {   // NT8 Trend Channel: click 1 trend start, click 2 trend end, click 3 = point the parallel passes through (ParallelStartAnchor)
+    if (!pendingPt) { pendingPt = { t: time, p: price }; pendingPt2 = null; previewXY = null; repaintOverlays(); return; }
+    if (!pendingPt2) { pendingPt2 = { t: time, p: price }; previewXY = null; repaintOverlays(); return; }
+    snapshot(); drawings.push(newDrawing({ type: 'channel', p1: pendingPt, p2: pendingPt2, p3: { t: time, p: price }, levels: [], color: '#000000' }));
+    pendingPt = null; pendingPt2 = null; previewXY = null; selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return;
   }
   if (pendingPt || t === 'hl' || t === 'vline' || t === 'hray' || t === 'cross' || t === 'rr') snapshot();   // G21: every branch below that pushes a drawing (the first click of a 2-point tool only arms pendingPt)
   if (t === 'hl') { drawings.push(newDrawing({ type: 'hl', p1: { t: time, p: price }, color: '#000000' })); selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return; }
@@ -1492,7 +1530,7 @@ function clearDrawings() {   // wipe everything drawn with the toolbar: lines / 
   wipeDrawings(); toast(`Cleared ${n} drawing${n === 1 ? '' : 's'}`);
 }
 function wipeDrawings() {   // no confirm: shared by Remove Drawings / Remove Drawings & Indicators (G46); undo-able (G21)
-  snapshot(); drawings = []; pendingPt = null; clearSelection(); hoverDrawing = null; annotations = [];
+  snapshot(); drawings = []; pendingPt = null; pendingPt2 = null; clearSelection(); hoverDrawing = null; annotations = [];
   saveJSON('rt_drawings', drawings); saveJSON('rt_annotations', annotations);
   if ($('drawSettings').classList.contains('open')) closeDrawSettings(); repaintOverlays(); refreshMarkers(true);
 }
@@ -1546,7 +1584,7 @@ function drawFib(ctx, d, X, Y, W) {
 }
 // ---- Measure / ruler (drawing type 'measure', 2-point) ----
 function fmtDur(sec) { if (sec < 60) return Math.round(sec) + 's'; const m = Math.round(sec / 60); if (m < 60) return m + 'm'; const h = Math.floor(m / 60), rm = m % 60; if (h < 24) return rm ? `${h}h ${pad(rm)}m` : `${h}h`; const d = Math.floor(h / 24), rh = h % 24; return rh ? `${d}d ${pad(rh)}h` : `${d}d`; }
-function drawMeasure(ctx, d, X, Y, selected) {   // selected: draw the two grab dots (G12)
+function drawMeasure(ctx, d, X, Y, selected, H = 9999) {   // selected: draw the two grab dots (G12)
   const x1 = X(d.p1.t), y1 = Y(d.p1.p), x2 = X(d.p2.t), y2 = Y(d.p2.p);
   if (x1 == null || y1 == null || x2 == null || y2 == null) return;
   const dPts = d.p2.p - d.p1.p, dTicks = tcount(d.p2.p, d.p1.p), dPct = d.p1.p ? (dPts / d.p1.p) * 100 : 0;
@@ -1557,17 +1595,19 @@ function drawMeasure(ctx, d, X, Y, selected) {   // selected: draw the two grab 
   ctx.globalAlpha = 0.14; ctx.fillStyle = col; ctx.fillRect(bx, by, bw, bh); ctx.globalAlpha = 1;
   ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.strokeRect(bx, by, bw, bh);
   ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-  if (selected) { ctx.fillStyle = '#6495ED'; ctx.strokeStyle = '#000000'; ctx.lineWidth = 1.5; for (const [hx, hy] of [[x1, y1], [x2, y2]]) { ctx.beginPath(); ctx.arc(hx, hy, 5, 0, 7); ctx.fill(); ctx.stroke(); } ctx.strokeStyle = col; }
   const sgn = dPts >= 0 ? '+' : '';
   const label = `Δ ${sgn}${f2(dPts)} (${sgn}${dTicks}t) ${sgn}${dPct.toFixed(2)}%  •  ${nBars} bars  •  ${fmtDur(dSec)}`;
   ctx.font = '600 12px ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif'; ctx.textBaseline = 'middle';
   const padX = 7, tw = ctx.measureText(label).width, pillW = tw + padX * 2, pillH = 20;
-  let px = Math.max(2, (x1 + x2) / 2 - pillW / 2), py = Math.max(2, (y1 + y2) / 2 - pillH / 2);
+  // label sits OUTSIDE the box on the p2 side (below when measuring down, above when up, like TV) so it never hides the measured line; flips if it would leave the pane
+  const below = y2 >= y1, pyB = by + bh + 6, pyA = by - 6 - pillH;
+  let px = Math.max(2, (x1 + x2) / 2 - pillW / 2), py = Math.max(2, (below ? (pyB + pillH <= H - 2 ? pyB : pyA) : (pyA >= 2 ? pyA : pyB)));
   ctx.fillStyle = '#D3D3D3'; ctx.globalAlpha = 0.92;
   if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(px, py, pillW, pillH, 5); ctx.fill(); } else ctx.fillRect(px, py, pillW, pillH);
   ctx.globalAlpha = 1; ctx.strokeStyle = col; ctx.lineWidth = 1;
   if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(px, py, pillW, pillH, 5); ctx.stroke(); } else ctx.strokeRect(px, py, pillW, pillH);
   ctx.fillStyle = '#000000'; ctx.textAlign = 'left'; ctx.fillText(label, px + padX, py + pillH / 2 + 0.5);
+  if (selected) { ctx.fillStyle = '#6495ED'; ctx.strokeStyle = '#000000'; ctx.lineWidth = 1.5; for (const [hx, hy] of [[x1, y1], [x2, y2]]) { ctx.beginPath(); ctx.arc(hx, hy, 5, 0, 7); ctx.fill(); ctx.stroke(); } }   // handles last = on top of the label
   ctx.restore();
 }
 // ---- Long/Short position R:R tool (drawing type 'rr') — entry / stop / target zones + R:R ----
@@ -1600,7 +1640,6 @@ function drawRR(ctx, d, X, Y, W, selected) {   // selected: draw the corner / ed
   // blue handles — squares at the 4 box corners, circles at the entry edges
   const sq = (x, y) => { ctx.fillStyle = '#6495ED'; ctx.strokeStyle = '#000000'; ctx.lineWidth = 1.5; ctx.fillRect(x - 3.5, y - 3.5, 7, 7); ctx.strokeRect(x - 3.5, y - 3.5, 7, 7); };
   const ci = (x, y) => { ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fillStyle = '#6495ED'; ctx.fill(); ctx.strokeStyle = '#000000'; ctx.lineWidth = 1.5; ctx.stroke(); };
-  if (selected) { sq(xa, yt); sq(xb, yt); sq(xa, ys); sq(xb, ys); ci(xa, ye); ci(xb, ye); }
   // metrics + centered label pills — matches TradingView's Long/Short position tool
   const qty = Math.max(1, parseInt(($('qty') || {}).value, 10) || 1);
   const long = d.target >= d.p1.p, pv = INSTR.tickValue / INSTR.tickSize;          // $ per point
@@ -1624,12 +1663,14 @@ function drawRR(ctx, d, X, Y, W, selected) {   // selected: draw the corner / ed
   pill(`Target: ${f2(d.target)} (${sgn(tPct)}${tPct.toFixed(2)}%) ${tPts.toFixed(2)}, Amount: ${usd(rewT * INSTR.tickValue * qty)}`, yt, '#D3D3D3', '#1E8A1E');
   pill(`Open PnL: ${usd(openPnl)}, Qty: ${qty}\nRisk/reward ratio: ${rr.toFixed(2)}`, ye, '#D3D3D3', '#000000');
   pill(`Stop: ${f2(d.stop)} (${sgn(sPct)}${sPct.toFixed(2)}%) ${sPts.toFixed(2)}, Amount: ${usd(riskT * INSTR.tickValue * qty)}`, ys, '#D3D3D3', '#B30000');
+  if (selected) { sq(xa, yt); sq(xb, yt); sq(xa, ys); sq(xb, ys); ci(xa, ye); ci(xb, ye); }   // handles last = on top of the pills
   ctx.restore();
 }
-function resetToolAfterDraw() { if (!keepDrawing) tool = ''; pendingPt = null; previewXY = null; updateToolUI(); }   // revert to cursor after a completed drawing (TradingView default) unless Keep drawing is on (G3/G4; applies to the arrow-marker tools too)
+function resetToolAfterDraw() { if (!keepDrawing) tool = ''; pendingPt = null; pendingPt2 = null; previewXY = null; updateToolUI(); }   // revert to cursor after a completed drawing (TradingView default) unless Keep drawing is on (G3/G4; applies to the arrow-marker tools too)
 
 // ---------- chart tools: drag stop/target/entry lines + click tools (set-start / annotations) ----------
 let tool = '', drag = null, dragH = null;   // dragH = drawing-anchor being dragged (endpoint edit)
+let dragRect = null;   // perf: $('chart').getBoundingClientRect() cached for the duration of a drag/pan; the hover and tool-preview paths keep reading it live
 let vpan = null;                            // vertical price-pan: {y0, s0} while dragging empty chart space up/down
 // Magnet (TV_DRAWING_GAP G8-G11): three states 'off' | 'weak' | 'strong'. rt_magnet used to be a boolean -> migrate (true = 'strong', the old no-threshold behaviour).
 let magnet = (v => v === true ? 'strong' : v === false ? 'off' : (v === 'weak' || v === 'strong' ? v : 'off'))(loadJSON('rt_magnet', false));
@@ -1723,20 +1764,21 @@ function nudgeSelection(key) {   // G23: arrow keys move the selection one bar (
   dropNoopSnapshot(); saveJSON('rt_drawings', drawings); repaintOverlays();
 }
 let annotations = loadJSON('rt_annotations', []);   // {baseTime, position, color, shape, text}
-let drawings = loadJSON('rt_drawings', []);         // {type:'hl'|'tl'|'ray'|'box'|'fib'|'measure'|'rr'|'hray'|'vline'|'cross', p1:{t,p}, p2?:{t,p}, color, style:{color,width,dash}, locked, hidden, z, visibleTFs, id}
+let drawings = loadJSON('rt_drawings', []);         // {type:'hl'|'tl'|'ray'|'box'|'fib'|'measure'|'rr'|'hray'|'vline'|'cross'|'channel', p1:{t,p}, p2?:{t,p}, p3?:{t,p}, levels?:number[], color, style:{color,width,dash}, locked, hidden, z, visibleTFs, id}
 // rt_drawings v0 -> v1 (TV_DRAWING_GAP §1.3): add style/locked/hidden/z/visibleTFs/id; keep color + p1/p2/stop/target untouched so older builds still read the file
 let _drwSeq = 0;
 function newDrawing(d) { const n = _drwSeq++; d.style = d.style || { color: d.color != null ? d.color : '#000000', width: 1.5, dash: 0 }; if (d.locked == null) d.locked = false; if (d.hidden == null) d.hidden = false; if (d.z == null) d.z = n; if (d.visibleTFs === undefined) d.visibleTFs = null; if (!d.id) d.id = 'd' + Date.now().toString(36) + '_' + n; return d; }
 function migrateDrawings(arr) { for (const d of arr) { if (!d.style) newDrawing(d); else _drwSeq = Math.max(_drwSeq, (d.z | 0) + 1); } return arr; }
 if (Array.isArray(drawings)) { migrateDrawings(drawings); if (loadJSON('rt_drawings_v', 0) < 1) { saveJSON('rt_drawings', drawings); saveJSON('rt_drawings_v', 1); } } else drawings = [];
 let pendingPt = null;                                // first click of a 2-point drawing
+let pendingPt2 = null;                               // 2nd click of the 3-point Trend Channel (NT8 Ctrl+2)
 const ANN = {
   au:    { position: 'belowBar', color: '#127209', shape: 'arrowUp',   text: '' },
   ad:    { position: 'aboveBar', color: '#D40605', shape: 'arrowDown', text: '' },
   long:  { position: 'belowBar', color: '#127209', shape: 'arrowUp',   text: 'LONG' },
   short: { position: 'aboveBar', color: '#D40605', shape: 'arrowDown', text: 'SHORT' },
 };
-const TOOLBTN = { start: 'btnPickStart', au: 'annUp', ad: 'annDown', long: 'annLong', short: 'annShort', hl: 'drwHL', tl: 'drwTL', ray: 'drwRay', box: 'drwBox', fib: 'drwFib', measure: 'drwMeasure', rr: 'drwRR', hray: 'drwHRay', vline: 'drwVLine', cross: 'drwCross' };
+const TOOLBTN = { start: 'btnPickStart', au: 'annUp', ad: 'annDown', long: 'annLong', short: 'annShort', hl: 'drwHL', tl: 'drwTL', ray: 'drwRay', box: 'drwBox', fib: 'drwFib', measure: 'drwMeasure', rr: 'drwRR', hray: 'drwHRay', vline: 'drwVLine', cross: 'drwCross', channel: 'drwChannel' };
 function placeAnnotation(t, baseTime) { const a = ANN[t]; if (!a) return; snapshot(); annotations.push({ baseTime, ...a }); saveJSON('rt_annotations', annotations); refreshMarkers(); }
 function clearAnnotations() { snapshot(); annotations = []; markers = []; saveJSON('rt_annotations', annotations); refreshMarkers(); toast('Markers cleared'); }   // clears placed arrows AND in-session trade entry/exit arrows
 // click directly on a placed arrow (annotation OR trade marker) to delete just that one — TradingView-style
@@ -1756,13 +1798,17 @@ function removeMarker(hit) {
   if (hit.src === 'ann') { snapshot(); annotations.splice(hit.i, 1); saveJSON('rt_annotations', annotations); } else markers.splice(hit.i, 1);
   refreshMarkers(); toast('Arrow removed');
 }
-const LINE_TOOLS = { tl: ['show_chart', 'Trend line — click two points (Alt+T)'], ray: ['north_east', 'Ray — two points, extends in that direction'], hl: ['horizontal_rule', 'Horizontal line — one click (Alt+H)'], hray: ['line_start_circle', 'Horizontal ray — one click, extends right (Alt+J)'], vline: ['align_horizontal_center', 'Vertical line — one click, spans all panes (Alt+V)'], cross: ['add', 'Cross line — one click (Alt+C)'] };
+const LINE_TOOLS = { tl: ['show_chart', 'Trend line — click two points (Alt+T / F2)'], ray: ['north_east', 'Ray — two points, extends in that direction'], channel: ['stacked_line_chart', 'Trend channel — three clicks: line start, line end, parallel (Ctrl+2 / Alt+2)'], hl: ['horizontal_rule', 'Horizontal line — one click (Alt+H)'], hray: ['line_start_circle', 'Horizontal ray — one click, extends right (Alt+J)'], vline: ['align_horizontal_center', 'Vertical line — one click, spans all panes (Alt+V)'], cross: ['add', 'Cross line — one click (Alt+C)'] };
 let lastLineTool = loadJSON('rt_lastline', 'tl'); if (!LINE_TOOLS[lastLineTool]) lastLineTool = 'tl';
 function syncLinesGroup() {   // TV: the group button shows the last-used line tool and lights up while one is armed
-  const g = $('drwLines'); if (!g) return; const [icon, title] = LINE_TOOLS[lastLineTool]; g.querySelector('span').textContent = icon; g.title = title; g.classList.toggle('active', !!LINE_TOOLS[tool]);
+  const g = $('drwLines'); if (!g) return; const [icon, title] = LINE_TOOLS[lastLineTool]; g.querySelector('span').textContent = icon; g.title = title; g.setAttribute('aria-label', title); g.classList.toggle('active', !!LINE_TOOLS[tool]);
 }
 function updateToolUI() { Object.values(TOOLBTN).forEach(id => { const b = $(id); if (b) b.classList.remove('active'); }); const b = $(TOOLBTN[tool]); if (b) b.classList.add('active'); const cur = $('toolCursor'); if (cur) cur.classList.toggle('active', !tool); $('chart').style.cursor = tool ? 'crosshair' : ''; if (LINE_TOOLS[tool]) { lastLineTool = tool; saveJSON('rt_lastline', tool); } syncLinesGroup(); }
-function setTool(t) { tool = (tool === t) ? '' : t; pendingPt = null; previewXY = null; repaintOverlays(); updateToolUI(); }
+function setTool(t) { tool = (tool === t) ? '' : t; pendingPt = null; pendingPt2 = null; previewXY = null; repaintOverlays(); updateToolUI(); }
+function ctrl2Hint() {   // Ctrl+2 never reaches a page in a normal Chromium tab (browser tab-switch accelerator); tell the user once
+  if (loadJSON('rt_hint_ctrl2', false) || matchMedia('(display-mode: standalone)').matches) return;
+  saveJSON('rt_hint_ctrl2', true); toast('Trend channel: Ctrl+2 works in an app window (browser menu › Cast, save and share › Install page as app / Open as window). In a tab use Alt+2.');
+}
 function draggableLines() { return orderLines().filter(o => o.drag).map(o => o.drag); }   // derived from the rendered order set (entry / stop / targets)
 function nearestLine(y) { let best = null, bd = 7; for (const L of draggableLines()) { const ly = candle.priceToCoordinate(L.get()); if (ly == null) continue; const d = Math.abs(ly - y); if (d < bd) { bd = d; best = L; } } return best; }
 // ---- drawing endpoint editing: hit-test + drag the anchors of placed drawings ----
@@ -1785,11 +1831,15 @@ function drawingHandles() {
       continue;
     }
     const x1 = X(d.p1.t), y1 = Y(d.p1.p), x2 = d.p2 ? X(d.p2.t) : null, y2 = d.p2 ? Y(d.p2.p) : null;
-    if (x1 != null && y1 != null) out.push({ d, hx: x1, hy: y1, apply: (t, p) => { if (t != null) d.p1.t = t; d.p1.p = p; } });
+    if (x1 != null && y1 != null) out.push({ d, hx: x1, hy: y1, apply: (t, p) => { if (d.type === 'channel' && d.p3) { const l0 = timeToLogical(d.p1.t), l3 = timeToLogical(d.p3.t), ln = t != null ? timeToLogical(t) : null; if (l0 != null && l3 != null && ln != null) { const nt = logicalToTime(l3 + ln - l0); if (nt != null) d.p3.t = nt; } d.p3.p += p - d.p1.p; } if (t != null) d.p1.t = t; d.p1.p = p; } });   // channel (NT L1A1): p3 rides along so the offset vector p3-p1 stays fixed
     if (d.p2 && x2 != null && y2 != null) out.push({ d, hx: x2, hy: y2, apply: (t, p) => { if (t != null) d.p2.t = t; d.p2.p = p; } });
     if (d.type === 'box' && d.p2) {   // box: also let the two cross-corners drag (each writes one t + one p)
       if (x2 != null && y1 != null) out.push({ d, hx: x2, hy: y1, apply: (t, p) => { if (t != null) d.p2.t = t; d.p1.p = p; } });
       if (x1 != null && y2 != null) out.push({ d, hx: x1, hy: y2, apply: (t, p) => { if (t != null) d.p1.t = t; d.p2.p = p; } });
+    }
+    if (d.type === 'channel' && d.p3) {   // NT: L2A1 (p3) moves the parallel rail alone; mids + L2A2 are body grabs via drawingAt
+      const x3 = X(d.p3.t), y3 = Y(d.p3.p);
+      if (x3 != null && y3 != null) out.push({ d, hx: x3, hy: y3, apply: (t, p) => { if (t != null) d.p3.t = t; d.p3.p = p; } });
     }
   }
   return out;
@@ -1813,6 +1863,7 @@ function drawingAt(x, y) {
     if (d.type === 'cross') { if (x1 != null && y1 != null && (Math.abs(y1 - y) < TH || Math.abs(x1 - x) < TH)) return d; continue; }
     if (d.type === 'rr') { const { xa, xb } = rrRange(d, X); if (x < xa - 4 || x > xb + 4) continue; const yt = Y(d.target), ys = Y(d.stop); if (yt != null && ys != null && y >= Math.min(yt, ys) - TH && y <= Math.max(yt, ys) + TH) return d; continue; }
     if (x1 == null || y1 == null) continue;
+    if (d.type === 'channel') { const g = chanGeom(d, X, Y, W, H); if (g && [g.a, g.b, ...g.lv].some(s => pointSegDist(x, y, s.ax, s.ay, s.bx, s.by) < TH)) return d; continue; }   // either rail or a level; the band itself is not a hit (no fill in NT)
     if (d.type === 'fib') { const g = fibGeom(d, X, W); if (!g || x < g.xL - 4 || x > g.xR + 4) continue; for (const f of fibLevels(d)) { const yy = Y(g.p0 + g.span * f.lv); if (yy != null && Math.abs(yy - y) < TH) return d; } const y2 = Y(d.p2.p); if (y2 != null && pointSegDist(x, y, g.xa, y1, g.xb, y2) < TH) return d; continue; }
     const x2 = d.p2 ? X(d.p2.t) : null, y2 = d.p2 ? Y(d.p2.p) : null;
     if (x2 == null || y2 == null) continue;
@@ -1835,6 +1886,7 @@ function drawingFields(d) {
   if (d.type === 'rr') { A.push({ obj: d.p1, key: 'p', kind: 'p' }, { obj: d, key: 'stop', kind: 'p' }, { obj: d, key: 'target', kind: 'p' }, { obj: d.p1, key: 't', kind: 't' }); if (d.p2) A.push({ obj: d.p2, key: 't', kind: 't' }); return A; }
   A.push({ obj: d.p1, key: 'p', kind: 'p' }, { obj: d.p1, key: 't', kind: 't' });
   if (d.p2) A.push({ obj: d.p2, key: 'p', kind: 'p' }, { obj: d.p2, key: 't', kind: 't' });
+  if (d.p3) A.push({ obj: d.p3, key: 'p', kind: 'p' }, { obj: d.p3, key: 't', kind: 't' });   // channel: body drag / nudge / paste move all 3 anchors
   return A;
 }
 // whole-drawing move (G20 group move: one or many members share the same price / logical delta). Free price + free time via the
@@ -1897,7 +1949,7 @@ $('chart').addEventListener('pointerdown', e => {
     return;
   }
   if (e.button !== 0 || tool) return;             // left-button only; while a tool is armed, clicks place points
-  const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
+  const rect = dragRect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
   const _ocx = orderCancelAt(x, y); if (_ocx != null) { cancelOrder(_ocx); e.preventDefault(); return; }   // ✕ on an order tag → cancel that order
   const _mk = markerAt(x, y); if (_mk) { removeMarker(_mk); e.preventDefault(); return; }   // click an arrow marker → delete just that one
   const h = (e.ctrlKey || e.metaKey) ? null : nearestHandle(x, y);   // 1) drawing anchor (endpoint) — most specific; also selects it (lock blocks the drag, not the select — G43). Ctrl/Cmd skips it: hl/vline anchors span the whole line, so the clone / multiselect branch below (G18 / G19) must own every Ctrl press; Ctrl pressed after mousedown still inverts the magnet mid-drag (G9)
@@ -1914,7 +1966,7 @@ $('chart').addEventListener('pointerdown', e => {
   if (!overPriceAxis(e.clientX)) vpan = { lx: x, ly: y };   // 5) start a free pan — price follows vertical motion, LWC pans time horizontally (never locked)
 });
 window.addEventListener('pointermove', e => {
-  const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
+  const rect = dragRect || $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
   if (dragH) {                                    // editing a drawing endpoint: free time + price, magnet (Ctrl/Cmd inverts it, G9) decides the snap
     const p = candle.coordinateToPrice(y), ft = xToFreeTime(x);
     if (p != null && ft != null) { const s = magnetSnap(ft, p, y, e.ctrlKey || e.metaKey); dragH.apply(dragH.horiz ? null : s.t, s.p); repaintOverlays(); }
@@ -1943,7 +1995,7 @@ window.addEventListener('pointermove', e => {
   if (p != null) { drag.set(rnd(p)); drawLines(); renderLive(); }
 });
 window.addEventListener('pointerup', () => {
-  vpan = null;
+  vpan = null; dragRect = null;
   if (dragH) { dragH = null; dropNoopSnapshot(); saveJSON('rt_drawings', drawings); chart.applyOptions({ handleScroll: true, handleScale: true }); return; }
   if (ctrlPress) {                                // release without motion = Ctrl+click multiselect toggle (G19)
     const cp = ctrlPress; ctrlPress = null; chart.applyOptions({ handleScroll: true, handleScale: true });
@@ -1959,7 +2011,7 @@ $('chart').addEventListener('pointermove', e => {
   if (tool) {   // G2: rubber-band preview follows the cursor (pixels); Shift previews the 45° / square constraint too (G14 / G16)
     $('chart').style.cursor = 'crosshair';
     if (pendingPt) { const r = $('chart').getBoundingClientRect(); let pv = { x: e.clientX - r.left, y: e.clientY - r.top };
-      if (e.shiftKey && SHIFT_TOOLS[tool]) { const x1 = drawX(pendingPt.t), y1 = drawY(pendingPt.p); if (x1 != null && y1 != null) pv = shiftConstrain(tool, x1, y1, pv.x, pv.y); }
+      if (e.shiftKey && SHIFT_TOOLS[tool] && !pendingPt2) { const x1 = drawX(pendingPt.t), y1 = drawY(pendingPt.p); if (x1 != null && y1 != null) pv = shiftConstrain(tool, x1, y1, pv.x, pv.y); }
       previewXY = pv; if (drawingsPrimitive._req) drawingsPrimitive._req(); }
     if (hoverDrawing) { hoverDrawing = null; repaintOverlays(); }
     return;
@@ -1994,7 +2046,7 @@ function syncDrawToolbar() {   // reflect the primary selection's style in the t
   const d = selDrawing; if (!d) return;
   const s = d.style || {}; $('dtColor').value = /^#[0-9a-f]{6}$/i.test(s.color || '') ? s.color : '#000000';
   $('dtWidth').value = String(s.width || 1.5); $('dtDash').value = String(s.dash | 0);
-  $('dtLock').classList.toggle('on', !!d.locked); $('dtLock').querySelector('span').textContent = d.locked ? 'lock' : 'lock_open'; $('dtLock').title = d.locked ? 'Unlock' : 'Lock';
+  $('dtLock').classList.toggle('on', !!d.locked); $('dtLock').querySelector('span').textContent = d.locked ? 'lock' : 'lock_open'; $('dtLock').title = $('dtLock').ariaLabel = d.locked ? 'Unlock' : 'Lock';
 }
 function setDrawingStyle(patch) {   // batch style change over the whole selection (G20); writes style.* and mirrors color into d.color for older builds
   snapshot(); for (const d of selectedList()) { d.style = d.style || {}; Object.assign(d.style, patch); if (patch.color != null) d.color = patch.color; }
@@ -2023,13 +2075,13 @@ function toggleHide(which) {
   toast(which === 'all' ? (hideFlags.drawings ? 'Everything hidden' : 'Everything shown') : `${which === 'positions' ? 'Positions & orders' : which[0].toUpperCase() + which.slice(1)} ${hideFlags[which] ? 'hidden' : 'shown'}`);
 }
 function applyHide() {
-  if (hideFlags.drawings) { clearSelection(); hoverDrawing = null; pendingPt = null; previewXY = null; if ($('drawSettings').classList.contains('open')) closeDrawSettings(); }
+  if (hideFlags.drawings) { clearSelection(); hoverDrawing = null; pendingPt = null; pendingPt2 = null; previewXY = null; if ($('drawSettings').classList.contains('open')) closeDrawSettings(); }
   applyVolVisible(); applyOscHidden(); repaintOverlays(); refreshMarkers(true); hideBtnUI();
 }
 function hideBtnUI() {
   const b = $('btnHideDrw'); if (!b) return; const any = hideFlags.drawings || hideFlags.indicators || hideFlags.positions;
   b.classList.toggle('active', any); b.classList.toggle('lt-hide', any); b.querySelector('span').textContent = any ? 'visibility_off' : 'visibility';
-  b.title = (hideFlags.drawings ? 'Show all drawings' : 'Hide all drawings') + ' (Ctrl+Alt+H)';
+  b.title = b.ariaLabel = (hideFlags.drawings ? 'Show all drawings' : 'Hide all drawings') + ' (Ctrl+Alt+H)';
   [['hideDrawings', 'drawings'], ['hideIndicators', 'indicators'], ['hidePositions', 'positions']].forEach(([id, k]) => { const r = $(id); if (r) r.classList.toggle('sel', !!hideFlags[k]); });
   const all = $('hideAll'); if (all) all.classList.toggle('sel', !!(hideFlags.drawings && hideFlags.indicators && hideFlags.positions));
 }
@@ -2043,7 +2095,7 @@ function initLeftbarMenus() {   // Hide + Remove flyouts, same open/close patter
   };
   wire('btnHideMenu', 'hidePopover', [['hideDrawings', () => toggleHide('drawings')], ['hideIndicators', () => toggleHide('indicators')], ['hidePositions', () => toggleHide('positions')], ['hideAll', () => toggleHide('all')]]);
   wire('btnRemoveMenu', 'removePopover', [['rmDrawings', clearDrawings], ['rmDrawingsInd', removeDrawingsAndIndicators]]);
-  wire('btnLinesMenu', 'linesPopover', Object.keys(LINE_TOOLS).map(t => [TOOLBTN[t], () => { if (tool !== t) setTool(t); }]));
+  wire('btnLinesMenu', 'linesPopover', Object.keys(LINE_TOOLS).map(t => [TOOLBTN[t], () => { if (tool !== t) setTool(t); if (t === 'channel') ctrl2Hint(); }]));
   const gl = $('drwLines'); if (gl) gl.onclick = () => setTool(lastLineTool);
   syncLinesGroup();
   $('btnHideDrw').onclick = () => toggleHide('drawings');
@@ -2052,7 +2104,7 @@ function initLeftbarMenus() {   // Hide + Remove flyouts, same open/close patter
 }
 const TF_LABEL = (m) => m < 1 ? Math.round(m * 60) + 's' : m + 'm';
 let dsDrawing = null, dsTab = 'style';
-function closeDrawSettings() { const el = $('drawSettings'); el.classList.remove('open'); el.innerHTML = ''; dsDrawing = null; }
+function closeDrawSettings() { const el = $('drawSettings'); el.classList.remove('open'); el.innerHTML = ''; dsDrawing = null; modalClosed(); }
 function openDrawSettings(d, tab) {
   if (!d || !drawings.includes(d)) return;
   dsDrawing = d; if (tab) dsTab = tab; const s = d.style || (d.style = { color: d.color || '#000000', width: 1.5, dash: 0 });
@@ -2066,18 +2118,20 @@ function openDrawSettings(d, tab) {
   if (d.type === 'tl' || d.type === 'ray') style += `<label class="ds-row ds-num"><span>Extend</span><select data-k="d:extend">${['none', 'left', 'right', 'both'].map(v => `<option value="${v}" ${(d.extend || 'none') === v ? 'selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}</select></label>` + chk('d:arrowStart', 'Arrow at start', d.arrowStart) + chk('d:arrowEnd', 'Arrow at end', d.arrowEnd);
   if (d.type === 'box') style += chk('d:extendLeft', 'Extend left', d.extendLeft) + chk('d:extendRight', 'Extend right', d.extendRight) + chk('d:middleLine', 'Middle line', d.middleLine);
   if (d.type === 'fib') { const lv = Array.isArray(d.fibLevels) ? d.fibLevels : FIB_DEFAULT; style += `<div class="ds-gh">Levels</div><div class="ds-levels">${FIB_LEVELS.map(f => chk('fib:' + f.lv, f.lv, lv.some(v => Math.abs(v - f.lv) < 1e-6))).join('')}</div>` + chk('d:reverse', 'Reverse', d.reverse) + chk('d:extendLeft', 'Extend left', d.extendLeft) + chk('d:extendRight', 'Extend right', d.extendRight); }
+  if (d.type === 'channel') style += `<label class="ds-row ds-num"><span>Extend</span><select data-k="d:extend">${['none', 'left', 'right', 'both'].map(v => `<option value="${v}" ${(d.extend || 'none') === v ? 'selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}</select></label>` +
+    `<label class="ds-row ds-num"><span>Levels %</span><input type="text" data-k="lv:levels" value="${(d.levels || []).join(', ')}" placeholder="50"></label>`;   // NT: no arrows on a channel
   let coords = '';
   if (d.type === 'hl') coords = pt('Price', 'p1', false, true);
   else if (d.type === 'vline') coords = pt('Point', 'p1', true, false);
   else if (d.type === 'rr') coords = `<div class="ds-grp"><div class="ds-gh">Entry</div>${num('t:p1', 'Bar #', abs(d.p1.t), 1)}${num('p:p1', 'Entry', +(+d.p1.p).toFixed(2), TICK)}${num('d:stop', 'Stop', +(+d.stop).toFixed(2), TICK)}${num('d:target', 'Target', +(+d.target).toFixed(2), TICK)}</div>` + (d.p2 ? pt('Right edge', 'p2', true, false) : '');
-  else coords = pt(d.p2 ? 'Point 1' : 'Point', 'p1', true, true) + (d.p2 ? pt('Point 2', 'p2', true, true) : '');
+  else coords = pt(d.p2 ? 'Point 1' : 'Point', 'p1', true, true) + (d.p2 ? pt('Point 2', 'p2', true, true) : '') + (d.p3 ? pt('Parallel start', 'p3', true, true) : '');
   const all = !Array.isArray(d.visibleTFs);
   const vis = chk('v:all', 'All timeframes', all) + `<div class="ds-levels ${all ? 'ds-off' : ''}" id="dsTfs">${STD_TF.map(m => chk('tf:' + m, TF_LABEL(m), !all && d.visibleTFs.some(v => Math.abs(v - m) < 1e-6))).join('')}</div>`;
   const tabs = [['style', 'Style'], ['coords', 'Coordinates'], ['vis', 'Visibility']];
-  $('drawSettings').innerHTML = `<div class="dd-card ds-card"><div class="dd-h"><span class="dd-date">${d.type.toUpperCase()} settings</span><button class="mini ico-btn" id="dsClose"><span class="material-symbols-outlined">close</span></button></div>` +
+  $('drawSettings').innerHTML = `<div class="dd-card ds-card"><div class="dd-h"><span class="dd-date">${({ tl: 'Trend line', ray: 'Ray', hl: 'Horizontal line', hray: 'Horizontal ray', vline: 'Vertical line', cross: 'Cross line', box: 'Rectangle', fib: 'Fib retracement', measure: 'Measure', rr: 'Risk/reward', channel: 'Trend channel' })[d.type] || d.type} settings</span><button class="mini ico-btn" id="dsClose" aria-label="Close"><span aria-hidden="true" class="material-symbols-outlined">close</span></button></div>` +
     `<div class="ds-tabs">${tabs.map(([k, n]) => `<button class="ds-tab ${dsTab === k ? 'active' : ''}" data-tab="${k}">${n}</button>`).join('')}</div>` +
     `<div class="ds-body"><div class="ds-pane" data-pane="style" ${dsTab === 'style' ? '' : 'hidden'}>${style}</div><div class="ds-pane" data-pane="coords" ${dsTab === 'coords' ? '' : 'hidden'}>${coords}</div><div class="ds-pane" data-pane="vis" ${dsTab === 'vis' ? '' : 'hidden'}>${vis}</div></div></div>`;
-  const el = $('drawSettings'); el.classList.add('open');
+  const el = $('drawSettings'); el.classList.add('open'); modalOpened(el);
   $('dsClose').onclick = closeDrawSettings;
   el.querySelectorAll('.ds-tab').forEach(b => { b.onclick = () => { dsTab = b.dataset.tab; el.querySelectorAll('.ds-tab').forEach(x => x.classList.toggle('active', x === b)); el.querySelectorAll('.ds-pane').forEach(p => { p.hidden = p.dataset.pane !== dsTab; }); }; });
   el.querySelectorAll('[data-k]').forEach(inp => { inp[inp.type === 'color' || inp.type === 'number' ? 'oninput' : 'onchange'] = () => applyDrawSetting(d, inp.dataset.k, inp.type === 'checkbox' ? inp.checked : inp.value); });
@@ -2088,6 +2142,7 @@ function applyDrawSetting(d, k, v) {   // live apply (TV applies as you edit); e
   else if (kind === 'd') d[key] = (key === 'stop' || key === 'target') ? +v : (key === 'extend' ? v : !!v);
   else if (kind === 'p') { const n = +v; if (isFinite(n)) d[key].p = n; }
   else if (kind === 't') { const n = +v; if (isFinite(n)) { const t = logicalToTime(n - seriesFrom); if (t != null) d[key].t = t; } }   // bar number -> time (future bars allowed)
+  else if (kind === 'lv') d.levels = String(v).split(/[\s,]+/).map(Number).filter(n => isFinite(n) && n !== 0 && n !== 100);   // NT Trend Channel Levels, % of channel (0 = trend line, 100 = parallel)
   else if (kind === 'fib') { const lv = new Set(Array.isArray(d.fibLevels) ? d.fibLevels : FIB_DEFAULT); if (v) lv.add(+key); else lv.forEach(x => { if (Math.abs(x - +key) < 1e-6) lv.delete(x); }); d.fibLevels = [...lv].sort((a, b) => a - b); }
   else if (kind === 'v') { d.visibleTFs = v ? null : [tf]; const box = $('dsTfs'); if (box) { box.classList.toggle('ds-off', !!v); box.querySelectorAll('input').forEach(i => { i.checked = !v && Math.abs(+i.dataset.k.slice(3) - tf) < 1e-6; }); } }
   else if (kind === 'tf') { const set = new Set(Array.isArray(d.visibleTFs) ? d.visibleTFs : []); if (v) set.add(+key); else set.forEach(x => { if (Math.abs(x - +key) < 1e-6) set.delete(x); }); d.visibleTFs = [...set].sort((a, b) => a - b); }
@@ -2405,7 +2460,7 @@ async function loadDeepMonth(month) {
   tickMode = false; tfTicks = 0; TF_TICKS = []; tickBid = tickAsk = tickEv = null; deepMode = true; deepMonth = month; setSpeedOptions(false);   // tick bars/BBO only exist on per-print data
   finishLoad(bars, null);
   showLoading(false);
-  toast(`Deep history · ${month} · ${bars.length.toLocaleString()} bars`);
+  toast(`Deep history, ${month}, ${bars.length.toLocaleString()} bars`);
   return true;
 }
 async function jumpToDeepDay(key) {   // calendar click: ticks if that day has them, else its month chunk
@@ -2436,6 +2491,7 @@ function buildSessions() {
 }
 // ---------- calendar date picker (replaces the long session dropdown) ----------
 const CAL_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+function dayLbl(key) { const d = new Date(key + 'T12:00:00Z'); return isNaN(d) ? String(key) : `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()]} ${d.getUTCDate()} ${CAL_MONTHS[d.getUTCMonth()].slice(0, 3)}`; }   // the one human date: "Fri 25 Sep"
 function renderCalendar() {
   const el = $('datePopover'); if (!el) return;
   const startWd = new Date(Date.UTC(calY, calM, 1)).getUTCDay();
@@ -2449,9 +2505,9 @@ function renderCalendar() {
     cells += `<button class="cal-day${has ? ' has' : ''}${sel ? ' sel' : ''}${tk ? ' tick' : ''}" ${has ? `data-key="${key}" title="${tk ? 'Tick tape' : '15-second bars'}"` : 'disabled'}>${d}</button>`;
   }
   el.innerHTML =
-    `<div class="cal-h"><button class="cal-nav" data-mo="-1"><span class="material-symbols-outlined">chevron_left</span></button>` +
+    `<div class="cal-h"><button class="cal-nav" data-mo="-1" aria-label="Previous month"><span aria-hidden="true" class="material-symbols-outlined">chevron_left</span></button>` +
     `<span class="cal-title">${CAL_MONTHS[calM]} ${calY}</span>` +
-    `<button class="cal-nav" data-mo="1"><span class="material-symbols-outlined">chevron_right</span></button></div>` +
+    `<button class="cal-nav" data-mo="1" aria-label="Next month"><span aria-hidden="true" class="material-symbols-outlined">chevron_right</span></button></div>` +
     `<div class="cal-wdrow">${['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(w => `<span class="cal-wd">${w}</span>`).join('')}</div>` +
     `<div class="cal-grid">${cells}</div>`;
 }
@@ -2562,14 +2618,14 @@ let playBudget = 0;   // accumulated display-bars to reveal — keeps the play r
 function play() {
   if (playing) return pause();
   if (baseIdx >= baseBars.length - 1) return;
-  playing = true; $('btnPlay').textContent = 'pause';
+  playing = true; $('btnPlay').textContent = 'pause'; $('btnPlay').classList.add('on');
   resetForming();
   const sv = String($('speedSelect').value);
   if (sv.indexOf('rt:') === 0) { simMs = baseMs(baseIdx); rtLastWall = performance.now(); timer = setInterval(playRtFrame, TICK_FRAME_MS); }   // Realtime: clock-paced (real tape on tick)
   else if (sv.indexOf('sub:') === 0) { playBudget = 0; timer = setInterval(playSubFrame, TICK_FRAME_MS); }      // sub-bar/s: N base bars per second
   else { playBudget = 0; timer = setInterval(playFrame, TICK_FRAME_MS); }                                       // bars/s: steady display-bar rate
 }
-function pause() { playing = false; $('btnPlay').textContent = 'play_arrow'; clearInterval(timer); timer = null; }
+function pause() { playing = false; $('btnPlay').textContent = 'play_arrow'; $('btnPlay').classList.remove('on'); clearInterval(timer); timer = null; }
 // ---- time alert: remind when the replay crosses a target ET time ----
 function fmtMin(m) { return pad(Math.floor(m / 60)) + ':' + pad(m % 60); }
 function setAlertBaseline() { prevAlertMin = baseBars.length ? etMinutes(curBaseT()) : null; }   // call after any jump/load so a jump never false-fires
@@ -2613,10 +2669,10 @@ const alertLinePrimitive = {
 if (candle.attachPrimitive) candle.attachPrimitive(alertLinePrimitive);
 function alertLineRepaint() { if (alertLinePrimitive._req) alertLinePrimitive._req(); }
 function fireAlert() {   // crossing the time: a quiet visual nudge (no sound, no pause) — the line is already on the chart
-  toast(`Time alert · ${fmtMin(alertMin)} ET`);
+  toast(`Time alert ${fmtMin(alertMin)} ET`);
   const c = $('clock'); if (c) { c.classList.remove('alert-flash'); void c.offsetWidth; c.classList.add('alert-flash'); setTimeout(() => c.classList.remove('alert-flash'), 1800); }
 }
-function renderAlertLbl() { const b = $('btnAlert'), l = $('alertLbl'); if (!b || !l) return; l.textContent = alertMin == null ? '' : fmtMin(alertMin); b.classList.toggle('on', alertMin != null); }
+function renderAlertLbl() { const b = $('btnAlert'), l = $('alertLbl'); if (!b || !l) return; l.textContent = alertMin == null ? '' : fmtMin(alertMin); b.classList.toggle('on', alertMin != null); b.title = alertMin == null ? 'Set a time alert' : 'Alert at ' + fmtMin(alertMin) + ' ET'; }
 function setAlertTime() {
   const inp = prompt('Remind me when the replay reaches (ET, HH:MM). Blank to turn off:', alertMin == null ? '11:30' : fmtMin(alertMin));
   if (inp == null) return;
@@ -2667,7 +2723,7 @@ async function enterTickMode(ds) {
 async function loadTickDay(day) {
   let d;
   const { useNt, url: tickUrl } = tickFileFor(day);
-  showLoading(true, `Loading tick tape · ${day}${useNt ? ' · NinjaTrader' : ''}…`);   // a 10–15 MB fetch + parse; silence here reads as a freeze
+  showLoading(true, `Loading tick tape ${day}${useNt ? ', NinjaTrader' : ''}…`);   // a 10–15 MB fetch + parse; silence here reads as a freeze
   try { d = await fetchJSON(tickUrl); }
   catch (e) { showLoading(false); toast('Tick day not available locally: ' + day); return false; }
   pause(); position = null; entryOrder = null; orders = []; markers = []; tool = ''; pendingPt = null;
@@ -2702,7 +2758,7 @@ async function loadTickDay(day) {
   if (!wired) { wire(); wired = true; }
   renderAll();
   showLoading(false);
-  toast(`Tick replay · ${day} · ${n.toLocaleString()} prints`);
+  toast(`Tick replay, ${dayLbl(day)}, ${n.toLocaleString()} prints`);
   setTimeout(() => prefetchTickNeighbours(day), 300);
   return true;
 }
@@ -2936,7 +2992,7 @@ function enterRnd() {
 function exitRnd() {
   if (rndMode && trades.length && confirm(`Save this random run (${trades.length} trade${trades.length === 1 ? '' : 's'}) as a log before exiting?`)) {
     const net = trades.reduce((s, t) => s + t.pnl, 0);
-    tradeLogs.push({ id: 'log' + Date.now(), name: `Random · ${trades.length} trade${trades.length === 1 ? '' : 's'} · ${INSTR.symbol}`, ts: Math.floor(Date.now() / 1000), n: trades.length, net, trades: JSON.parse(JSON.stringify(trades)) });
+    tradeLogs.push({ id: 'log' + Date.now(), name: `Random, ${trades.length} trade${trades.length === 1 ? '' : 's'}, ${INSTR.symbol}`, ts: Math.floor(Date.now() / 1000), n: trades.length, net, trades: JSON.parse(JSON.stringify(trades)) });
     saveJSON('rt_trade_logs', tradeLogs);
   }
   rndMode = false; rndCurKey = null; rndSettled = false;
@@ -2959,13 +3015,13 @@ function updateRndHud() {   // live game HUD over the chart: round #, running P&
   el.style.display = '';
   const p = rndLivePnl(), cur = etMinutes(curBaseT());
   const prog = Math.max(0, Math.min(1, (cur - RND_OPEN) / (RND_CLOSE - RND_OPEN))), left = Math.max(0, RND_CLOSE - cur), streak = rndStreak();
-  el.querySelector('.rh-round').textContent = 'ROUND ' + (rndRounds.length + 1);
+  el.querySelector('.rh-round').textContent = 'Round ' + (rndRounds.length + 1);
   const pe = el.querySelector('.rh-pnl'); pe.textContent = usd(p.total); pe.className = 'rh-pnl ' + (p.total > 0 ? 'pos' : p.total < 0 ? 'neg' : '');
-  el.querySelector('.rh-sub').textContent = `real ${usd(p.real)} · open ${usd(p.open)}`;
+  el.querySelector('.rh-sub').textContent = `Closed ${usd(p.real)}   Open ${usd(p.open)}`;
   el.querySelector('.rh-fill').style.width = (prog * 100).toFixed(1) + '%';
   el.querySelector('.rh-left').textContent = left >= 60 ? `${Math.floor(left / 60)}h ${left % 60}m left` : `${left}m left`;
   const ss = el.querySelector('.rh-streak'); ss.style.display = streak >= 2 ? '' : 'none';
-  if (streak >= 2) ss.innerHTML = `<span class="material-symbols-outlined">local_fire_department</span>${streak}`;
+  if (streak >= 2) ss.innerHTML = `<span aria-hidden="true" class="material-symbols-outlined">local_fire_department</span>${streak}`;
 }
 function wireRndHudDrag() { wireCardDrag('rndHud', 'rt_hud_pos', '#rhEnd'); }
 function wireCardDrag(elId, storeKey, skipSel) {   // let a chart overlay card be dragged anywhere so it never blocks the bars; position persists
@@ -3020,9 +3076,9 @@ function openSettle() {   // settlement dashboard: this day's stats + running to
   const cell = (k, v, cls) => `<div class="st-cell"><div class="st-k">${k}</div><div class="st-v ${cls || ''}">${v}</div></div>`;
   const wins = rndRounds.filter(x => x.net > 0).length, wr = rndRounds.length ? Math.round(100 * wins / rndRounds.length) : 0;
   const best = Math.max(...rndRounds.map(x => x.net)), streak = rndStreak();
-  const verdict = r.net > 0 ? 'win' : r.net < 0 ? 'loss' : 'flat', vlabel = r.net > 0 ? 'WIN' : r.net < 0 ? 'LOSS' : 'FLAT';
-  el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">Round ${rndRounds.length} · ${r.key}</span></div>`
-    + `<button class="dd-x" id="stClose" title="Close — stay on this day"><span class="material-symbols-outlined">close</span></button></div>`
+  const verdict = r.net > 0 ? 'win' : r.net < 0 ? 'loss' : 'flat', vlabel = r.net > 0 ? 'Win' : r.net < 0 ? 'Loss' : 'Flat';
+  el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">Round ${rndRounds.length}, ${dayLbl(r.key)}</span></div>`
+    + `<button class="dd-x" id="stClose" title="Close — stay on this day"><span aria-hidden="true" class="material-symbols-outlined">close</span></button></div>`
     + `<div class="st-over"><span class="st-badge ${verdict}">${vlabel}</span>`
     + `<div class="st-big ${r.net >= 0 ? 'pos' : 'neg'}">${usd(r.net)}</div>`
     + `<div class="st-tally"><span>Rounds <b>${rndRounds.length}</b></span><span>Win rate <b>${wr}%</b></span><span>Best <b>${usd(best)}</b></span>`
@@ -3030,24 +3086,24 @@ function openSettle() {   // settlement dashboard: this day's stats + running to
     + `<span>Total <b class="${tot >= 0 ? 'pos' : 'neg'}">${usd(tot)}</b></span></div></div>`
     + `<div class="st-grid">`
     + cell('Net P&L', usd(r.net), r.net >= 0 ? 'pos' : 'neg')
-    + cell('Trades · W-L', `${r.n} · ${r.w}W ${r.l}L`)
+    + cell('Trades', `${r.n}  (${r.w}W ${r.l}L)`)
     + cell('Win rate', r.n ? Math.round(100 * r.w / r.n) + '%' : '–')
     + cell('Ticks', (r.ticks >= 0 ? '+' : '') + r.ticks)
     + cell('Avg R', r.avgR == null ? '–' : (r.avgR >= 0 ? '+' : '') + r.avgR.toFixed(2))
-    + cell('Best / Worst', `${usd(r.best)} · ${usd(r.worst)}`)
+    + cell('Best / Worst', `${usd(r.best)} / ${usd(r.worst)}`)
     + `</div>`
     + (r.ts.length ? `<div class="dd-list">` + r.ts.map((t, i) => { const long = t.side === 'long';
-        return `<div class="dd-trade"><div class="dd-tinfo"><div class="dd-trow">#${i + 1} <span class="${long ? 'long-tag' : 'short-tag'}">${long ? 'LONG' : 'SHORT'} ${t.qty}</span> <b class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</b> · ${t.ticks >= 0 ? '+' : ''}${t.ticks}t · ${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + 'R'}${t.planRR != null ? ` · plan ${fmtPlanRR(t)}` : ''}</div>`
-          + `<div class="dd-sub">${tFmt(t.entryTime)} → ${tFmt(t.exitTime)} · ${f2(t.entry)} → ${f2(t.exit)} · ${t.atm} · ${t.exitType}</div></div>`
-          + `<canvas class="dd-chart" data-ti="${i}" title="Scroll to zoom · drag to pan · double-click to reset"></canvas></div>`; }).join('') + `</div>` : `<div class="st-run">No trades this round.</div>`)
-    + `<div class="st-actions"><button id="stNext" class="primary"><span class="material-symbols-outlined">shuffle</span>Next round</button><button id="stExit">End session</button></div></div>`;
-  el.classList.add('open');
+        return `<div class="dd-trade"><div class="dd-tinfo"><div class="dd-trow"><span>#${i + 1}</span><span class="${long ? 'long-tag' : 'short-tag'}">${long ? 'Long' : 'Short'} ${t.qty}</span><b class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</b><span>${t.ticks >= 0 ? '+' : ''}${t.ticks} ticks</span><span>${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + ' R'}</span>${t.planRR != null ? `<span>Plan ${fmtPlanRR(t)}</span>` : ''}</div>`
+          + `<div class="dd-sub"><span>${tHM(t.entryTime)} → ${tHM(t.exitTime)}</span><span>${f2(t.entry)} → ${f2(t.exit)}</span><span>${atmLbl(t.atm)}</span><span>${EXIT_LBL[t.exitType] || t.exitType}</span></div></div>`
+          + `<canvas class="dd-chart" data-ti="${i}" title="Scroll to zoom, drag to pan, double-click to reset"></canvas></div>`; }).join('') + `</div>` : `<div class="st-run">No trades this round.</div>`)
+    + `<div class="st-actions"><button id="stNext" class="primary"><span aria-hidden="true" class="material-symbols-outlined">shuffle</span>Next round</button><button id="stExit">End session</button></div></div>`;
+  el.classList.add('open'); modalOpened(el);
   requestAnimationFrame(() => el.querySelectorAll('.dd-chart').forEach(c => mountTradeChart(c, r.ts[+c.dataset.ti])));
   $('stNext').onclick = () => { closeSettle(); rndJump(); };
-  $('stExit').onclick = () => { const n = rndRounds.length, t = rndRounds.reduce((s, x) => s + x.net, 0); exitRnd(); toast(`Session over · ${n} round${n === 1 ? '' : 's'} · ${usd(t)}`); };
+  $('stExit').onclick = () => { const n = rndRounds.length, t = rndRounds.reduce((s, x) => s + x.net, 0); exitRnd(); toast(`Session over, ${n} round${n === 1 ? '' : 's'}, ${usd(t)}`); };
   $('stClose').onclick = closeSettle;
 }
-function closeSettle() { const el = $('settleModal'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } }
+function closeSettle() { const el = $('settleModal'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } modalClosed(); }
 
 // ---------- QUIZ mode: replay YOUR real trades to the bar before entry, re-decide, then see what you actually did ----------
 const QUIZ_TF = 3;                 // questions are posed on 3-minute bars
@@ -3136,20 +3192,20 @@ function quizVerdict(q, a) {   // how this answer compares to what actually happ
 function renderQuizCard() {
   const el = $('quizCard'); if (!el || !quizMode) return;
   const q = quizQs[quizIdx]; if (!q) return;
-  const n = quizQs.length, sideTxt = s => s === 'long' ? 'LONG' : s === 'short' ? 'SHORT' : 'SKIP';
+  const n = quizQs.length, sideTxt = s => s === 'long' ? 'Long' : s === 'short' ? 'Short' : 'Skip';
   if (!quizShown) {
-    el.innerHTML = `<div class="qz-head"><span class="qz-n">Q ${quizIdx + 1} / ${n}</span><span class="qz-tf">${q.etHM} ET · ${QUIZ_TF}m</span></div>`
+    el.innerHTML = `<div class="qz-head"><span class="qz-n">Question ${quizIdx + 1} of ${n}</span><span class="qz-tf">${q.etHM} ET, ${QUIZ_TF}m</span></div>`
       + `<div class="qz-ask">Do you take this trade?</div>`
-      + `<div class="qz-btns"><button class="qz-b buy" data-a="long">LONG</button><button class="qz-b sell" data-a="short">SHORT</button><button class="qz-b skip" data-a="skip">SKIP</button></div>`
+      + `<div class="qz-btns"><button class="qz-b buy" data-a="long">Long</button><button class="qz-b sell" data-a="short">Short</button><button class="qz-b skip" data-a="skip">Skip</button></div>`
       + `<div class="qz-foot">your entry bar, still forming</div>`;
   } else {
     const a = quizAns[quizIdx], v = quizVerdict(q, a), s = quizScore();
-    el.innerHTML = `<div class="qz-head"><span class="qz-n">Q ${quizIdx + 1} / ${n}</span><span class="qz-tf">${q.etHM} ET</span></div>`
+    el.innerHTML = `<div class="qz-head"><span class="qz-n">Question ${quizIdx + 1} of ${n}</span><span class="qz-tf">${q.etHM} ET</span></div>`
       + `<div class="qz-cmp"><span>You <b class="${a === 'long' ? 'pos' : a === 'short' ? 'neg' : ''}">${sideTxt(a)}</b></span><span>Then <b class="${q.side === 'long' ? 'pos' : 'neg'}">${sideTxt(q.side)}</b></span></div>`
       + `<div class="qz-res ${q.pnl >= 0 ? 'pos' : 'neg'}">${usd(q.pnl)}</div>`
-      + `<div class="qz-sub">${q.qty} lot · ${q.holdMin}min · ${f2(q.entry)} → ${f2(q.exit)}</div>`
+      + `<div class="qz-sub">${q.qty} lot, held ${q.holdMin} min, ${f2(q.entry)} to ${f2(q.exit)}</div>`
       + `<div class="qz-verdict ${v.k}">${v.t}</div>`
-      + `<div class="qz-run">Sim ${usd(s.simPnl)} · then ${usd(s.realPnl)} · WR ${s.simWr == null ? '–' : s.simWr + '%'} vs ${s.realWr == null ? '–' : s.realWr + '%'} · ${s.n}/${n}</div>`
+      + `<div class="qz-run">Your calls ${usd(s.simPnl)}, actual ${usd(s.realPnl)}${s.simWr == null ? '' : `, win rate ${s.simWr}% vs ${s.realWr == null ? '–' : s.realWr + '%'}`}</div>`
       + `<div class="qz-btns"><button class="qz-b next" data-a="next">${quizIdx + 1 >= n ? 'See results' : 'Next question'}</button></div>`;
   }
   el.querySelectorAll('.qz-b').forEach(b => b.onclick = (e) => { e.stopPropagation(); const a = b.dataset.a; if (a === 'next') quizGoto(quizIdx + 1); else quizAnswer(a); });
@@ -3179,35 +3235,35 @@ function quizFinish() {
   const pct = (a, b) => b ? Math.round(100 * a / b) + '%' : '–';
   const cell = (k, v, cls) => `<div class="st-cell"><div class="st-k">${k}</div><div class="st-v ${cls || ''}">${v}</div></div>`;
   const delta = s.simPnl - s.realPnl;
-  el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">Quiz results</span> · ${s.n} answered</div>`
-    + `<button class="dd-x" id="qzClose"><span class="material-symbols-outlined">close</span></button></div>`
+  el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">Quiz results</span><span class="dd-n">${s.n} answered</span></div>`
+    + `<button class="dd-x" id="qzClose" aria-label="Close"><span aria-hidden="true" class="material-symbols-outlined">close</span></button></div>`
     + `<div class="st-over"><span class="st-badge ${delta > 0 ? 'win' : delta < 0 ? 'loss' : 'flat'}">${delta > 0 ? 'IMPROVED' : delta < 0 ? 'WORSE' : 'LEVEL'}</span>`
     + `<div class="st-big ${delta >= 0 ? 'pos' : 'neg'}">${delta >= 0 ? '+' : ''}${usd(delta)}</div>`
     + `<div class="st-tally"><span>Today's calls <b class="${s.simPnl >= 0 ? 'pos' : 'neg'}">${usd(s.simPnl)}</b></span><span>You back then <b class="${s.realPnl >= 0 ? 'pos' : 'neg'}">${usd(s.realPnl)}</b></span></div></div>`
     + `<div class="st-grid">`
-    + cell('New win rate', s.simWr == null ? '–' : `${s.simWr}% · ${s.simW}W/${s.simL}L`, s.realWr != null && s.simWr > s.realWr ? 'pos' : s.realWr != null && s.simWr < s.realWr ? 'neg' : '')
-    + cell('Then, same set', s.realWr == null ? '–' : `${s.realWr}% · ${s.winners}W/${s.losers}L`)
+    + cell('New win rate', s.simWr == null ? '–' : `${s.simWr}%  (${s.simW}W/${s.simL}L)`, s.realWr != null && s.simWr > s.realWr ? 'pos' : s.realWr != null && s.simWr < s.realWr ? 'neg' : '')
+    + cell('Then, same set', s.realWr == null ? '–' : `${s.realWr}%  (${s.winners}W/${s.losers}L)`)
     + cell('Trades taken', `${s.taken} / ${s.n}`)
     + cell('Dodged losers', `${s.dodged} / ${s.losers}`, s.dodged > s.losers / 2 ? 'pos' : '')
     + cell('Kept winners', `${s.caught} / ${s.winners}`, s.caught > s.winners / 2 ? 'pos' : '')
-    + cell('Good calls', `${s.good} / ${s.n} · ${pct(s.good, s.n)}`)
+    + cell('Good calls', `${s.good} / ${s.n}  (${pct(s.good, s.n)})`)
     + cell('Same side', String(s.agree))
     + cell('Faded', String(s.opp))
     + cell('Skipped', String(s.skip))
     + `</div>`
-    + `<div class="st-run">Each chip = one question · green = good call, red = bad, grey = neutral</div>`
+    + `<div class="st-run">Each chip is one question: green = good call, red = bad, grey = neutral</div>`
     + `<div class="qz-chips">` + quizQs.map((q, i) => { const a = quizAns[i]; if (!a) return `<span class="qz-chip"></span>`;
-        const v = quizVerdict(q, a); return `<span class="qz-chip ${v.k}" title="${escHtml(q.day + ' ' + q.etHM + ' · you ' + a + ' · then ' + q.side + ' · ' + usd(q.pnl) + ' · ' + v.t)}">${i + 1}</span>`; }).join('') + `</div>`
-    + `<div class="st-actions"><button id="qzAgain" class="primary"><span class="material-symbols-outlined">replay</span>New round</button><button id="qzExit">Exit quiz</button></div></div>`;
-  el.classList.add('open');
+        const v = quizVerdict(q, a); return `<span class="qz-chip ${v.k}" title="${escHtml(q.day + ' ' + q.etHM + ', you ' + a + ', then ' + q.side + ', ' + usd(q.pnl) + ', ' + v.t)}">${i + 1}</span>`; }).join('') + `</div>`
+    + `<div class="st-actions"><button id="qzAgain" class="primary"><span aria-hidden="true" class="material-symbols-outlined">replay</span>New round</button><button id="qzExit">Exit quiz</button></div></div>`;
+  el.classList.add('open'); modalOpened(el);
   $('qzAgain').onclick = () => { closeQuizScore(); quizAns = []; for (let i = quizQs.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [quizQs[i], quizQs[j]] = [quizQs[j], quizQs[i]]; } quizGoto(0); };
-  $('qzExit').onclick = () => { const d = quizScore(); exitQuiz(); toast(`Quiz done · your calls ${usd(d.simPnl)} vs then ${usd(d.realPnl)}`); };
+  $('qzExit').onclick = () => { const d = quizScore(); exitQuiz(); toast(`Quiz done: your calls ${usd(d.simPnl)} vs then ${usd(d.realPnl)}`); };
   $('qzClose').onclick = closeQuizScore;
 }
-function closeQuizScore() { const el = $('quizModal'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } }
+function closeQuizScore() { const el = $('quizModal'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } modalClosed(); }
 
 function onEntryButton(side) {
-  if (position) { if (position.side !== side) return flatten('reverse'); return toast('Already in a position — FLATTEN first'); }
+  if (position) { if (position.side !== side) return flatten('reverse'); return toast('Already in a position — flatten first'); }
   const kind = $('entryType').value;
   if (kind === 'market') { openPosition(side, crossFill(side === 'long', curPx()), curBaseT(), activeAtm, resolveQty(side, 'market')); }   // market orders cross the spread
   else {
@@ -3291,7 +3347,7 @@ function placeBreakout(side) {   // Buy/Sell Stop: stop-entry at the current bar
   const mult = (riskOn && sizeForRisk(bracket.slTicks)) ? sizeForRisk(bracket.slTicks) : Math.max(1, parseInt($('qty').value, 10) || 1);
   entryOrder = { side, kind: 'stop', price, atm: activeAtm, mult, slTicks: bracket.slTicks, tgts: bracket.tgts, sigBar: bracket.sigBar };
   const inp = $('entryPrice'); if (inp) inp.value = f2(price);
-  toast(`${long ? 'Buy' : 'Sell'} Stop @ ${f2(price)} · ${activeAtm}`);
+  toast(`${long ? 'Buy' : 'Sell'} Stop @ ${f2(price)}, ${atmLbl(activeAtm)}`);
   drawLines(); renderLive();
 }
 
@@ -3461,14 +3517,14 @@ function renderLive() {
     const openR = riskT ? uTicks / riskT : null;
     const dist = (o) => Math.abs(tcount(px, o.price));   // ticks between the current print and that order
     const cls = uPnl >= 0 ? 'pnl-pos' : 'pnl-neg';
-    box.innerHTML = `<div class="pos-top"><span class="big">${long ? 'LONG' : 'SHORT'} ${position.qty} @ ${f2(position.entry)}</span><span class="pos-atm">${position.atm}</span></div>
-      <div class="pos-pnl ${cls}">${usd(uPnl)}<span class="pos-t">${uTicks >= 0 ? '+' : ''}${uTicks}t${openR != null ? ' · ' + (openR >= 0 ? '+' : '') + openR.toFixed(2) + 'R' : ''}</span></div>
-      <div class="pos-dist">${so ? `<span class="pd stop"><span class="material-symbols-outlined">shield</span>${dist(so)}t to stop</span>` : '<span class="pd none">no stop</span>'}${to ? `<span class="pd tgt"><span class="material-symbols-outlined">flag</span>${dist(to)}t to target</span>` : ''}</div>`;
+    box.innerHTML = `<div class="pos-top"><span class="big">${long ? 'Long' : 'Short'} ${position.qty} @ ${f2(position.entry)}</span><span class="pos-atm">${atmLbl(position.atm)}</span></div>
+      <div class="pos-pnl ${cls}">${usd(uPnl)}<span class="pos-t"><span>${uTicks >= 0 ? '+' : ''}${uTicks} ticks</span>${openR != null ? '<span>' + (openR >= 0 ? '+' : '') + openR.toFixed(2) + ' R</span>' : ''}</span></div>
+      <div class="pos-dist">${so ? `<span class="pd stop"><span aria-hidden="true" class="material-symbols-outlined">shield</span>${dist(so)}t to stop</span>` : '<span class="pd none">no stop</span>'}${to ? `<span class="pd tgt"><span aria-hidden="true" class="material-symbols-outlined">flag</span>${dist(to)}t to target</span>` : ''}</div>`;
   }
   const ord = [];
-  const oRow = (cls, label, price, spec, title) => `<div class="ord ${cls}"><span>${label}</span><span class="ord-r"><span class="mono">${price}</span><button class="ord-x" data-ord="${spec}" title="${title}"><span class="material-symbols-outlined">close</span></button></span></div>`;
-  if (entryOrder) ord.push(oRow('entry', `${entryOrder.kind === 'limit' ? 'LIMIT' : 'STOP'} ${entryOrder.side === 'long' ? 'BUY' : 'SELL'}`, f2(entryOrder.price), 'entry', 'Cancel order'));
-  orders.forEach((o, i) => ord.push(oRow(o.type, `${o.type === 'stop' ? 'STOP' : 'TARGET'} ×${o.qty}`, f2(o.price), i, 'Cancel ' + o.type)));
+  const oRow = (cls, label, price, spec, title) => `<div class="ord ${cls}"><span>${label}</span><span class="ord-r"><span class="mono">${price}</span><button class="ord-x" data-ord="${spec}" title="${title}" aria-label="${title}"><span aria-hidden="true" class="material-symbols-outlined">close</span></button></span></div>`;
+  if (entryOrder) ord.push(oRow('entry', `${entryOrder.kind === 'limit' ? 'Limit' : 'Stop'} ${entryOrder.side === 'long' ? 'buy' : 'sell'}`, f2(entryOrder.price), 'entry', 'Cancel order'));
+  orders.forEach((o, i) => ord.push(oRow(o.type, `${o.type === 'stop' ? 'Stop' : 'Target'} ×${o.qty}`, f2(o.price), i, 'Cancel ' + o.type)));
   $('ordersBox').innerHTML = ord.join('');
 
   const lock = locked();
@@ -3477,7 +3533,7 @@ function renderLive() {
   const _pn = $('btnPrevDay'), _nn = $('btnNextDay'), _ps = $('btnPickStart');
   if (_pn) _pn.disabled = rndMode; if (_nn) _nn.disabled = rndMode; if (_ps) _ps.disabled = rndMode;
   const _dl = $('dateLabel'); if (_dl) { const _s = sessions[currentSessionIdx()], _k = _s ? _s.key : '—';   // "2026-09-15": the year span is hidden <=1799, ISO stays in the title
-    _dl.innerHTML = blindDate() ? '· · ·' : (_k.length === 10 ? `<span class="dl-y">${_k.slice(0, 5)}</span>${_k.slice(5)}` : _k); if (_db) _db.title = 'Jump to trading day' + (blindDate() ? '' : ' — ' + _k); }
+    _dl.innerHTML = blindDate() ? '…' : (_k.length === 10 ? `<span class="dl-y">${_k.slice(0, 5)}</span>${_k.slice(5)}` : _k); if (_db) _db.title = 'Jump to trading day' + (blindDate() ? '' : ' — ' + _k); }
   $('entryPriceRow').style.display = $('entryType').value === 'market' ? 'none' : '';
   renderRiskReadout();
 }
@@ -3497,12 +3553,12 @@ function renderTrades() {
     <td>${tFmt(t.entryTime)}</td><td>${tFmt(t.exitTime)}</td>
     <td class="mono">${f2(t.entry)}</td><td class="mono">${f2(t.exit)}</td>
     <td>${t.ticks >= 0 ? '+' : ''}${t.ticks}</td><td class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</td>
-    <td>${t.R == null ? '–' : t.R.toFixed(2)}</td><td class="mono" title="${t.planRR == null ? '' : `planned at entry: stop ${t.planSl}t · target ${Math.round(t.planTp)}t`}">${fmtPlanRR(t)}</td><td>${t.atm}</td><td>${t.exitType}</td>
-    <td><button class="trade-del" data-ti="${i}" title="Delete this trade"><span class="material-symbols-outlined">close</span></button></td></tr>`).reverse().join('');
+    <td>${t.R == null ? '–' : t.R.toFixed(2)}</td><td class="mono" title="${t.planRR == null ? '' : `planned at entry: stop ${t.planSl}t, target ${Math.round(t.planTp)}t`}">${fmtPlanRR(t)}</td><td>${atmLbl(t.atm)}</td><td>${EXIT_LBL[t.exitType] || t.exitType}</td>
+    <td><button class="trade-del" data-ti="${i}" title="Delete this trade" aria-label="Delete this trade"><span aria-hidden="true" class="material-symbols-outlined">close</span></button></td></tr>`).reverse().join('');
   const net = trades.reduce((s, t) => s + t.pnl, 0);
   const td = todayStats();
-  $('tradesSummary').textContent = `${trades.length} trades · Net ${usd(net)}`
-    + (td.key ? `      ·  Today (${td.key}): ${usd(td.pnl)} · ${td.n} trade${td.n === 1 ? '' : 's'}` : '');
+  $('tradesSummary').innerHTML = `<span><b>${trades.length}</b> trade${trades.length === 1 ? '' : 's'}</span><span>Net <b>${usd(net)}</b></span>`
+    + (td.key ? `<span>Today <b>${usd(td.pnl)}</b></span>` : '');
 }
 
 // ---------- Tradervue-style P&L calendar + per-trade entry/exit chart ----------
@@ -3550,13 +3606,14 @@ function renderPnlCalendar() {
   for (let d = 1; d <= days; d++) {
     const key = `${pnlCalY}-${pad(pnlCalM + 1)}-${pad(d)}`, e = byDay[key];
     if (e) { monthNet += e.net; monthDays++; }
-    cells += `<div class="pc-day ${e ? (e.net >= 0 ? 'win' : 'loss') : ''}" ${e ? `data-day="${key}"` : ''}>`
-      + `<div class="pc-d">${d}</div>` + (e ? `<div class="pc-pnl">${usd(e.net)}</div><div class="pc-n">${e.n} trade${e.n === 1 ? '' : 's'}</div>` : '') + `</div>`;
+    const tag = e ? 'button' : 'div';   // WIG: trading days are real <button>s so Tab + Enter opens the day detail
+    cells += `<${tag} class="pc-day ${e ? (e.net >= 0 ? 'win' : 'loss') : ''}" ${e ? `type="button" data-day="${key}" title="Show trades for ${d} ${CAL_MONTHS[pnlCalM].slice(0, 3)}"` : ''}>`
+      + `<span class="pc-d">${d}</span>` + (e ? `<span class="pc-pnl">${usd(e.net)}</span><span class="pc-n">${e.n} trade${e.n === 1 ? '' : 's'}</span>` : '') + `</${tag}>`;
   }
   el.innerHTML =
-    `<div class="pc-h"><button class="pc-nav" data-mo="-1"><span class="material-symbols-outlined">chevron_left</span></button>`
-    + `<span class="pc-title">${CAL_MONTHS[pnlCalM]} ${pnlCalY} &nbsp;<b class="${monthNet >= 0 ? 'pos' : 'neg'}">${usd(monthNet)}</b> · ${monthDays}d</span>`
-    + `<button class="pc-nav" data-mo="1"><span class="material-symbols-outlined">chevron_right</span></button></div>`
+    `<div class="pc-h"><button class="pc-nav" data-mo="-1" aria-label="Previous month"><span aria-hidden="true" class="material-symbols-outlined">chevron_left</span></button>`
+    + `<span class="pc-title">${CAL_MONTHS[pnlCalM]} ${pnlCalY} &nbsp;<b class="${monthNet >= 0 ? 'pos' : 'neg'}">${usd(monthNet)}</b>, ${monthDays} day${monthDays === 1 ? '' : 's'}</span>`
+    + `<button class="pc-nav" data-mo="1" aria-label="Next month"><span aria-hidden="true" class="material-symbols-outlined">chevron_right</span></button></div>`
     + `<div class="pc-wdrow">${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(w => `<span>${w}</span>`).join('')}</div>`
     + `<div class="pc-grid">${cells}</div>`;
 }
@@ -3638,13 +3695,13 @@ function drawTradeChart(c, t) {
   const rng = (hi - lo) || 1, y = p => top + padY + (hi - p) / rng * (bot - top - 2 * padY);
   const long = t.side === 'long', eY = y(t.entry), xY = y(t.exit);
   // header band — symbol · timeframe · side (left), P&L · ticks · R (right)
-  const head = `${t.sym || INSTR.symbol} · ${tfLab(t.tf)}`;
+  const head = `${t.sym || INSTR.symbol} ${tfLab(t.tf)}`;
   ctx.fillStyle = '#E6E7E8'; ctx.fillRect(0, 0, W, TH);
   ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.font = '700 12px sans-serif'; ctx.fillStyle = '#000000'; ctx.fillText(head, L + 2, TH / 2);
-  ctx.fillStyle = long ? '#127209' : '#D40605'; ctx.fillText(`  ${long ? 'LONG' : 'SHORT'} ${t.qty}`, L + 2 + ctx.measureText(head).width, TH / 2);
+  ctx.fillStyle = long ? '#127209' : '#D40605'; ctx.fillText(`   ${long ? 'Long' : 'Short'} ${t.qty}`, L + 2 + ctx.measureText(head).width, TH / 2);
   if (W > 360) {
     ctx.textAlign = 'right'; ctx.fillStyle = t.pnl >= 0 ? '#127209' : '#D40605'; ctx.font = '700 12px ui-monospace,monospace';
-    ctx.fillText(`${usd(t.pnl)} · ${t.ticks >= 0 ? '+' : ''}${t.ticks}t · ${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + 'R'}`, W - 6, TH / 2);
+    ctx.fillText(`${usd(t.pnl)}   ${t.ticks >= 0 ? '+' : ''}${t.ticks} ticks   ${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + ' R'}`, W - 6, TH / 2);
     ctx.textAlign = 'left';
   }
   ctx.save(); ctx.beginPath(); ctx.rect(L, top, plotW, bot - top); ctx.clip();   // everything that scrolls is clipped to the plot
@@ -3690,18 +3747,18 @@ function openDayDetail(key) {
   const el = $('dayDetail'); if (!el) return;
   const ts = trades.filter(t => tradingDayKey(t.entryTime) === key).sort((a, b) => a.entryTime - b.entryTime);
   const net = ts.reduce((s, t) => s + t.pnl, 0), w = ts.filter(t => t.pnl > 0).length, l = ts.filter(t => t.pnl < 0).length;
-  el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">${key}</span> &nbsp;<b class="${net >= 0 ? 'pos' : 'neg'}">${usd(net)}</b> · ${ts.length} trades · ${w}W ${l}L</div>`
-    + `<button class="dd-x" id="ddClose"><span class="material-symbols-outlined">close</span></button></div><div class="dd-list">`
+  el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">${dayLbl(key)}</span><span class="dd-meta"><b class="${net >= 0 ? 'pos' : 'neg'}">${usd(net)}</b><span>${ts.length} trade${ts.length === 1 ? '' : 's'}, ${w} won, ${l} lost</span></span></div>`
+    + `<button class="dd-x" id="ddClose" aria-label="Close"><span aria-hidden="true" class="material-symbols-outlined">close</span></button></div><div class="dd-list">`
     + ts.map((t, i) => { const long = t.side === 'long';
-      return `<div class="dd-trade"><div class="dd-tinfo"><div class="dd-trow">#${i + 1} <span class="${long ? 'long-tag' : 'short-tag'}">${long ? 'LONG' : 'SHORT'} ${t.qty}</span> <b class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</b> · ${t.ticks >= 0 ? '+' : ''}${t.ticks}t · ${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + 'R'}${t.planRR != null ? ` · plan ${fmtPlanRR(t)}` : ''}</div>`
-        + `<div class="dd-sub">${tFmt(t.entryTime)} → ${tFmt(t.exitTime)} · ${f2(t.entry)} → ${f2(t.exit)} · ${t.atm} · ${t.exitType}</div></div>`
-        + `<canvas class="dd-chart" data-ti="${i}" title="Scroll to zoom · drag to pan · double-click to reset"></canvas></div>`; }).join('')
+      return `<div class="dd-trade"><div class="dd-tinfo"><div class="dd-trow"><span>#${i + 1}</span><span class="${long ? 'long-tag' : 'short-tag'}">${long ? 'Long' : 'Short'} ${t.qty}</span><b class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</b><span>${t.ticks >= 0 ? '+' : ''}${t.ticks} ticks</span><span>${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + ' R'}</span>${t.planRR != null ? `<span>Plan ${fmtPlanRR(t)}</span>` : ''}</div>`
+        + `<div class="dd-sub"><span>${tHM(t.entryTime)} → ${tHM(t.exitTime)}</span><span>${f2(t.entry)} → ${f2(t.exit)}</span><span>${atmLbl(t.atm)}</span><span>${EXIT_LBL[t.exitType] || t.exitType}</span></div></div>`
+        + `<canvas class="dd-chart" data-ti="${i}" title="Scroll to zoom, drag to pan, double-click to reset"></canvas></div>`; }).join('')
     + `</div></div>`;
-  el.classList.add('open');
+  el.classList.add('open'); modalOpened(el);
   requestAnimationFrame(() => el.querySelectorAll('.dd-chart').forEach(c => mountTradeChart(c, ts[+c.dataset.ti])));   // draw after layout so canvas clientWidth is real
   $('ddClose').onclick = closeDayDetail;
 }
-function closeDayDetail() { const el = $('dayDetail'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } }
+function closeDayDetail() { const el = $('dayDetail'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } modalClosed(); }
 // ---------- Tradervue-style session overview ----------
 function sessionStats() {   // per trading-day breakdown, most-recent first
   const byDay = {};
@@ -3764,10 +3821,10 @@ function renderDash() {
   const avgPlan = prs.length ? prs.reduce((a, b) => a + b, 0) / prs.length : null;   // what you PLANNED on average vs what you got (Avg R)
   let eq = 0, peak = 0, dd = 0; trades.forEach(t => { eq += t.pnl; peak = Math.max(peak, eq); dd = Math.min(dd, eq - peak); });
   const card = (k, v, cls = '') => `<div class="stat"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`;
-  $('statCards').innerHTML = card('Trades', n) + card('Win rate', winRate.toFixed(1) + '%', winRate >= 50 ? 'pnl-pos' : '') +
+  $('statCards').innerHTML = card('Trades', n) + card('Win rate', winRate.toFixed(1) + '%') +
     card('Net P&L', usd(net), net >= 0 ? 'pnl-pos' : 'pnl-neg') + card('Profit factor', pf === Infinity ? '∞' : pf.toFixed(2)) +
-    card('Expectancy', usd(exp), exp >= 0 ? 'pnl-pos' : 'pnl-neg') + card('Avg R', avgR == null ? '–' : avgR.toFixed(2)) +
-    card('Planned R:R', avgPlan == null ? '–' : '1:' + avgPlan.toFixed(2));
+    card('Expectancy', usd(exp)) + card('Avg R', avgR == null ? '–' : avgR.toFixed(2)) +
+    card('Planned R:R', avgPlan == null ? '–' : '1:' + +avgPlan.toFixed(2));
   const byAtm = {}; trades.forEach(t => { (byAtm[t.atm] ??= []).push(t); });
   $('atmStats').innerHTML = `<table><thead><tr><th>ATM</th><th>Trades</th><th>Win%</th><th>Plan R:R</th><th>Avg R</th><th>Net $</th></tr></thead><tbody>` +
     Object.entries(byAtm).map(([k, ts]) => { const w = ts.filter(t => t.pnl > 0).length, l = ts.filter(t => t.pnl < 0).length, nt = ts.reduce((s, t) => s + t.pnl, 0);
@@ -3776,9 +3833,9 @@ function renderDash() {
       return `<tr><td>${k}</td><td>${ts.length}</td><td>${(w + l) ? (w / (w + l) * 100).toFixed(0) : 0}%</td><td class="mono">${plan}</td><td class="mono">${got}</td><td class="${nt >= 0 ? 'pos' : 'neg'}">${usd(nt)}</td></tr>`; }).join('') + `</tbody></table>`;
   const td = todayStats();
   $('todayPnl').className = 'todaypnl ' + (td.n === 0 ? 'flat' : (td.pnl >= 0 ? 'pos' : 'neg'));
-  $('todayPnl').innerHTML = `<span class="tp-label">Today</span><span class="tp-date">${td.key || '—'}</span>`
+  $('todayPnl').innerHTML = `<span class="tp-label">Today</span><span class="tp-date">${td.key && !blindDate() ? dayLbl(td.key) : ''}</span>`
     + `<span class="tp-val ${td.pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${usd(td.pnl)}</span>`
-    + `<span class="tp-sub">${td.n ? `${td.n} trade${td.n === 1 ? '' : 's'} · ${td.w}W ${td.l}L` : 'no trades yet'}</span>`;
+    + `<span class="tp-sub">${td.n ? `${td.n} trade${td.n === 1 ? '' : 's'}, ${td.w} won, ${td.l} lost` : 'No trades yet'}</span>`;
   renderPnlCalendar(); renderTvStats(); renderSessionTable();
   drawEquity();
   $('panelDash').title = `Max Drawdown ${usd(dd)}`;
@@ -3795,7 +3852,7 @@ function drawEquity() {   // cumulative R (each trade's P&L divided by its own p
   for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) { ctx.strokeStyle = v === 0 ? '#BCBDBF' : '#EDEDED'; ctx.beginPath(); ctx.moveTo(PAD_L, y(v)); ctx.lineTo(W, y(v)); ctx.stroke(); ctx.fillText((v > 0 ? '+' : '') + v + 'R', PAD_L - 4, y(v)); }
   ctx.strokeStyle = s >= 0 ? '#127209' : '#D40605'; ctx.lineWidth = 1.5; ctx.beginPath(); eq.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))); ctx.stroke();
   ctx.fillStyle = s >= 0 ? '#127209' : '#D40605'; ctx.textAlign = 'left'; ctx.font = '700 11px ui-monospace,monospace';
-  ctx.fillText(`${s >= 0 ? '+' : ''}${s.toFixed(2)}R · ${trades.length} trades`, PAD_L + 4, 10);
+  ctx.fillText(`${s >= 0 ? '+' : ''}${s.toFixed(2)} R   ${trades.length} trade${trades.length === 1 ? "" : "s"}`, PAD_L + 4, 10);
 }
 
 // ---------- ATM editor ----------
@@ -3818,7 +3875,8 @@ function applyAtmUnitUI() {
   [$('atmUnit'), $('ordUnit')].forEach(sel => { if (sel && sel.value !== atmUnit) sel.value = atmUnit; });   // the editor's and the order panel's unit pickers are one setting
 }
 function setAtmUnit(u) { atmUnit = (u === 'pts' ? 'pts' : 'ticks'); saveJSON('rt_atm_unit', atmUnit); applyAtmUnitUI(); loadAtmIntoEditor($('atmSelect').value || activeAtm); syncRrField(); renderRiskReadout(); }
-function buildAtmSelect() { $('atmSelect').innerHTML = Object.keys(atm).map(k => `<option ${k === activeAtm ? 'selected' : ''}>${k}</option>`).join(''); applyAtmUnitUI(); loadAtmIntoEditor(activeAtm); syncRrField(); }
+function atmLbl(k) { return k == null ? '' : String(k).replace(' · ', ' '); }   // display only: ATM names are localStorage keys, keep them unchanged
+function buildAtmSelect() { $('atmSelect').innerHTML = Object.keys(atm).map(k => `<option value="${escHtml(k)}" ${k === activeAtm ? 'selected' : ''}>${atmLbl(k)}</option>`).join(''); applyAtmUnitUI(); loadAtmIntoEditor(activeAtm); syncRrField(); }
 function syncRrField() {   // show the Target-R dial + stop-source picker for structural ATMs, or the inline Stop/Target boxes for the custom one
   const f = $('rrField'); if (!f) return; const a = atm[activeAtm] || {};
   const fixedTp = !!(a.struct && a.tpTicks > 0);
@@ -3906,8 +3964,19 @@ function saveAtm() {
 function delAtm() { const name = $('atmName').value.trim(); if (atm[name] && Object.keys(atm).length > 1) { delete atm[name]; saveJSON('rt_atm', atm); activeAtm = Object.keys(atm)[0]; buildAtmSelect(); toast('Deleted ' + name); } }
 
 // ---------- misc ----------
+// WIG: modal focus management — remember what had focus, land focus inside the dialog, restore it on close
+let _modalRet = null;
+function modalOpened(el) { _modalRet = document.activeElement; const f = el.querySelector('button, [href], input, select, textarea'); (f || el).focus(); }
+function modalClosed() { if (_modalRet && _modalRet.focus) _modalRet.focus(); _modalRet = null; }
+document.addEventListener('keydown', e => {   // Tab trap: every modal here shares the .day-detail class, so this covers all six
+  if (e.key !== 'Tab') return; const m = document.querySelector('.day-detail.open'); if (!m) return;
+  const f = [...m.querySelectorAll('button, [href], input, select, textarea')].filter(x => !x.disabled && x.offsetParent); if (!f.length) return;
+  const a = f[0], z = f[f.length - 1];
+  if (e.shiftKey && document.activeElement === a) { e.preventDefault(); z.focus(); }
+  else if (!e.shiftKey && document.activeElement === z) { e.preventDefault(); a.focus(); }
+});
 let toastT = null;
-function toast(msg) { let el = $('toast'); if (!el) { el = document.createElement('div'); el.id = 'toast'; el.className = 'toast'; document.body.appendChild(el); } el.textContent = msg; el.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('show'), 1600); }
+function toast(msg) { let el = $('toast'); if (!el) { el = document.createElement('div'); el.id = 'toast'; el.className = 'toast'; el.setAttribute('role', 'status'); el.setAttribute('aria-live', 'polite'); document.body.appendChild(el); } el.textContent = msg; el.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('show'), msg.length > 60 ? 5000 : 1600); }
 function tradeBars(t) {   // the journal candle snapshot for a trade — stored at exit (incl. post-exit tail), else reconstructed from the current dataset
   if (t.chart && t.chart.length) return t.chart;
   const lb = liveTradeBars(t); return lb && lb.length ? lb : [];
@@ -3983,6 +4052,7 @@ function exportCsv() {   // ONE file, two sections: [TRADES] summary (+stop/TP +
 function resetAll() { if (!confirm('Clear all trade records?')) return; trades = []; saveJSON('rt_trades', trades); position = null; entryOrder = null; orders = []; markers = []; refreshMarkers(); drawLines(); renderAll(); }
 function deleteTrade(i) {   // remove a single trade record AND its entry/exit arrows from the chart (does not touch a live position)
   if (i < 0 || i >= trades.length) return;
+  if (!confirm(`Delete trade #${i + 1}? This cannot be undone.`)) return;   // trades[] is outside the drawings undo stack
   const t = trades.splice(i, 1)[0];
   saveJSON('rt_trades', trades);
   const drop = pred => { const k = markers.findIndex(pred); if (k >= 0) markers.splice(k, 1); };
@@ -3994,7 +4064,7 @@ function deleteTrade(i) {   // remove a single trade record AND its entry/exit a
 // ---------- saved trade logs (snapshot the current trades under a name, recall/delete later) ----------
 function saveTradeLog() {
   if (!trades.length) return toast('No trades to save');
-  const def = `${(sessions[currentSessionIdx()] || {}).key || 'Log'} · ${INSTR.symbol}`;
+  const def = `${(sessions[currentSessionIdx()] || {}).key || 'Log'} ${INSTR.symbol}`;
   const name = (prompt('Save current trades as:', def) || '').trim();
   if (!name) return;
   const net = trades.reduce((s, t) => s + t.pnl, 0);
@@ -4019,21 +4089,21 @@ function renameTradeLog(id) {
   log.name = name; saveJSON('rt_trade_logs', tradeLogs); renderLogList();
 }
 function escHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
-function openLogs() { renderLogList(); $('logModal').classList.add('open'); }
-function closeLogs() { const el = $('logModal'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } }
+function openLogs() { renderLogList(); $('logModal').classList.add('open'); modalOpened($('logModal')); }
+function closeLogs() { const el = $('logModal'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } modalClosed(); }
 function renderLogList() {
   const el = $('logModal'); if (!el) return;
   const logs = tradeLogs.slice().sort((a, b) => b.ts - a.ts);
   const rows = logs.length ? logs.map(l => {
     const net = l.net != null ? l.net : l.trades.reduce((s, t) => s + t.pnl, 0), n = l.n != null ? l.n : l.trades.length;
     return `<div class="log-row"><div class="log-info"><div class="log-name" title="${escHtml(l.name)}">${escHtml(l.name)}</div>`
-      + `<div class="log-sub">${tFmt(l.ts)} · ${n} trade${n === 1 ? '' : 's'} · <b class="${net >= 0 ? 'pos' : 'neg'}">${usd(net)}</b></div></div>`
-      + `<div class="log-act"><button class="log-load" data-id="${l.id}"><span class="material-symbols-outlined">download_for_offline</span>Load</button>`
-      + `<button class="log-rename" data-id="${l.id}" title="Rename log"><span class="material-symbols-outlined">edit</span></button>`
-      + `<button class="log-del" data-id="${l.id}" title="Delete saved log"><span class="material-symbols-outlined">delete</span></button></div></div>`;
+      + `<div class="log-sub"><span>${tFmt(l.ts)}</span><span>${n} trade${n === 1 ? '' : 's'}</span><b class="${net >= 0 ? 'pos' : 'neg'}">${usd(net)}</b></div></div>`
+      + `<div class="log-act"><button class="log-load" data-id="${l.id}"><span aria-hidden="true" class="material-symbols-outlined">download_for_offline</span>Load</button>`
+      + `<button class="log-rename" data-id="${l.id}" title="Rename log" aria-label="Rename log"><span aria-hidden="true" class="material-symbols-outlined">edit</span></button>`
+      + `<button class="log-del" data-id="${l.id}" title="Delete saved log" aria-label="Delete saved log"><span aria-hidden="true" class="material-symbols-outlined">delete</span></button></div></div>`;
   }).join('') : `<div class="log-empty">No saved logs yet. Trade, then hit “Save log”.</div>`;
-  el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">Saved trade logs</span> · ${logs.length}</div>`
-    + `<button class="dd-x" id="logClose"><span class="material-symbols-outlined">close</span></button></div>`
+  el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">Saved trade logs</span><span class="dd-n">${logs.length}</span></div>`
+    + `<button class="dd-x" id="logClose" aria-label="Close"><span aria-hidden="true" class="material-symbols-outlined">close</span></button></div>`
     + `<div class="dd-list">${rows}</div></div>`;
   $('logClose').onclick = closeLogs;
   el.querySelectorAll('.log-load').forEach(b => b.onclick = () => loadTradeLog(b.dataset.id));
@@ -4191,6 +4261,7 @@ function wire() {
     if (e.ctrlKey || e.metaKey) {
       if (e.altKey && k === 'h') { e.preventDefault(); return toggleHide('drawings'); }
       if (e.altKey) return;   // any other Ctrl+Alt combo: not ours
+      if (e.code === 'Digit2') { e.preventDefault(); return setTool('channel'); }   // NT8 default Trend Channel; reaches the page only in an app window (no tab strip), never in a plain Chrome tab
       if (k === 'z') { e.preventDefault(); return undo(); }
       if (k === 'y') { e.preventDefault(); return redo(); }
       if (k === 'c') { if (selDrawing || selSet.size) { e.preventDefault(); copyDrawing(); } return; }
@@ -4205,9 +4276,11 @@ function wire() {
       if (k === 'v') { e.preventDefault(); return setTool('vline'); }
       if (k === 'c') { e.preventDefault(); return setTool('cross'); }
       if (k === 'f') { e.preventDefault(); return setTool('fib'); }
+      if (e.code === 'Digit2') { e.preventDefault(); ctrl2Hint(); return setTool('channel'); }   // fallback: Chromium swallows Ctrl+2 in a normal tab
       return;   // Alt+<anything else>: browser / OS accelerator, not a trading key
     }
     if ((selDrawing || selSet.size) && k.startsWith('Arrow')) { e.preventDefault(); return nudgeSelection(k); }   // G23: arrows nudge the selection; only with nothing selected do Left/Right change the day
+    if (k === 'F2') { e.preventDefault(); return setTool('tl'); }   // NT8 default: F2 = Line (returns before the trading letters)
     if (k === 'p') play(); else if (k === 'b') onEntryButton('long');
     else if (k === 's') onEntryButton('short');
     else if (k === 'f') { e.preventDefault(); placeBreakout('long'); }    // F / J sit under the index fingers
@@ -4228,19 +4301,19 @@ function wire() {
 const HELP_KEYS = [
   ['Replay', [['Space', 'Next bar / sub-bar'], ['P', 'Play / pause'], ['[  ]', 'Previous / next trading day'], ['0', 'Fit chart'], ['?', 'This sheet']]],
   ['Orders', [['B', 'Buy market'], ['S', 'Sell market'], ['F', 'Buy stop above the bar'], ['J', 'Sell stop below the bar'], ['X', 'Flatten']]],
-  ['Drawings', [['Esc', 'Drop tool / deselect'], ['Del · Middle-click', 'Delete selected drawing'], ['Shift+Del', 'Clear all drawings'], ['Ctrl+Z · Y', 'Undo / redo'], ['Ctrl+C · V', 'Copy / paste selection'], ['Arrows', 'Nudge selection: bar / tick'], ['Ctrl+Alt+H', 'Hide / show all drawings']]],
-  ['Drawing tools', [['Alt+T', 'Trend line'], ['Alt+H', 'Horizontal line'], ['Alt+J', 'Horizontal ray'], ['Alt+V', 'Vertical line'], ['Alt+C', 'Cross line'], ['Alt+F', 'Fib retracement'], ['Shift+Alt+R', 'Rectangle']]],
+  ['Drawings', [['Esc', 'Drop tool / deselect'], ['Del|Middle-click', 'Delete selected drawing'], ['Shift+Del', 'Clear all drawings'], ['Ctrl+Z|Ctrl+Y', 'Undo / redo'], ['Ctrl+C|Ctrl+V', 'Copy / paste selection'], ['Arrows', 'Nudge selection: bar / tick'], ['Ctrl+Alt+H', 'Hide / show all drawings'], ['Right-click (placing)', 'Cancel the drawing']]],
+  ['Drawing tools', [['Alt+T|F2', 'Trend line'], ['Ctrl+2|Alt+2', 'Trend channel (3 clicks)'], ['Alt+H', 'Horizontal line'], ['Alt+J', 'Horizontal ray'], ['Alt+V', 'Vertical line'], ['Alt+C', 'Cross line'], ['Alt+F', 'Fib retracement'], ['Shift+Alt+R', 'Rectangle']]],
   ['Editing', [['Ctrl+Click', 'Multi-select'], ['Ctrl+Drag', 'Clone a drawing'], ['Shift+Drag', 'Move along one axis only'], ['Shift+Click', '2nd point: 45° line / square box'], ['Ctrl+Click (tool)', 'Invert magnet while placing']]],
 ];
 const HELP_TOUCH = ['Touch', [['Tap ▶', 'Play / pause'], ['Tap ›', 'Next bar'], ['Drag chart', 'Pan'], ['Pinch', 'Zoom'], ['Drag seam', 'Resize panels'], ['Drag card', 'Move HUD / quiz card']]];
 function toggleHelp(on) {
   const el = $('helpModal'); if (!el) return;
   const open = on == null ? !el.classList.contains('open') : on;
-  if (!open) { el.classList.remove('open'); el.innerHTML = ''; return; }
+  if (!open) { el.classList.remove('open'); el.innerHTML = ''; modalClosed(); return; }
   const touch = matchMedia('(pointer:coarse)').matches;   // tablets get a Touch column (no keys there)
-  el.innerHTML = `<div class="dd-card help-card"><div class="dd-h"><span class="dd-date">Keyboard shortcuts</span><button class="mini ico-btn" id="helpClose"><span class="material-symbols-outlined">close</span></button></div>` +
-    `<div class="help-body${touch ? ' touch' : ''}">${(touch ? HELP_KEYS.concat([HELP_TOUCH]) : HELP_KEYS).map(([g, rows]) => `<div class="help-grp"><div class="help-gh">${g}</div>${rows.map(([k, d]) => `<div class="help-row"><kbd>${k}</kbd><span>${d}</span></div>`).join('')}</div>`).join('')}</div></div>`;
-  el.classList.add('open'); $('helpClose').onclick = () => toggleHelp(false);
+  el.innerHTML = `<div class="dd-card help-card"><div class="dd-h"><span class="dd-date">Keyboard shortcuts</span><button class="mini ico-btn" id="helpClose" aria-label="Close"><span aria-hidden="true" class="material-symbols-outlined">close</span></button></div>` +
+    `<div class="help-body${touch ? ' touch' : ''}">${(touch ? HELP_KEYS.concat([HELP_TOUCH]) : HELP_KEYS).map(([g, rows]) => `<div class="help-grp"><div class="help-gh">${g}</div>${rows.map(([k, d]) => `<div class="help-row">${k.split('|').map(x => `<kbd>${x}</kbd>`).join(' ')}<span>${d}</span></div>`).join('')}</div>`).join('')}</div></div>`;
+  el.classList.add('open'); modalOpened(el); $('helpClose').onclick = () => toggleHelp(false);
 }
 function switchTab(t) { $('tabTrades').classList.toggle('active', t); $('tabDash').classList.toggle('active', !t); $('panelTrades').classList.toggle('hidden', !t); $('panelDash').classList.toggle('hidden', t); if (!t) renderDash(); applyLayout(false); }   // the bottom panel's auto height depends on the tab
 
@@ -4248,7 +4321,7 @@ function switchTab(t) { $('tabTrades').classList.toggle('active', t); $('tabDash
 window.__rt = { state: () => ({ tf, idx, baseIdx, bars: bars.length, base: baseBars.length, pos: position && { ...position }, orders: orders.map(o => ({ ...o })), entryOrder }), bar: (i) => bars[i], sub: (i) => baseBars[i], agg: (m) => aggregate(baseBars, m), dresize: (w, h) => chart.resize(w, h, true), sc: sizeChart, chartOpts: () => chart.options(), priceToY: (p) => candle.priceToCoordinate(p), coordToPrice: (y) => candle.coordinateToPrice(y), chartRect: () => $('chart').getBoundingClientRect(), setTool: (t) => setTool(t), getTool: () => tool, placeAnn: (t, time) => placeAnnotation(t, time), annCount: () => annotations.length, ripster: () => ({ on: ripsterOn, clouds: ripsterData.length }), drawCount: () => drawings.length, addDraw: (t, time, price) => handleDrawClick(t, time, price), rthOpenET: (i) => etMinutes(baseBars[rthOpenIdx(sessions[i])].time), nextDay, prevDay, curSession: () => currentSessionIdx(),
   instr: () => ({ ...INSTR, TICK }),
   handles: () => drawingHandles().map(h => ({ horiz: !!h.horiz, hx: h.hx, hy: h.hy })),
-  drawingsList: () => drawings.map(d => ({ type: d.type, p1: d.p1 && { ...d.p1 }, p2: d.p2 && { ...d.p2 } })),
+  drawingsList: () => drawings.map(d => ({ type: d.type, p1: d.p1 && { ...d.p1 }, p2: d.p2 && { ...d.p2 }, p3: d.p3 && { ...d.p3 }, levels: d.levels })),
   editAt: (x, y, nx, ny) => { const h = nearestHandle(x, y); if (!h) return null; const p = candle.coordinateToPrice(ny); if (p == null) return { noprice: true }; snapshot(); h.apply(h.horiz ? null : xToTime(nx), rnd(p)); saveJSON('rt_drawings', drawings); repaintOverlays(); return { moved: true }; },
   selType: () => selDrawing && selDrawing.type,
   setSel: (i) => { selectDrawing(drawings[i] || null, false); repaintOverlays(); return selDrawing && selDrawing.type; },

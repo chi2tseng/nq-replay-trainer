@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Key test — Ctrl+2 / F2</title>
+<style>
+  :root{color-scheme:light dark}
+  body{font:14px/1.5 ui-monospace,Consolas,monospace;margin:0;padding:16px;background:#E6E7E8;color:#111}
+  h1{font-size:16px;margin:0 0 4px}
+  .sub{color:#555;margin:0 0 14px}
+  .card{background:#fff;border:1px solid #bbb;border-radius:0;padding:12px 14px;margin-bottom:14px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:6px 0}
+  button{font:13px ui-monospace,monospace;padding:6px 12px;border:1px solid #888;background:#f2f2f2;cursor:pointer;border-radius:0}
+  button:active{background:#ddd}
+  button.on{background:#CC4400;color:#fff;border-color:#CC4400}
+  label{display:flex;gap:6px;align-items:center;cursor:pointer}
+  #status span{display:inline-block;padding:2px 8px;margin-right:6px;background:#eee;border:1px solid #ccc;font-size:12px}
+  #status .ok{background:#dff3df;border-color:#1E8A1E}
+  #status .no{background:#fde0e0;border-color:#B30000}
+  #log{height:min(50vh,420px);overflow:auto;background:#111;color:#c8f7c8;padding:8px;font-size:12px;white-space:pre}
+  .hit{color:#ffd35c;font-weight:700}
+  .prevented{color:#7CFC00}
+  .not-prevented{color:#ff6b6b}
+  code{background:#eee;padding:1px 5px}
+</style>
+</head>
+<body>
+<h1>Ctrl+2 / F2 keydown probe</h1>
+<p class="sub">D:\Tools\replay-trainer\tests\keytest.html — logs every keydown (key/code/modifiers/defaultPrevented). Load it three ways and compare the log:</p>
+
+<div class="card">
+  <b>1) Normal tab</b> — just open this URL in a normal Brave/Chrome tab (e.g. http://127.0.0.1:5560/tests/keytest.html).<br>
+  <b>2) Installed PWA / app window</b> — Brave menu → More Tools → “Create Shortcut…” (check “Open as window”), or launch <code>brave.exe --app=http://127.0.0.1:5560/tests/keytest.html</code>. That opens a standalone window with no tab strip.<br>
+  <b>3) Fullscreen + Keyboard Lock</b> — click the button below (must be a real click; browsers refuse fullscreen from a keyboard event or script-only call).
+</div>
+
+<div class="card">
+  <div class="row">
+    <button id="btnFs">Enter fullscreen + navigator.keyboard.lock()</button>
+    <button id="btnExitFs">Exit fullscreen</button>
+    <label><input type="checkbox" id="chkPrevent" checked> preventDefault() on Ctrl+2 / F2</label>
+    <button id="btnClear">Clear log</button>
+  </div>
+  <div id="status" class="row"></div>
+</div>
+
+<div id="log" class="card"></div>
+
+<script>
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+let n = 0;
+
+function fmtMods(e){
+  const m = [];
+  if (e.ctrlKey) m.push('Ctrl');
+  if (e.metaKey) m.push('Meta');
+  if (e.altKey) m.push('Alt');
+  if (e.shiftKey) m.push('Shift');
+  return m.join('+') || '–';
+}
+
+function isTarget(e){
+  return (e.code === 'Digit2' && (e.ctrlKey || e.metaKey) && !e.altKey) || e.code === 'F2';
+}
+
+function line(html){
+  n++;
+  const div = document.createElement('div');
+  div.innerHTML = `${String(n).padStart(4,'0')}  ${html}`;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+window.addEventListener('keydown', (e) => {
+  const target = isTarget(e);
+  if (target && document.getElementById('chkPrevent').checked) e.preventDefault();
+  const cls = target ? 'hit' : '';
+  const dp = e.defaultPrevented ? '<span class="prevented">defaultPrevented=true</span>' : '<span class="not-prevented">defaultPrevented=false</span>';
+  line(`<span class="${cls}">key=${JSON.stringify(e.key)} code=${e.code} mods=${fmtMods(e)}</span>  ${dp}`);
+}, { capture: true });
+
+document.getElementById('btnClear').onclick = () => { logEl.innerHTML = ''; n = 0; };
+
+function updateStatus(){
+  const dm = matchMedia('(display-mode: standalone)').matches ? 'standalone (installed app window)'
+    : matchMedia('(display-mode: window-controls-overlay)').matches ? 'window-controls-overlay'
+    : matchMedia('(display-mode: fullscreen)').matches ? 'fullscreen'
+    : 'browser tab';
+  const fs = document.fullscreenElement ? 'yes' : 'no';
+  const kl = ('keyboard' in navigator && 'lock' in navigator.keyboard) ? 'API present' : 'unsupported';
+  statusEl.innerHTML =
+    `<span>display-mode: ${dm}</span>` +
+    `<span class="${document.fullscreenElement ? 'ok' : ''}">fullscreen: ${fs}</span>` +
+    `<span class="${kl === 'API present' ? 'ok' : 'no'}">keyboard.lock: ${kl}</span>`;
+}
+updateStatus();
+document.addEventListener('fullscreenchange', async () => {
+  updateStatus();
+  if (document.fullscreenElement && 'keyboard' in navigator && 'lock' in navigator.keyboard) {
+    try {
+      await navigator.keyboard.lock(); // no args = lock every key the OS grants
+      line('<b>navigator.keyboard.lock() resolved OK (all keys)</b>');
+    } catch (err) {
+      line(`<b>navigator.keyboard.lock() FAILED: ${err.name}: ${err.message}</b>`);
+    }
+  }
+});
+
+document.getElementById('btnFs').onclick = async () => {
+  try { await document.documentElement.requestFullscreen(); }
+  catch (err) { line(`<b>requestFullscreen FAILED: ${err.name}: ${err.message}</b>`); }
+};
+document.getElementById('btnExitFs').onclick = async () => {
+  if ('keyboard' in navigator && 'unlock' in navigator.keyboard) navigator.keyboard.unlock();
+  if (document.fullscreenElement) await document.exitFullscreen();
+};
+</script>
+</body>
+</html>
