@@ -4253,8 +4253,14 @@ function wire() {
   setShowTrades(showTrades);
   $('tradesTable').addEventListener('click', (e) => { const b = e.target.closest('.trade-del'); if (b) deleteTrade(+b.dataset.ti); });
 
+  document.addEventListener('change', (e) => {   // NT: after picking a timeframe / toggling a box, keys go back to the chart (B/S/F2/Space would otherwise stay dead until a chart click)
+    const t = e.target;
+    if ((t.tagName === 'SELECT' || /^(checkbox|radio|range)$/.test(t.type)) && !t.closest('[role="dialog"]')) t.blur();
+  });
   document.addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    const t = e.target, tag = t.tagName, ctl = /^(checkbox|radio|range|button|color)$/.test(t.type);
+    if (t.isContentEditable || tag === 'TEXTAREA' || (tag === 'INPUT' && !ctl)) return;   // typing into a field
+    if ((tag === 'SELECT' || tag === 'INPUT') && !e.altKey && !e.ctrlKey && !e.metaKey && !/^F\d+$/.test(e.key)) return;   // a focused dropdown / checkbox / slider keeps its own plain keys; F-keys and Alt/Ctrl combos still reach the chart
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;   // letter shortcuts stay live with caps lock / shift
     if (e.code === 'Space') { e.preventDefault(); pause(); stepAny(); return; }
     // ---- modifier block FIRST (G21-G33): a plain-letter branch below would otherwise eat Alt+F / Alt+J and place a real order ----
