@@ -460,7 +460,7 @@ try {
     await page.waitForTimeout(500);
   }
 
-  // ================= G24 Copy/paste keeps the shape (parallel copy), never lands past the last revealed bar =================
+  // ================= G24 Copy/paste: same time anchors, price-only offset -> a parallel copy on every timeframe / day / tape =================
   await clear();
   {
     const g = await page.evaluate(() => ({ idx, hiT: bars[Math.min(idx, bars.length - 1)].time, futT: logicalToTime(Math.min(idx, bars.length - 1) + 3 - seriesFrom) }));
@@ -473,13 +473,17 @@ try {
     const n1c = await n(); const o1 = await geomOf(0), c1 = await geomOf(3);
     await page.evaluate(() => window.__rt.setSel(1));
     await key('Control+c'); await key('Control+v');
-    const n2c = await n(); const c2 = await geomOf(4);
+    const n2c = await n(); const o2 = await geomOf(1), c2 = await geomOf(4);
     await page.evaluate(() => window.__rt.setSel(2));   // 2nd point in the future space right of the last bar (the old per-point clamp pulled it back and bent the copy)
     await key('Control+c'); await key('Control+v');
     const n3c = await n(); const o3 = await geomOf(2), c3 = await geomOf(5);
+    await key('Control+v');   // a second paste of the same clipboard steps further down
+    const n4c = await n(); const c4 = await geomOf(6);
+    const sameT = (a, b) => a.t1 === b.t1 && a.t2 === b.t2;
+    const down = (a, b) => b.p1 < a.p1 && Math.abs((b.p1 - a.p1) - ((b.p2 ?? b.p1) - (a.p2 ?? a.p1))) < 1e-9;
     const par = (a, b) => Math.abs(slope(a) - slope(b)) <= Math.abs(slope(a)) * 0.01 + 1e-6 && Math.abs((b.x2 - b.x1) - (a.x2 - a.x1)) < 1;
-    report('G24', n1c === 4 && n2c === 5 && n3c === 6 && c1.t1 > ts4[0] && par(o1, c1) && c1.t2 <= g.hiT && c2.t1 <= g.hiT && par(o3, c3) && c3.t1 !== o3.t1,
-      `pasted tl is a parallel copy shifted right (slope ${slope(o1).toFixed(4)} vs ${slope(c1).toFixed(4)}); tl reaching into the future space pastes parallel too (${slope(o3).toFixed(4)} vs ${slope(c3).toFixed(4)}, width ${(o3.x2 - o3.x1).toFixed(1)} vs ${(c3.x2 - c3.x1).toFixed(1)}px); hray on the last bar never crosses it`);
+    report('G24', n1c === 4 && n2c === 5 && n3c === 6 && n4c === 7 && sameT(o1, c1) && down(o1, c1) && par(o1, c1) && c2.t1 === o2.t1 && c2.t1 <= g.hiT && down(o2, c2) && sameT(o3, c3) && down(o3, c3) && par(o3, c3) && sameT(o3, c4) && c4.p1 < c3.p1 && par(o3, c4),
+      `pasted tl keeps both time anchors and moves ${(c1.p1 - o1.p1).toFixed(2)} pt on both (slope ${slope(o1).toFixed(4)} vs ${slope(c1).toFixed(4)}) -> parallel on any timeframe; tl reaching into the future space too (${slope(o3).toFixed(4)} vs ${slope(c3).toFixed(4)}, width ${(o3.x2 - o3.x1).toFixed(1)} vs ${(c3.x2 - c3.x1).toFixed(1)}px); 2nd Ctrl+V steps to ${(c4.p1 - o3.p1).toFixed(2)} pt; hray on the last bar stays on it`);
   }
 
   // ================= G25 middle-click deletes the drawing under the cursor =================
@@ -918,7 +922,17 @@ try {
     const chO = await cg(0), chC = await cg(1);
     await key('ArrowLeft'); await key('ArrowLeft'); await key('ArrowUp');
     const chN = await cg(1);
-    report('NT19', sameCh(chO, chC) && Math.abs(chC.x1 - chO.x1) > 5 && sameCh(chO, chN) && chN.x1 < chC.x1 && chN.y1 < chC.y1, `paste: rail slopes ${chO && chO.s1.toFixed(4)}/${chO && chO.s2.toFixed(4)} -> ${chC && chC.s1.toFixed(4)}/${chC && chC.s2.toFixed(4)}, length ${chO && chO.w.toFixed(1)} -> ${chC && chC.w.toFixed(1)}px, p3-p1 (${chO && chO.ox.toFixed(1)},${chO && chO.oy.toFixed(1)}) -> (${chC && chC.ox.toFixed(1)},${chC && chC.oy.toFixed(1)}), moved ${chC && (chC.x1 - chO.x1).toFixed(1)}px; after ←←↑ still identical shape (${sameCh(chO, chN)})`);
+    report('NT19', sameCh(chO, chC) && Math.abs(chC.x1 - chO.x1) < 0.5 && chC.y1 - chO.y1 > 5 && sameCh(chO, chN) && chN.x1 < chC.x1 && chN.y1 < chC.y1, `paste: rail slopes ${chO && chO.s1.toFixed(4)}/${chO && chO.s2.toFixed(4)} -> ${chC && chC.s1.toFixed(4)}/${chC && chC.s2.toFixed(4)}, length ${chO && chO.w.toFixed(1)} -> ${chC && chC.w.toFixed(1)}px, p3-p1 (${chO && chO.ox.toFixed(1)},${chO && chO.oy.toFixed(1)}) -> (${chC && chC.ox.toFixed(1)},${chC && chC.oy.toFixed(1)}), moved (${chC && (chC.x1 - chO.x1).toFixed(1)},${chC && (chC.y1 - chO.y1).toFixed(1)})px (time anchors kept, price only); after ←←↑ still identical shape (${sameCh(chO, chN)})`);
+
+    // NT20 arrow-nudging a multi-selection moves all or nothing: a channel reaching the last revealed bar + a trend line stay together
+    await reset();
+    const g20 = await page.evaluate(() => { const hi = Math.min(idx, bars.length - 1); return { tHi: bars[hi].time, tA: bars[hi - 40].time, tB: bars[hi - 20].time, tC: bars[hi - 60].time, pm: candle.coordinateToPrice(300) }; });
+    await seed([{ type: 'channel', p1: { t: g20.tA, p: g20.pm }, p2: { t: g20.tHi, p: g20.pm + 10 }, p3: { t: g20.tA, p: g20.pm - 10 }, color: '#000000' }, { type: 'tl', p1: { t: g20.tC, p: g20.pm }, p2: { t: g20.tB, p: g20.pm + 5 }, color: '#000000' }]);
+    await page.evaluate(() => { selectDrawing(drawings[0], false); selectDrawing(drawings[1], true); repaintOverlays(); });
+    const t20a = await page.evaluate(() => drawings.map(d => d.p1.t));
+    await key('ArrowRight'); const t20r = await page.evaluate(() => drawings.map(d => d.p1.t));
+    await key('ArrowLeft'); const t20l = await page.evaluate(() => drawings.map(d => d.p1.t));
+    report('NT20', JSON.stringify(t20r) === JSON.stringify(t20a) && t20l.every((t, i) => t < t20a[i]), `channel at the last revealed bar + trend line selected together: ArrowRight moved neither (${JSON.stringify(t20r) === JSON.stringify(t20a)}), ArrowLeft moved both (${t20l.map((t, i) => t < t20a[i]).join('/')})`);
 
     // NT18 no console errors / render errors across the whole NT block
     const drwNT = await page.evaluate(() => window.__drw);
@@ -992,7 +1006,7 @@ try {
   await browser.close();
 }
 
-const order = ['G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G16', 'G17', 'G18', 'G19', 'G20', 'G21', 'G22', 'G23', 'G24', 'G25', 'G26', 'G27', 'G28', 'G29', 'G30', 'G31', 'G32', 'G33', 'G34', 'G35', 'G36', 'G37', 'G38', 'G39', 'G40', 'G41', 'G42', 'G43', 'G44', 'G45', 'G46', 'G47', 'G48', 'NT1', 'NT2', 'NT3', 'NT4', 'NT5', 'NT6', 'NT7', 'NT8', 'NT9', 'NT10', 'NT11', 'NT12', 'NT13', 'NT14', 'NT15', 'NT16', 'NT17', 'NT18', 'NT19', 'REG1-no-render-err', 'REG2-trading-hotkeys', 'REG3-hide-trades-unchanged', 'REG4-no-drift-on-rewindow'];
+const order = ['G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G16', 'G17', 'G18', 'G19', 'G20', 'G21', 'G22', 'G23', 'G24', 'G25', 'G26', 'G27', 'G28', 'G29', 'G30', 'G31', 'G32', 'G33', 'G34', 'G35', 'G36', 'G37', 'G38', 'G39', 'G40', 'G41', 'G42', 'G43', 'G44', 'G45', 'G46', 'G47', 'G48', 'NT1', 'NT2', 'NT3', 'NT4', 'NT5', 'NT6', 'NT7', 'NT8', 'NT9', 'NT10', 'NT11', 'NT12', 'NT13', 'NT14', 'NT15', 'NT16', 'NT17', 'NT18', 'NT19', 'NT20', 'REG1-no-render-err', 'REG2-trading-hotkeys', 'REG3-hide-trades-unchanged', 'REG4-no-drift-on-rewindow'];
 const byId = Object.fromEntries(results.map(r => [r.id, r.status]));
 const pass = order.filter(id => byId[id] === 'PASS').length, fail = order.filter(id => byId[id] === 'FAIL').length, sk = order.filter(id => byId[id] === 'SKIP').length, missing = order.filter(id => !(id in byId));
 console.log(`\n${pass} PASS / ${fail} FAIL / ${sk} SKIP out of ${order.length}${missing.length ? ` (missing: ${missing.join(',')})` : ''}`);
