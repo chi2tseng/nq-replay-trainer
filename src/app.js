@@ -1741,11 +1741,11 @@ function pasteDrawing() {
   if (!clipboardDrawings || !clipboardDrawings.length) return;
   const hi = Math.min(idx, bars.length - 1); if (hi < 0) return;
   snapshot(); clearSelection();
-  for (const src of clipboardDrawings) {
-    const c = cloneDrawing(JSON.parse(JSON.stringify(src))), tf_ = drawingFields(c).filter(f => f.kind === 't');
-    let maxA = -Infinity; for (const f of tf_) { const l = timeToLogical(f.obj[f.key]); if (l != null) maxA = Math.max(maxA, l + seriesFrom); }
-    const shift = Math.max(0, Math.min(5, hi - maxA));   // +5 bars, less when that would cross idx
-    for (const f of tf_) { const l = timeToLogical(f.obj[f.key]); if (l == null) continue; const nt = logicalToTime(Math.min(hi, l + seriesFrom + shift) - seriesFrom); if (nt != null) f.obj[f.key] = nt; }
+  const copies = clipboardDrawings.map(src => cloneDrawing(JSON.parse(JSON.stringify(src))));
+  let maxA = -Infinity; for (const c of copies) for (const f of drawingFields(c)) if (f.kind === 't') { const l = timeToLogical(f.obj[f.key]); if (l != null) maxA = Math.max(maxA, l + seriesFrom); }
+  const room = hi - maxA, shift = room >= 1 ? Math.min(5, room) : -5;   // ONE shift for every anchor of every copy, so a pasted trend line stays parallel: +5 bars, fewer when that would pass the last revealed bar, 5 to the left when the copy already reaches it
+  for (const c of copies) {
+    for (const f of drawingFields(c)) if (f.kind === 't') { const l = timeToLogical(f.obj[f.key]); if (l == null) continue; const nt = logicalToTime(l + shift); if (nt != null) f.obj[f.key] = nt; }
     drawings.push(c); selSet.add(c); selDrawing = c;
   }
   saveJSON('rt_drawings', drawings); repaintOverlays(); toast('Pasted');
@@ -1753,13 +1753,13 @@ function pasteDrawing() {
 function nudgeSelection(key) {   // G23: arrow keys move the selection one bar (left / right) or one tick (up / down); locked drawings stay put
   const l = selectedList().filter(canDrag); if (!l.length) return;
   const hi = Math.min(idx, bars.length - 1); snapshot();
-  for (const d of l) for (const f of drawingFields(d)) {
-    if (f.kind === 'p') { if (key === 'ArrowUp') f.obj[f.key] += TICK; else if (key === 'ArrowDown') f.obj[f.key] -= TICK; }
-    else if (key === 'ArrowLeft' || key === 'ArrowRight') {
-      const l0 = timeToLogical(f.obj[f.key]); if (l0 == null) continue; const a = l0 + seriesFrom; let na = a + (key === 'ArrowRight' ? 1 : -1);
-      if (na < 0) na = 0; if (na > hi) na = Math.max(a, hi);   // never nudge onto unrevealed bars; a point already in future space stays where it is
-      const nt = logicalToTime(na - seriesFrom); if (nt != null) f.obj[f.key] = nt;
-    }
+  const step = key === 'ArrowRight' ? 1 : key === 'ArrowLeft' ? -1 : 0;
+  for (const d of l) {
+    const F = drawingFields(d);
+    if (!step) { for (const f of F) if (f.kind === 'p') f.obj[f.key] += key === 'ArrowUp' ? TICK : -TICK; continue; }
+    const T = F.filter(f => f.kind === 't').map(f => ({ f, l: timeToLogical(f.obj[f.key]) })).filter(o => o.l != null);
+    const ok = T.every(o => { const a = o.l + seriesFrom; return step > 0 ? (a + 1 <= hi || a > hi) : a - 1 >= 0; });   // the drawing moves as one piece (stays parallel) or not at all: never onto an unrevealed bar, never before the first bar
+    if (ok) for (const o of T) { const nt = logicalToTime(o.l + step); if (nt != null) o.f.obj[o.f.key] = nt; }
   }
   dropNoopSnapshot(); saveJSON('rt_drawings', drawings); repaintOverlays();
 }

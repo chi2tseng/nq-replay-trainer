@@ -460,20 +460,26 @@ try {
     await page.waitForTimeout(500);
   }
 
-  // ================= G24 Copy/paste, clamped to the last revealed bar =================
+  // ================= G24 Copy/paste keeps the shape (parallel copy), never lands past the last revealed bar =================
   await clear();
   {
-    const g = await page.evaluate(() => ({ idx, hiT: bars[Math.min(idx, bars.length - 1)].time }));
+    const g = await page.evaluate(() => ({ idx, hiT: bars[Math.min(idx, bars.length - 1)].time, futT: logicalToTime(Math.min(idx, bars.length - 1) + 3 - seriesFrom) }));
     const ts4 = await page.evaluate((k) => [bars[k].time, bars[k + 10].time], k);
     const pm = geo.pMid;
-    await seed([{ type: 'tl', p1: { t: ts4[0], p: pm }, p2: { t: ts4[1], p: pm + 4 }, color: '#000000' }, { type: 'hray', p1: { t: g.hiT, p: pm - 5 }, color: '#000000' }]);
+    const slope = (o) => (o.y2 - o.y1) / (o.x2 - o.x1);
+    await seed([{ type: 'tl', p1: { t: ts4[0], p: pm }, p2: { t: ts4[1], p: pm + 4 }, color: '#000000' }, { type: 'hray', p1: { t: g.hiT, p: pm - 5 }, color: '#000000' }, { type: 'tl', p1: { t: ts4[0], p: pm - 8 }, p2: { t: g.futT, p: pm + 2 }, color: '#000000' }]);
     await page.evaluate(() => window.__rt.setSel(0));
     await key('Control+c'); await key('Control+v');
-    const n1c = await n(); const c1 = await geomOf(2);
+    const n1c = await n(); const o1 = await geomOf(0), c1 = await geomOf(3);
     await page.evaluate(() => window.__rt.setSel(1));
     await key('Control+c'); await key('Control+v');
-    const n2c = await n(); const c2 = await geomOf(3);
-    report('G24', n1c === 3 && n2c === 4 && c1.t2 <= g.hiT && c1.t1 > ts4[0] && c2.t1 <= g.hiT, `paste tl shifted right but its 2nd point clamps at the last revealed bar (t2<=${g.hiT}); pasting an hray already ON the last bar cannot cross it either`);
+    const n2c = await n(); const c2 = await geomOf(4);
+    await page.evaluate(() => window.__rt.setSel(2));   // 2nd point in the future space right of the last bar (the old per-point clamp pulled it back and bent the copy)
+    await key('Control+c'); await key('Control+v');
+    const n3c = await n(); const o3 = await geomOf(2), c3 = await geomOf(5);
+    const par = (a, b) => Math.abs(slope(a) - slope(b)) <= Math.abs(slope(a)) * 0.01 + 1e-6 && Math.abs((b.x2 - b.x1) - (a.x2 - a.x1)) < 1;
+    report('G24', n1c === 4 && n2c === 5 && n3c === 6 && c1.t1 > ts4[0] && par(o1, c1) && c1.t2 <= g.hiT && c2.t1 <= g.hiT && par(o3, c3) && c3.t1 !== o3.t1,
+      `pasted tl is a parallel copy shifted right (slope ${slope(o1).toFixed(4)} vs ${slope(c1).toFixed(4)}); tl reaching into the future space pastes parallel too (${slope(o3).toFixed(4)} vs ${slope(c3).toFixed(4)}, width ${(o3.x2 - o3.x1).toFixed(1)} vs ${(c3.x2 - c3.x1).toFixed(1)}px); hray on the last bar never crosses it`);
   }
 
   // ================= G25 middle-click deletes the drawing under the cursor =================
