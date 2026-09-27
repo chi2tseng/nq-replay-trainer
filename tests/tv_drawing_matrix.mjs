@@ -910,6 +910,16 @@ try {
     const reInk = re && rA.concat(rB).every(([x]) => x > reLast) ? [share(await inkDiff(rA)), share(await inkDiff(rB))] : [0, 0];
     report('NT16', !!re && JSON.stringify(re.p1) === JSON.stringify(saved.p1) && JSON.stringify(re.p2) === JSON.stringify(saved.p2) && JSON.stringify(re.p3) === JSON.stringify(saved.p3) && reInk[0] >= 0.8 && reInk[1] >= 0.8, `after a page reload the channel is back from rt_drawings with identical p1/p2/p3 (${!!re && JSON.stringify(re.p3) === JSON.stringify(saved.p3)}) and still renders past the last bar (${reInk.map(v => v.toFixed(2)).join('/')})`);
 
+    // NT19 copy / paste / arrow-nudge of a channel whose trend end sits in the future space: the copy keeps both rail slopes, the length and the p3-p1 offset
+    const cg = (i) => page.evaluate((i) => { const d = drawings.filter(q => q.type === 'channel')[i]; if (!d) return null; const el = document.getElementById('chart'); const g = chanGeom(d, drawX, drawY, el.clientWidth, el.clientHeight); return { s1: (g.y2 - g.y1) / (g.x2 - g.x1), s2: (g.y4 - g.y3) / (g.x4 - g.x3), w: g.x2 - g.x1, ox: g.x3 - g.x1, oy: g.y3 - g.y1, x1: g.x1, y1: g.y1 }; }, i);
+    const sameCh = (a, b) => !!a && !!b && Math.abs(a.s1 - b.s1) < 1e-3 && Math.abs(a.s2 - b.s2) < 1e-3 && Math.abs(a.w - b.w) < 0.5 && Math.abs(a.ox - b.ox) < 0.5 && Math.abs(a.oy - b.oy) < 0.5;
+    await page.evaluate(() => window.__rt.setSel(0));
+    await key('Control+c'); await key('Control+v');
+    const chO = await cg(0), chC = await cg(1);
+    await key('ArrowLeft'); await key('ArrowLeft'); await key('ArrowUp');
+    const chN = await cg(1);
+    report('NT19', sameCh(chO, chC) && Math.abs(chC.x1 - chO.x1) > 5 && sameCh(chO, chN) && chN.x1 < chC.x1 && chN.y1 < chC.y1, `paste: rail slopes ${chO && chO.s1.toFixed(4)}/${chO && chO.s2.toFixed(4)} -> ${chC && chC.s1.toFixed(4)}/${chC && chC.s2.toFixed(4)}, length ${chO && chO.w.toFixed(1)} -> ${chC && chC.w.toFixed(1)}px, p3-p1 (${chO && chO.ox.toFixed(1)},${chO && chO.oy.toFixed(1)}) -> (${chC && chC.ox.toFixed(1)},${chC && chC.oy.toFixed(1)}), moved ${chC && (chC.x1 - chO.x1).toFixed(1)}px; after ←←↑ still identical shape (${sameCh(chO, chN)})`);
+
     // NT18 no console errors / render errors across the whole NT block
     const drwNT = await page.evaluate(() => window.__drw);
     report('NT18', errs.length === e0 && drwNT && drwNT.ok && !drwNT.err, `console errors during NT1-NT17: ${errs.length - e0}${errs.length > e0 ? ' (' + errs.slice(e0).join(' | ').slice(0, 300) + ')' : ''}; window.__drw=${JSON.stringify(drwNT)}`);
@@ -982,7 +992,7 @@ try {
   await browser.close();
 }
 
-const order = ['G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G16', 'G17', 'G18', 'G19', 'G20', 'G21', 'G22', 'G23', 'G24', 'G25', 'G26', 'G27', 'G28', 'G29', 'G30', 'G31', 'G32', 'G33', 'G34', 'G35', 'G36', 'G37', 'G38', 'G39', 'G40', 'G41', 'G42', 'G43', 'G44', 'G45', 'G46', 'G47', 'G48', 'NT1', 'NT2', 'NT3', 'NT4', 'NT5', 'NT6', 'NT7', 'NT8', 'NT9', 'NT10', 'NT11', 'NT12', 'NT13', 'NT14', 'NT15', 'NT16', 'NT17', 'NT18', 'REG1-no-render-err', 'REG2-trading-hotkeys', 'REG3-hide-trades-unchanged', 'REG4-no-drift-on-rewindow'];
+const order = ['G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G16', 'G17', 'G18', 'G19', 'G20', 'G21', 'G22', 'G23', 'G24', 'G25', 'G26', 'G27', 'G28', 'G29', 'G30', 'G31', 'G32', 'G33', 'G34', 'G35', 'G36', 'G37', 'G38', 'G39', 'G40', 'G41', 'G42', 'G43', 'G44', 'G45', 'G46', 'G47', 'G48', 'NT1', 'NT2', 'NT3', 'NT4', 'NT5', 'NT6', 'NT7', 'NT8', 'NT9', 'NT10', 'NT11', 'NT12', 'NT13', 'NT14', 'NT15', 'NT16', 'NT17', 'NT18', 'NT19', 'REG1-no-render-err', 'REG2-trading-hotkeys', 'REG3-hide-trades-unchanged', 'REG4-no-drift-on-rewindow'];
 const byId = Object.fromEntries(results.map(r => [r.id, r.status]));
 const pass = order.filter(id => byId[id] === 'PASS').length, fail = order.filter(id => byId[id] === 'FAIL').length, sk = order.filter(id => byId[id] === 'SKIP').length, missing = order.filter(id => !(id in byId));
 console.log(`\n${pass} PASS / ${fail} FAIL / ${sk} SKIP out of ${order.length}${missing.length ? ` (missing: ${missing.join(',')})` : ''}`);

@@ -1,0 +1,471 @@
+<title>2000t Blind Setup Test</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..24,400,0..1,0&display=block">
+<style>
+:root {
+  --bg: #eceef2; --surface: #ffffff; --ink: #151a21; --muted: #5d6675; --line: #d5d9e0; --grid: #eceff3; --chip: #f1f3f6;
+  --accent: #cf540e; --accent-ink: #ffffff; --accent-soft: rgba(207, 84, 14, .13);
+  --up: #14924a; --down: #d7302f; --up-soft: rgba(20, 146, 74, .12); --down-soft: rgba(215, 48, 47, .11);
+  --halo: #ffffff; --ema: #1d63b8;
+  --font: Inter, "Noto Sans TC", "Microsoft JhengHei", "PingFang TC", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0e1114; --surface: #161a1f; --ink: #e7eaef; --muted: #8b94a2; --line: #2a3139; --grid: #1c2127; --chip: #1f252c;
+    --accent: #f07c3a; --accent-ink: #1b0c03; --accent-soft: rgba(240, 124, 58, .16);
+    --up: #2fbf6a; --down: #f0525a; --up-soft: rgba(47, 191, 106, .13); --down-soft: rgba(240, 82, 90, .13);
+    --halo: #161a1f; --ema: #5ea3f2;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0e1114; --surface: #161a1f; --ink: #e7eaef; --muted: #8b94a2; --line: #2a3139; --grid: #1c2127; --chip: #1f252c;
+  --accent: #f07c3a; --accent-ink: #1b0c03; --accent-soft: rgba(240, 124, 58, .16);
+  --up: #2fbf6a; --down: #f0525a; --up-soft: rgba(47, 191, 106, .13); --down-soft: rgba(240, 82, 90, .13);
+  --halo: #161a1f; --ema: #5ea3f2;
+}
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--ink); font: 400 14px/1.45 var(--font); font-variant-numeric: tabular-nums; }
+.ms { font-family: "Material Symbols Outlined"; font-weight: 400; font-size: 20px; line-height: 1; font-feature-settings: "liga"; -webkit-font-smoothing: antialiased; user-select: none; }
+#app { box-sizing: border-box; max-width: 1280px; margin: 0 auto; padding-inline: 16px; padding-block: 12px 16px; height: 100%; display: grid; grid-template-rows: auto 1fr; gap: 12px; }
+#app.scroll { height: auto; min-height: 100%; }
+.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: 8px; }
+.brand .ms { color: var(--accent); }
+h1 { font-size: 18px; font-weight: 600; margin: 0; letter-spacing: -.01em; text-wrap: balance; }
+.prog { display: flex; align-items: center; gap: 10px; color: var(--muted); font-weight: 500; }
+.track { width: 180px; max-width: 40vw; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.track i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+#testView { display: grid; grid-template-rows: 1fr auto; gap: 12px; min-height: 0; }
+.chartCard { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; display: grid; grid-template-rows: auto 1fr; min-height: 0; overflow: hidden; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 12px; padding: 10px 12px 0; align-items: center; justify-content: space-between; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px; background: var(--chip); font-weight: 500; font-size: 13px; }
+.chip.long { background: var(--up-soft); color: var(--up); }
+.chip.short { background: var(--down-soft); color: var(--down); }
+.chip .ms { font-size: 16px; }
+.chip.dim { background: none; color: var(--muted); padding-inline: 2px; font-weight: 400; }
+.chart { position: relative; min-height: 280px; }
+.chart svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.actions { display: grid; grid-template-columns: auto 1fr 1fr; gap: 10px; }
+button { font: inherit; cursor: pointer; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 12px 18px; font-weight: 600; font-size: 15px; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:disabled { opacity: .45; cursor: default; }
+button.take { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+button.ghost { font-weight: 500; color: var(--muted); padding-inline: 14px; }
+kbd { font: 500 11px/1 var(--font); padding: 3px 5px; border-radius: 4px; border: 1px solid currentColor; opacity: .6; }
+.note { color: var(--muted); font-size: 12px; margin: 0; }
+/* results */
+#resultView { display: grid; gap: 16px; align-content: start; padding-bottom: 24px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 12px; }
+.panel h2 { font-size: 15px; font-weight: 600; margin: 0; }
+.verdict { font-size: 16px; line-height: 1.6; max-width: 70ch; margin: 0; }
+.verdict b { font-weight: 600; }
+.tbl-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; min-width: 520px; }
+th, td { text-align: right; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { font-weight: 500; color: var(--muted); font-size: 12px; }
+tr.take td:first-child { color: var(--accent); font-weight: 600; }
+.pos { color: var(--up); } .neg { color: var(--down); }
+.row { display: flex; gap: 10px; flex-wrap: wrap; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+.thumb { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.thumb svg { display: block; width: 100%; height: 96px; }
+.thumb p { margin: 0; padding: 6px 8px; font-size: 12px; display: flex; justify-content: space-between; gap: 6px; border-top: 1px solid var(--line); }
+.thumb.win p span:last-child { color: var(--up); font-weight: 600; }
+.thumb.loss p span:last-child { color: var(--down); font-weight: 600; }
+.sub { color: var(--muted); font-size: 13px; margin: 0; }
+/* svg */
+.c-up { fill: var(--up); stroke: var(--up); } .c-dn { fill: var(--down); stroke: var(--down); }
+.c-grid { stroke: var(--grid); stroke-width: 1; } .c-ax { fill: var(--muted); font: 500 11px var(--font); }
+.c-sig { fill: var(--accent-soft); } .c-brk { stroke: var(--muted); stroke-dasharray: 3 4; stroke-width: 1; }
+.c-entry { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 6 4; fill: none; }
+.c-stop { stroke: var(--down); stroke-width: 1.5; stroke-dasharray: 6 4; fill: none; }
+.c-tp { stroke: var(--up); stroke-width: 1.5; stroke-dasharray: 6 4; fill: none; }
+.c-lab { font: 600 11px var(--font); paint-order: stroke; stroke: var(--halo); stroke-width: 4px; stroke-linejoin: round; }
+.c-lab.e { fill: var(--accent); } .c-lab.s { fill: var(--down); } .c-lab.t { fill: var(--up); }
+.c-arrow { fill: var(--accent); }
+.c-ema { fill: none; stroke: var(--ema); stroke-width: 1.6; stroke-linejoin: round; }
+.c-tl { stroke: var(--ink); stroke-width: 1.6; stroke-linecap: round; fill: none; } .c-tl.on { stroke: var(--accent); }
+.c-h { fill: var(--surface); stroke: var(--accent); stroke-width: 1.5; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 1 1 auto; }
+.tools { display: flex; gap: 6px; align-items: center; }
+.tools button { padding: 5px 10px; font-size: 13px; font-weight: 500; border-radius: 8px; gap: 6px; }
+.tools button .ms { font-size: 18px; }
+.tools button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.chip .dot { width: 14px; height: 2px; border-radius: 1px; background: var(--ema); display: inline-block; }
+.chart { touch-action: none; }
+@media (max-width: 560px) {
+  .actions { grid-template-columns: 1fr 1fr; }
+  .actions .ghost { grid-column: 1 / -1; order: 3; padding-block: 8px; }
+  kbd { display: none; }
+  .track { width: 110px; }
+}
+@media (prefers-reduced-motion: reduce) { .track i { transition: none; } }
+</style>
+
+<main id="app">
+  <header class="top">
+    <div class="brand"><span class="ms" aria-hidden="true">visibility_off</span><h1>2000t 盲測</h1></div>
+    <div class="prog" aria-live="polite"><span id="progTxt"></span><div class="track"><i id="progBar"></i></div></div>
+  </header>
+
+  <section id="testView" aria-label="盲測">
+    <div class="chartCard">
+      <div class="meta"><div class="chips" id="meta"></div>
+        <div class="tools">
+          <button id="btnTL" type="button" aria-pressed="false" title="趨勢線:點兩下畫線(F2 / Alt+T),Ctrl 關磁吸,Esc 取消"><span class="ms" aria-hidden="true">show_chart</span>趨勢線 <kbd>F2</kbd></button>
+          <button id="btnClr" type="button" title="清除這張圖的趨勢線"><span class="ms" aria-hidden="true">delete_sweep</span>清除</button>
+        </div></div>
+      <div class="chart" id="chart" role="img" aria-label="Signal bar 與前 100 根 2000t K 棒"></div>
+    </div>
+    <div class="actions">
+      <button id="btnUndo" class="ghost" type="button"><span class="ms" aria-hidden="true">undo</span>上一張 <kbd>Z</kbd></button>
+      <button id="btnSkip" type="button"><span class="ms" aria-hidden="true">close</span>不值得 <kbd>S</kbd></button>
+      <button id="btnTake" class="take" type="button"><span class="ms" aria-hidden="true">check</span>值得 <kbd>T</kbd></button>
+    </div>
+  </section>
+
+  <section id="resultView" hidden>
+    <div class="panel">
+      <h2>結果</h2>
+      <p class="verdict" id="verdict"></p>
+      <div class="tbl-wrap"><table id="sumTbl"></table></div>
+      <p class="sub" id="sumNote"></p>
+    </div>
+    <div class="panel">
+      <h2>分月</h2>
+      <div class="tbl-wrap"><table id="monTbl"></table></div>
+    </div>
+    <div class="panel">
+      <h2 id="h-miss"></h2>
+      <div class="grid" id="gMiss"></div>
+    </div>
+    <div class="panel">
+      <h2 id="h-all"></h2>
+      <div class="grid" id="gAll"></div>
+    </div>
+    <div class="row">
+      <button id="btnCopy" type="button"><span class="ms" aria-hidden="true">content_copy</span>複製結果</button>
+      <button id="btnAgain" type="button"><span class="ms" aria-hidden="true">shuffle</span>重新洗牌再測一次</button>
+      <button id="btnReview" class="ghost" type="button"><span class="ms" aria-hidden="true">undo</span>回去改最後一張</button>
+    </div>
+    <p class="note" id="copyNote"></p>
+  </section>
+  <p class="note" id="syncNote"></p>
+</main>
+
+<script>
+const CH = __CHARTS__;
+const META = __META__;
+const OUT_B64 = "__OUTCOMES_B64__";
+const byK = Object.fromEntries(CH.map(c => [c.k, c]));
+let OUT = null;
+const out = () => OUT || (OUT = JSON.parse(atob(OUT_B64)));   // outcomes stay encoded until the results screen
+
+// ---------- state ----------
+const LS = 'blind2000_run';
+let run = null, db = null, writing = Promise.resolve(), dbOk = false;
+function shuffle(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+function newRun() { return { id: 'r' + Date.now().toString(36), started: new Date().toISOString(), order: shuffle(CH.map(c => c.k)), picks: {}, done: false, finished: null, n: CH.length, files: META.files }; }
+function lsGet() { try { return JSON.parse(localStorage.getItem(LS) || 'null'); } catch (e) { return null; } }
+function lsSet() { try { localStorage.setItem(LS, JSON.stringify(run)); } catch (e) {} }
+function validRun(r) { return r && Array.isArray(r.order) && r.order.length === CH.length && r.order.every(k => byK[k]) && r.picks && typeof r.picks === 'object'; }
+function persist() {
+  lsSet();
+  if (!db) return;
+  const snap = JSON.parse(JSON.stringify(run));
+  writing = writing.then(() => db.doc('runs/' + snap.id).set(snap)).then(() => { dbOk = true; syncNote(); }).catch(e => { dbOk = false; syncNote(e && e.code); });
+}
+function syncNote(err) {
+  const el = document.getElementById('syncNote');
+  el.textContent = !db ? '選擇只存在這個瀏覽器。' : err ? '雲端儲存失敗(' + err + '),選擇先存在這個瀏覽器。' : dbOk ? '選擇已同步,換裝置打開會接著做。' : '';
+}
+const pos = () => run.order.findIndex(k => !run.picks[k]);
+
+// ---------- chart ----------
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, parent) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+function niceStep(rangePts, target) { const raw = rangePts / target; for (const s of [1, 2, 2.5, 5, 10, 20, 25, 50, 100, 200, 250, 500]) if (s >= raw) return s; return 1000; }
+let clipSeq = 0;
+function drawChart(host, c, thumb) {
+  host.textContent = '';
+  const W = Math.max(120, host.clientWidth), H = Math.max(80, host.clientHeight || 96);
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none' }, host);
+  const nAll = c.bars.length, bars = thumb ? c.bars.slice(-50) : c.bars, n = bars.length, off = nAll - n, ema = (c.ema || []).slice(off);
+  const long = c.side === 'long', stop = long ? -c.stop : c.stop, tp = long ? META.stdTp : -META.stdTp;
+  let lo = Math.min(stop, tp, 0), hi = Math.max(stop, tp, 0);
+  for (const b of bars) { lo = Math.min(lo, b[2]); hi = Math.max(hi, b[1]); }
+  for (const v of ema) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  const padY = (hi - lo) * 0.06 || 4; lo -= padY; hi += padY;
+  const L = thumb ? 2 : 6, R = thumb ? 2 : 52, T = thumb ? 4 : 12, B = thumb ? 4 : 24;
+  const pw = W - L - R, ph = H - T - B, slots = n + (thumb ? 4 : 16), sw = pw / slots;
+  const x = i => L + (i + 0.5) * sw, y = v => T + (hi - v) / (hi - lo) * ph;
+  if (!thumb) {   // horizontal grid, labelled in points from the entry price (no absolute level)
+    const step = niceStep((hi - lo) / 4, 5) * 4;   // ticks
+    for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
+      el('line', { x1: L, x2: L + pw, y1: y(v), y2: y(v), class: 'c-grid' }, svg);
+      const t = el('text', { x: W - 4, y: y(v) + 4, 'text-anchor': 'end', class: 'c-ax' }, svg); t.textContent = (v > 0 ? '+' : '') + (v / 4) + (v === 0 ? ' pt' : '');
+    }
+  }
+  const si = n - 1;
+  el('rect', { x: x(si) - sw / 2, y: T, width: sw, height: ph, class: 'c-sig' }, svg);
+  const brk = c.brk == null ? null : c.brk - off;
+  if (brk != null && brk > 0 && brk < n) {
+    el('line', { x1: x(brk) - sw / 2, x2: x(brk) - sw / 2, y1: T, y2: T + ph, class: 'c-brk' }, svg);
+    if (!thumb) { const t = el('text', { x: x(brk) - sw / 2 + 4, y: T + 10, class: 'c-ax' }, svg); t.textContent = '新交易日 18:00'; }
+  }
+  const bw = Math.max(1, sw * 0.62);
+  bars.forEach((b, i) => {
+    const up = b[3] >= b[0], cls = up ? 'c-up' : 'c-dn', cx = x(i);
+    el('line', { x1: cx, x2: cx, y1: y(b[1]), y2: y(b[2]), class: cls, 'stroke-width': Math.max(1, Math.min(1.5, sw * 0.18)) }, svg);
+    const top = y(Math.max(b[0], b[3])), h = Math.max(1, Math.abs(y(b[0]) - y(b[3])));
+    el('rect', { x: cx - bw / 2, y: top, width: bw, height: h, class: cls, 'stroke-width': 0 }, svg);
+  });
+  if (ema.length) el('path', { d: ema.map((v, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(v).toFixed(1)).join(''), class: 'c-ema' }, svg);
+  const x0 = x(si) + sw / 2, x1 = L + pw;
+  el('line', { x1: x0, x2: x1, y1: y(0), y2: y(0), class: 'c-entry' }, svg);
+  el('line', { x1: x0, x2: x1, y1: y(stop), y2: y(stop), class: 'c-stop' }, svg);
+  el('line', { x1: x0, x2: x1, y1: y(tp), y2: y(tp), class: 'c-tp' }, svg);
+  const sb = bars[si], ay = long ? y(sb[2]) + 6 : y(sb[1]) - 6, ah = thumb ? 5 : 8;   // direction arrow at the signal bar
+  el('path', { d: long ? `M${x(si)} ${ay} l${-ah * 0.8} ${ah * 1.4} h${ah * 1.6} z` : `M${x(si)} ${ay} l${-ah * 0.8} ${-ah * 1.4} h${ah * 1.6} z`, class: 'c-arrow' }, svg);
+  const cid = 'clip' + (++clipSeq);
+  el('rect', { x: L, y: T, width: pw, height: ph }, el('clipPath', { id: cid }, el('defs', {}, svg)));
+  const g = el('g', { 'clip-path': `url(#${cid})` }, svg);   // user trend lines live here and redraw on their own
+  host._ctx = { k: c.k, thumb, g, off, n, bars, x: i => x(i - off), y, ix: px => (px - L) / sw - 0.5 + off, iy: py => hi - (py - T) / ph * (hi - lo) };
+  drawLines(host);
+  if (thumb) return;
+  const labs = [[0, '進場', 'e'], [stop, `停損 ${c.stop}t`, 's'], [tp, `TP ${META.stdTp}t`, 't']].map(([v, txt, k]) => ({ txt, k, y: y(v) + 4 })).sort((a, b) => a.y - b.y);
+  for (let i = 1; i < labs.length; i++) if (labs[i].y - labs[i - 1].y < 14) labs[i].y = labs[i - 1].y + 14;   // stack instead of overlapping when the lines are close
+  const over = labs[labs.length - 1].y - (T + ph); if (over > 0) labs.forEach(l => { l.y -= over; });
+  for (const l of labs) { const t = el('text', { x: x1 - 4, y: l.y, 'text-anchor': 'end', class: 'c-lab ' + l.k }, svg); t.textContent = l.txt; }
+  const every = Math.max(1, Math.ceil(n / Math.max(2, pw / 64)));
+  for (let i = n - 1; i >= 0; i -= every) {   // anchor time labels on the signal bar so its time is always printed
+    const t = el('text', { x: x(i), y: H - 7, 'text-anchor': 'middle', class: 'c-ax' }, svg); t.textContent = c.tod[off + i];
+  }
+}
+
+// ---------- trend lines: stored per card as [i1, v1, i2, v2] = bar index in the 101-bar window, ticks from entry ----------
+let tool = '', draft = null, sel = -1, drag = null;
+const linesOf = k => (run.lines && run.lines[k]) || [];
+function drawLines(host) {
+  const X = host._ctx; if (!X) return; X.g.textContent = '';
+  const segs = linesOf(X.k).map((l, idx) => ({ l, idx }));
+  if (!X.thumb && draft && draft.k === X.k) segs.push({ l: [...draft.a, ...draft.b], idx: -1 });
+  for (const { l, idx } of segs) {
+    const xa = X.x(l[0]), ya = X.y(l[1]), xb = X.x(l[2]), yb = X.y(l[3]), on = !X.thumb && (idx === sel || idx === -1);
+    el('line', { x1: xa, y1: ya, x2: xb, y2: yb, class: 'c-tl' + (on ? ' on' : '') }, X.g);
+    if (on) for (const [hx, hy] of [[xa, ya], [xb, yb]]) el('circle', { cx: hx, cy: hy, r: 4.5, class: 'c-h' }, X.g);
+  }
+}
+const chartEl = () => document.getElementById('chart');
+function localPt(e) { const r = chartEl().getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+function snap(px, py, free) {   // weak magnet like TradingView: O/H/L/C of the bar under the pointer within 10 px; Ctrl / Cmd = free
+  const X = chartEl()._ctx; let i = X.ix(px), v = X.iy(py);
+  const bi = Math.round(i);
+  if (!free && bi >= 0 && bi < X.bars.length + X.off && bi - X.off >= 0) {
+    let best = null; for (const pv of X.bars[bi - X.off]) { const d = Math.abs(X.y(pv) - py); if (d <= 10 && (!best || d < best.d)) best = { d, pv }; }
+    if (best) { i = bi; v = best.pv; }
+  }
+  return [+i.toFixed(3), +v.toFixed(2)];
+}
+function segDist(px, py, ax, ay, bx, by) { const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy; let t = L2 ? ((px - ax) * dx + (py - ay) * dy) / L2 : 0; t = Math.max(0, Math.min(1, t)); return Math.hypot(px - ax - t * dx, py - ay - t * dy); }
+function hitLine(px, py) {
+  const X = chartEl()._ctx, ls = linesOf(X.k);
+  const order = sel >= 0 && sel < ls.length ? [sel, ...ls.keys()] : [...ls.keys()];
+  for (const idx of order) { const l = ls[idx]; for (const w of [0, 1]) if (Math.hypot(X.x(l[w * 2]) - px, X.y(l[w * 2 + 1]) - py) <= 8) return { idx, end: w }; }
+  for (const idx of order) { const l = ls[idx]; if (segDist(px, py, X.x(l[0]), X.y(l[1]), X.x(l[2]), X.y(l[3])) <= 6) return { idx, end: -1 }; }
+  return null;
+}
+function setTool(t) {
+  tool = t; draft = null; const b = document.getElementById('btnTL');
+  if (b) { b.classList.toggle('on', tool === 'tl'); b.setAttribute('aria-pressed', String(tool === 'tl')); }
+  chartEl().style.cursor = tool ? 'crosshair' : ''; if (chartEl()._ctx) drawLines(chartEl());
+}
+function finishDraft() {
+  const X = chartEl()._ctx, d = draft;
+  if (Math.hypot(X.x(d.a[0]) - X.x(d.b[0]), X.y(d.a[1]) - X.y(d.b[1])) > 4) {
+    if (!run.lines) run.lines = {};
+    (run.lines[X.k] = run.lines[X.k] || []).push([...d.a, ...d.b]); sel = run.lines[X.k].length - 1; persist();
+  }
+  setTool('');
+}
+function deleteSel() { const X = chartEl()._ctx; if (!X) return false; const ls = linesOf(X.k); if (sel < 0 || sel >= ls.length) return false; ls.splice(sel, 1); sel = -1; persist(); drawLines(chartEl()); return true; }
+function clearLines() { const X = chartEl()._ctx; if (!X || !linesOf(X.k).length) return; run.lines[X.k] = []; sel = -1; persist(); drawLines(chartEl()); }
+chartEl().addEventListener('pointerdown', e => {
+  const X = chartEl()._ctx; if (e.button !== 0 || !X) return;
+  const [px, py] = localPt(e), free = e.ctrlKey || e.metaKey;
+  chartEl().setPointerCapture(e.pointerId);
+  if (tool === 'tl') {
+    const p = snap(px, py, free);
+    if (!draft) draft = { k: X.k, a: p, b: p, down: [px, py] };
+    else { draft.b = p; finishDraft(); }
+    drawLines(chartEl()); return;
+  }
+  const h = hitLine(px, py);
+  sel = h ? h.idx : -1;
+  if (h) drag = { idx: h.idx, end: h.end, start: [X.ix(px), X.iy(py)], orig: linesOf(X.k)[h.idx].slice(), moved: false };
+  drawLines(chartEl());
+});
+chartEl().addEventListener('pointermove', e => {
+  const X = chartEl()._ctx; if (!X) return;
+  const [px, py] = localPt(e), free = e.ctrlKey || e.metaKey;
+  if (draft) { draft.b = snap(px, py, free); drawLines(chartEl()); return; }
+  if (drag) {
+    const l = linesOf(X.k)[drag.idx]; if (!l) return;
+    if (drag.end >= 0) { const p = snap(px, py, free); l[drag.end * 2] = p[0]; l[drag.end * 2 + 1] = p[1]; }
+    else { const di = X.ix(px) - drag.start[0], dv = X.iy(py) - drag.start[1]; l[0] = +(drag.orig[0] + di).toFixed(3); l[1] = +(drag.orig[1] + dv).toFixed(2); l[2] = +(drag.orig[2] + di).toFixed(3); l[3] = +(drag.orig[3] + dv).toFixed(2); }
+    drag.moved = true; drawLines(chartEl()); return;
+  }
+  if (!tool) chartEl().style.cursor = hitLine(px, py) ? 'pointer' : '';
+});
+chartEl().addEventListener('pointerup', e => {
+  if (draft && draft.down) {   // press-drag-release draws too; a plain click waits for the second click
+    const [px, py] = localPt(e);
+    if (Math.hypot(px - draft.down[0], py - draft.down[1]) > 6) { draft.b = snap(px, py, e.ctrlKey || e.metaKey); finishDraft(); } else draft.down = null;
+    return;
+  }
+  if (drag) { if (drag.moved) persist(); drag = null; }
+});
+chartEl().addEventListener('contextmenu', e => { if (tool || draft) { e.preventDefault(); setTool(''); } });
+
+// ---------- test view ----------
+const $ = id => document.getElementById(id);
+function renderTest() {
+  const p = pos(), total = run.order.length, doneN = Object.keys(run.picks).length;
+  $('progTxt').textContent = `${Math.min(doneN + 1, total)} / ${total}`;
+  $('progBar').style.width = (doneN / total * 100) + '%';
+  $('btnUndo').disabled = doneN === 0;
+  if (p < 0) return showResults();
+  const c = byK[run.order[p]], long = c.side === 'long';
+  if (!chartEl()._ctx || chartEl()._ctx.k !== c.k) { sel = -1; drag = null; if (tool || draft) setTool(''); }
+  $('meta').innerHTML = `<span class="chip ${long ? 'long' : 'short'}"><span class="ms" aria-hidden="true">${long ? 'arrow_upward' : 'arrow_downward'}</span>${long ? 'Long' : 'Short'}</span>` +
+    `<span class="chip">停損 ${c.stop}t · ${(c.stop / 4).toFixed(2).replace(/\.?0+$/, '')} pt</span>` +
+    `<span class="chip">Signal bar ${c.sigTime} ET</span>` +
+    `<span class="chip"><span class="dot" aria-hidden="true"></span>EMA 21</span>` +
+    `<span class="chip dim">圖停在 signal bar 收盤</span>`;
+  drawChart($('chart'), c, false);
+}
+function pick(v) {
+  const p = pos(); if (p < 0) return;
+  run.picks[run.order[p]] = v;
+  if (pos() < 0) { run.done = true; run.finished = new Date().toISOString(); }
+  persist(); renderTest();
+}
+function undo() {
+  let i = pos(); if (i < 0) i = run.order.length;
+  if (i === 0) return;
+  delete run.picks[run.order[i - 1]]; run.done = false; run.finished = null;
+  persist(); showTest();
+}
+function showTest() { $('resultView').hidden = true; $('testView').hidden = false; $('app').classList.remove('scroll'); renderTest(); }
+
+// ---------- results ----------
+function lf(n) { let s = 0; for (let i = 2; i <= n; i++) s += Math.log(i); return s; }
+function fisherGreater(a, b, c, d) {   // one-sided: P(take wins >= a) with fixed margins
+  const r1 = a + b, r2 = c + d, c1 = a + c, N = r1 + r2, base = lf(r1) + lf(r2) + lf(c1) + lf(N - c1) - lf(N);
+  let p = 0; for (let x = a; x <= Math.min(r1, c1); x++) { const y = r1 - x, z = c1 - x, w = r2 - z; if (w < 0) continue; p += Math.exp(base - lf(x) - lf(y) - lf(z) - lf(w)); }
+  return Math.min(1, p);
+}
+function stats(ks) {
+  const O = out(), n = ks.length;
+  const wa = ks.filter(k => O[k].act.win).length, ws = ks.filter(k => O[k].std.win).length;
+  const na = ks.reduce((s, k) => s + O[k].act.ticks, 0) * 5, ns = ks.reduce((s, k) => s + O[k].std.ticks, 0) * 5;
+  return { n, wa, ws, ra: n ? wa / n * 100 : NaN, rs: n ? ws / n * 100 : NaN, na, ns };
+}
+const pct = v => isNaN(v) ? '–' : v.toFixed(1) + '%';
+const usd = v => (v < 0 ? '−$' : '+$') + Math.abs(Math.round(v)).toLocaleString('en-US');
+const cls = v => v > 0 ? 'pos' : v < 0 ? 'neg' : '';
+function showResults() {
+  $('testView').hidden = true; $('resultView').hidden = false; $('app').classList.add('scroll');
+  $('progTxt').textContent = `${run.order.length} / ${run.order.length}`; $('progBar').style.width = '100%';
+  const O = out(), all = run.order, take = all.filter(k => run.picks[k] === 'take'), skip = all.filter(k => run.picks[k] === 'skip');
+  const A = stats(all), Tk = stats(take), Sk = stats(skip);
+  const row = (name, s, c) => `<tr class="${c}"><td>${name}</td><td>${s.n}</td><td>${pct(s.ra)}</td><td class="${cls(s.na)}">${usd(s.na)}</td><td>${pct(s.rs)}</td><td class="${cls(s.ns)}">${usd(s.ns)}</td></tr>`;
+  $('sumTbl').innerHTML = `<thead><tr><th></th><th>筆數</th><th>勝率(實際)</th><th>損益(實際)</th><th>勝率(50t 停利)</th><th>損益(50t 停利)</th></tr></thead><tbody>` +
+    row('值得', Tk, 'take') + row('不值得', Sk, '') + row('全部(基準)', A, '') + '</tbody>';
+  $('sumNote').textContent = `損益 = 1 口 NQ、未扣手續費。「實際」= 你當時的停利與出場;「50t 停利」= 同一個進場與停損,停利統一 50 tick(playbook 設定)。p 值 = Fisher 單尾檢定,問的是「值得組勝率比不值得組高」是不是運氣。`;
+  let v;
+  if (!Tk.n || !Sk.n) v = `你把 ${all.length} 張全部選成「${Tk.n ? '值得' : '不值得'}」,沒有另一組可以比,判不出篩選有沒有用。`;
+  else {
+    const lift = Tk.ra - A.ra, p = fisherGreater(Tk.wa, Tk.n - Tk.wa, Sk.wa, Sk.n - Sk.wa), ps = fisherGreater(Tk.ws, Tk.n - Tk.ws, Sk.ws, Sk.n - Sk.ws);
+    const judge = lift <= 0 ? '<b>篩選沒有提高勝率</b>,照單全做反而比較好。' : p < 0.05 ? `<b>差距大到不太像運氣</b>(p = ${p.toFixed(3)}),你的判斷有加分。` : `<b>差距可能只是運氣</b>(p = ${p.toFixed(2)}),${all.length} 筆樣本太少,要更多筆才判得出來。`;
+    v = `值得組 ${Tk.n} 筆勝率 <b>${pct(Tk.ra)}</b>,全部做是 ${pct(A.ra)}(${lift >= 0 ? '+' : ''}${lift.toFixed(1)} 個百分點);不值得組 ${Sk.n} 筆勝率 ${pct(Sk.ra)}。${judge} 換成 50t 停利:值得組 ${pct(Tk.rs)} vs 全部 ${pct(A.rs)}(p = ${ps.toFixed(2)})。只做值得組的損益 ${usd(Tk.na)},全部做 ${usd(A.na)}。`;
+  }
+  $('verdict').innerHTML = v;
+  const months = [...new Set(all.map(k => O[k].month))].sort();
+  $('monTbl').innerHTML = `<thead><tr><th>月份</th><th>值得 筆數</th><th>值得 勝率</th><th>不值得 筆數</th><th>不值得 勝率</th><th>全部 勝率</th></tr></thead><tbody>` +
+    months.map(m => { const f = ks => ks.filter(k => O[k].month === m), t = stats(f(take)), s = stats(f(skip)), a = stats(f(all));
+      return `<tr><td>${m.slice(5)} 月</td><td>${t.n}</td><td>${pct(t.ra)}</td><td>${s.n}</td><td>${pct(s.ra)}</td><td>${pct(a.ra)}</td></tr>`; }).join('') + '</tbody>';
+  const miss = [...skip.filter(k => O[k].act.win), ...take.filter(k => !O[k].act.win)];
+  $('h-miss').textContent = `判斷跟結果相反的 ${miss.length} 張(跳過的贏單 ${skip.filter(k => O[k].act.win).length}、做了的輸單 ${take.filter(k => !O[k].act.win).length})`;
+  thumbs($('gMiss'), miss);
+  $('h-all').textContent = `全部 ${all.length} 張(先值得、後不值得)`;
+  thumbs($('gAll'), [...take, ...skip]);
+}
+function thumbs(host, ks) {
+  const O = out(); host.textContent = '';
+  if (!ks.length) { host.innerHTML = '<p class="sub">沒有。</p>'; return; }
+  for (const k of ks) {
+    const c = byK[k], o = O[k], d = document.createElement('div');
+    d.className = 'thumb ' + (o.act.win ? 'win' : 'loss');
+    const box = document.createElement('div'); box.style.height = '96px'; box.style.position = 'relative'; d.appendChild(box);
+    const p = document.createElement('p');
+    p.innerHTML = `<span>${o.date.slice(5).replace('-', '/')} ${c.sigTime} ${c.side === 'long' ? 'L' : 'S'} · ${run.picks[k] === 'take' ? '值得' : '不值得'}</span><span>${o.act.win ? '贏' : '輸'} ${o.act.ticks > 0 ? '+' : ''}${o.act.ticks}t</span>`;
+    d.appendChild(p); host.appendChild(d);
+    requestAnimationFrame(() => drawChart(box, c, true));
+  }
+}
+function summaryText() {
+  const O = out(), all = run.order, take = all.filter(k => run.picks[k] === 'take'), skip = all.filter(k => run.picks[k] === 'skip');
+  const A = stats(all), Tk = stats(take), Sk = stats(skip);
+  return `2000t 盲測 ${run.finished || ''}\n值得 ${Tk.n} 筆 勝率 ${pct(Tk.ra)} ${usd(Tk.na)} | 50t ${pct(Tk.rs)}\n不值得 ${Sk.n} 筆 勝率 ${pct(Sk.ra)} ${usd(Sk.na)} | 50t ${pct(Sk.rs)}\n全部 ${A.n} 筆 勝率 ${pct(A.ra)} ${usd(A.na)} | 50t ${pct(A.rs)}\npicks ${all.map(k => O[k].date.slice(5) + ' ' + byK[k].sigTime + '=' + (run.picks[k] === 'take' ? 'T' : 'S')).join(', ')}`;
+}
+
+// ---------- wiring ----------
+$('btnTake').onclick = () => pick('take');
+$('btnSkip').onclick = () => pick('skip');
+$('btnUndo').onclick = undo;
+$('btnTL').onclick = () => setTool(tool === 'tl' ? '' : 'tl');
+$('btnClr').onclick = clearLines;
+$('btnReview').onclick = undo;
+$('btnAgain').onclick = () => { run = newRun(); persist(); showTest(); };
+$('btnCopy').onclick = () => {
+  const txt = summaryText(), note = $('copyNote');
+  navigator.clipboard.writeText(txt).then(() => { note.textContent = '已複製。'; }).catch(() => { note.textContent = txt; });
+};
+document.addEventListener('keydown', e => {
+  if (!$('resultView').hidden) return;
+  const k = e.key.toLowerCase();
+  if (e.key === 'F2' || (e.altKey && k === 't')) { e.preventDefault(); setTool(tool === 'tl' ? '' : 'tl'); return; }
+  if (e.key === 'Escape') { if (tool || draft) setTool(''); else if (sel >= 0) { sel = -1; drawLines(chartEl()); } return; }
+  if (e.key === 'Delete') { if (deleteSel()) e.preventDefault(); return; }
+  if (e.key === 'Backspace' && deleteSel()) { e.preventDefault(); return; }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (k === 't') { e.preventDefault(); pick('take'); }
+  else if (k === 's') { e.preventDefault(); pick('skip'); }
+  else if (k === 'z' || k === 'backspace') { e.preventDefault(); undo(); }
+});
+new ResizeObserver(() => { if (!$('testView').hidden && pos() >= 0) drawChart($('chart'), byK[run.order[pos()]], false); }).observe($('chart'));
+
+run = validRun(lsGet()) ? lsGet() : newRun();
+showTest(); syncNote();
+(async () => {   // cloud copy of the run: resume on any device, and Claude can read the picks back
+  try {
+    const d = window.claude && window.claude.use ? await window.claude.use('db') : null;
+    if (!d) { syncNote(); return; }
+    db = d;
+    const q = await db.collection('runs').orderBy('started', 'desc').limit(1).get();
+    const remote = q.docs.length ? q.docs[0].data() : null;
+    if (validRun(remote) && (remote.id !== run.id ? Object.keys(remote.picks).length >= Object.keys(run.picks).length : Object.keys(remote.picks).length > Object.keys(run.picks).length)) {
+      run = JSON.parse(JSON.stringify(remote)); lsSet(); dbOk = true;
+      if (run.done) showResults(); else showTest();
+    } else if (Object.keys(run.picks).length) persist();
+    dbOk = dbOk || !!remote; syncNote();
+  } catch (e) { syncNote(e && e.code || 'error'); }
+})();
+</script>
