@@ -528,9 +528,11 @@ try {
     const mkOff = await page.evaluate(() => candle.markers().length);
     await dragChart(geo.W * 0.5, geo.H * 0.85, geo.W * 0.5 - 120, geo.H * 0.85);
     await page.waitForTimeout(300);
-    const inkPan = await page.evaluate((y) => window.__rowInk('chart', Math.round(y) + 0.75, 40, 600), y);
+    const yPan = await page.evaluate((p) => drawY(p), pm);   // the pan can re-autoscale the price axis: measure the hl's row where it is NOW
+    const inkPan = await page.evaluate((y) => window.__rowInk('chart', Math.round(y) + 0.75, 40, 600), yPan);
     await key('Control+Alt+h'); await paint();
-    const inkBack = await page.evaluate((y) => window.__rowInk('chart', Math.round(y) + 0.75, 40, 600), y);
+    const yBack = await page.evaluate((p) => drawY(p), pm);
+    const inkBack = await page.evaluate((y) => window.__rowInk('chart', Math.round(y) + 0.75, 40, 600), yBack);
     const mkBack = await page.evaluate(() => candle.markers().length);
     report('G33', inkOn > 150 && mkOn === 1 && inkOff < 40 && mkOff === 0 && inkPan < 40 && inkBack > 150 && mkBack === 1, `hl row ink before=${inkOn} after Ctrl+Alt+H=${inkOff} after a pan=${inkPan} (guard lives inside the primitive's draw callback, not repaintOverlays, so it survives LWC's own repaints) after unhide=${inkBack}; markers ${mkOn}->${mkOff}->${mkBack}`);
     await page.evaluate(() => { annotations.length = 0; saveJSON('rt_annotations', annotations); refreshMarkers(true); });

@@ -641,6 +641,34 @@ const ripsterPrimitive = {
 if (candle.attachPrimitive) candle.attachPrimitive(ripsterPrimitive);
 function ripsterRepaint() { if (ripsterPrimitive._req) ripsterPrimitive._req(); }
 
+// ---- pre-market / after-hours shading: light blue behind every bar that starts outside the NY cash session 09:30–16:00 ET ----
+const ETH_FILL = 'rgba(66, 153, 225, 0.10)';
+const ethPrimitive = {
+  attached(p) { this._req = p.requestUpdate; },
+  updateAllViews() {},
+  paneViews: () => [{
+    zOrder: () => 'bottom',
+    renderer: () => ({ draw: (target) => {
+      if (!bars.length) return;
+      try {
+        target.useMediaCoordinateSpace((scope) => {
+          const ctx = scope.context, ts = chart.timeScale(), range = ts.getVisibleLogicalRange(); if (!range) return;
+          const from = Math.max(0, seriesFrom + Math.floor(range.from)), to = Math.min(idx, bars.length - 1, seriesFrom + Math.ceil(range.to));   // revealed bars only
+          const sp = ts.options().barSpacing, H = scope.mediaSize.height;
+          const fill = (a, b) => { const xa = ts.logicalToCoordinate(a - seriesFrom), xb = ts.logicalToCoordinate(b - seriesFrom); if (xa != null && xb != null) ctx.fillRect(xa - sp / 2, 0, xb - xa + sp, H); };
+          ctx.fillStyle = ETH_FILL; let run = null;
+          for (let i = from; i <= to; i++) {
+            const m = etMinutes(bars[i].time), eth = m < 570 || m >= 960;
+            if (eth && run == null) run = i; else if (!eth && run != null) { fill(run, i - 1); run = null; }
+          }
+          if (run != null) fill(run, to);
+        });
+      } catch (e) { window.__eth = { err: String(e) }; }
+    } })
+  }],
+};
+if (candle.attachPrimitive) candle.attachPrimitive(ethPrimitive);
+
 // ===================================================================
 //  OSCILLATOR SUB-PANE  — RSI(14) / MACD(12,26,9) in a 2nd LWC chart
 //  Lightweight Charts v4.2.3 has no native multi-pane, so we create a
@@ -2311,6 +2339,7 @@ function setChartType(type) {
   //    reassignment above they already point at the new series; we just need to
   //    bind them to the new series object and force a repaint.
   if (candle.attachPrimitive) {
+    candle.attachPrimitive(ethPrimitive);
     candle.attachPrimitive(vpPrimitive);
     candle.attachPrimitive(ripsterPrimitive);
     candle.attachPrimitive(indicatorPrimitive);
