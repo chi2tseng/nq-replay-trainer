@@ -107,6 +107,28 @@ let orders = [];             // working: {type:'stop'|'target', price, qty, tick
 let entryOrder = null;       // pending entry: {side, kind:'limit'|'stop', price, atm, mult}
 let trades = loadJSON('rt_trades', []);
 (() => { const bk = loadJSON('rt_trades_prerandom', null); if (bk) { trades = bk; saveJSON('rt_trades', trades); localStorage.removeItem('rt_trades_prerandom'); } })();   // recover real trades if a random-mode session was interrupted mid-round
+function fixTargetFills(list) {   // 2026-08-25..10-04 target exits crossed the spread (sold at the bid): re-book each at its own target price. Returns how many changed.
+  const TV = { NQ: 5, ES: 12.5, MNQ: 0.5, MES: 1.25 }; let n = 0;
+  for (const t of list || []) {
+    if (t.exitType !== 'target' || !Array.isArray(t.tps) || !t.tps.length || t.exit == null) continue;
+    const long = t.side === 'long', px = t.tps.map(p => p.price).filter(p => p != null);
+    const tp = long ? Math.min(...px.filter(p => p >= t.exit - 1e-9)) : Math.max(...px.filter(p => p <= t.exit + 1e-9));   // the target this exit belongs to: crossing only ever made the fill worse
+    if (!isFinite(tp) || Math.abs(tp - t.exit) < 1e-9) continue;
+    const tv = TV[t.sym] || (t.ticks ? Math.abs(t.pnl / (t.ticks * (t.qty || 1))) : 0); if (!tv) continue;
+    t.exit = tp; t.ticks = long ? tcount(tp, t.entry) : tcount(t.entry, tp); t.pnl = t.ticks * tv * (t.qty || 1);
+    if (t.stopTicks > 0) t.R = t.pnl / (t.stopTicks * tv * (t.qty || 1));
+    n++;
+  }
+  return n;
+}
+(() => {   // one-time repair of the stored journal + saved logs; the untouched originals stay under rt_*_bak_tgtfix
+  if (loadJSON('rt_tgtfix_done', false)) return;
+  const logs = loadJSON('rt_trade_logs', []);
+  saveJSON('rt_trades_bak_tgtfix', trades); saveJSON('rt_trade_logs_bak_tgtfix', logs);
+  const n = fixTargetFills(trades) + logs.reduce((s, l) => s + fixTargetFills(l.trades), 0);
+  if (n) { saveJSON('rt_trades', trades); saveJSON('rt_trade_logs', logs); setTimeout(() => toast(`Fixed ${n} target exit${n > 1 ? 's' : ''} that were booked at the bid instead of the target price`), 1500); }
+  saveJSON('rt_tgtfix_done', true);
+})();
 let showTrades = loadJSON('rt_show_trades', true);   // show entry/exit trade arrows on the chart
 let tradeLogs = loadJSON('rt_trade_logs', []);   // named saved trade logs: [{id,name,ts,trades:[...]}]
 // Trades taken before 2026-09-13 have no planned-R:R fields, but they DO carry the stop ticks and the
@@ -3423,7 +3445,7 @@ function processSub(b, bi) {   // bi = index of this print, when the base IS pri
       if (!position) break;
       const tP = tg.price;
       const hit = long ? (b.open >= tP || b.high >= tP) : (b.open <= tP || b.low <= tP);
-      if (hit) { const raw = long ? (b.open >= tP ? b.open : tP) : (b.open <= tP ? b.open : tP); orders = orders.filter(o => o !== tg); exitQty(tg.qty, crossFill(!long, raw, bi), b.time, 'target'); }
+      if (hit) { const raw = long ? (b.open >= tP ? b.open : tP) : (b.open <= tP ? b.open : tP); orders = orders.filter(o => o !== tg); exitQty(tg.qty, raw, b.time, 'target'); }   // a target is a resting LIMIT: it fills at its own price (or the better gap open), never across the spread — crossing used the bid, which lags several ticks in a sweep (09/25 ES 13:01:21: target 7797.75 printed, bid still 7796.25 -> a +4t target booked as -2t)
     }
   };
   if (stopFirst) { if (doStop()) return; doTargets(); }   // stop side reached first this sub-bar
