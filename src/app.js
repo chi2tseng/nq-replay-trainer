@@ -240,52 +240,58 @@ function sizeChart() {
 new ResizeObserver(sizeChart).observe($('chartwrap'));
 window.addEventListener('resize', sizeChart);
 // ---- price-axis vertical zoom (wheel over the right axis) + auto-fit ----
-const PX_MARGIN_DEF = 0.15; let pxMargin = PX_MARGIN_DEF;   // symmetric vertical margin on the price scale; wheel grows/shrinks it. Also = the 1:1 vertical-pan range (±pxMargin); wheel-out for more room
-let pxShift = 0;                                          // vertical pan offset: drag the chart body up/down to move the price view
-let priceAuto = true;                                    // price scale auto-fits (follows price); a manual vertical pan/zoom freezes it (natural), Fit re-enables
-// Magnification past the auto-fit: margins can only shrink to 0 (= visible bars fill the height), which on a quiet
-// ES day still leaves tiny candles. pxZoom > 1 narrows the auto price range around its middle (+ pxOffset for
-// panning) through the series' autoscaleInfoProvider, so the scale keeps auto-following price while magnified.
-let pxZoom = 1, pxOffset = 0;                             // magnification (1 = auto-fit) and vertical pan in price units while magnified
-const PX_ZOOM_MAX = 40, PX_ZOOM_STEP = 1.15;
-function priceRangeProvider(original) {
-  const r = original();
-  if (!r || !r.priceRange || (pxZoom <= 1 && !pxOffset)) return r;
-  const { minValue, maxValue } = r.priceRange, mid = (minValue + maxValue) / 2 + pxOffset, half = Math.max((maxValue - minValue) / 2 / pxZoom, TICK * 2);
-  return { priceRange: { minValue: mid - half, maxValue: mid + half }, margins: r.margins };
+// AUTO (default): the price scale follows the visible bars with symmetric margins (pxMargin).
+// MANUAL: the first wheel-zoom on the price axis or vertical drag of the chart freezes the price view (pxFix = {mid, half})
+// and it then stays exactly where the user put it: stepping the replay, panning in time and switching timeframe never
+// re-fit it (2026-10-04, user: "放大之後就不要再自動fit了"). Double-click the price axis / key 0 returns to AUTO; a new day
+// keeps the zoom level and only re-centres on that day's price.
+const PX_MARGIN_DEF = 0.15; let pxMargin = PX_MARGIN_DEF;   // symmetric vertical margin of the AUTO view
+let priceAuto = true;                                     // false once the user zoomed or dragged the price
+let pxFix = null;                                         // frozen price view {mid, half} in price units (MANUAL)
+const PX_ZOOM_STEP = 1.15;
+function priceRangeProvider(original) {   // the candle series is the only series on the right scale, so its provider decides the range
+  if (!pxFix) return original();
+  return { priceRange: { minValue: pxFix.mid - pxFix.half, maxValue: pxFix.mid + pxFix.half }, margins: { above: 0, below: 0 } };
 }
 function bindPriceZoom(series) { if (series && series.applyOptions) series.applyOptions({ autoscaleInfoProvider: priceRangeProvider }); }
+function paneHeight() { try { return $('chart').clientHeight - chart.timeScale().height(); } catch (e) { return $('chart').clientHeight; } }
+function freezePrice() {   // enter MANUAL with exactly what is on screen now
+  if (pxFix) return true;
+  const top = candle.coordinateToPrice(0), bot = candle.coordinateToPrice(paneHeight());
+  if (top == null || bot == null || top === bot) return false;
+  pxFix = { mid: (top + bot) / 2, half: Math.max(Math.abs(top - bot) / 2, TICK * 2) }; priceAuto = false;
+  return true;
+}
 function applyPriceZoom() {
-  pxShift = Math.max(-pxMargin, Math.min(pxMargin, pxShift));   // clamp to the margin room: both margins stay >=0 so the data block keeps its size → vertical pan tracks the mouse 1:1 (no compression). Wheel-zoom-out grows pxMargin = more pan room.
-  const magnified = pxZoom > 1 || pxOffset !== 0;
-  chart.priceScale('right').applyOptions({ autoScale: priceAuto || magnified, scaleMargins: { top: pxMargin + pxShift, bottom: pxMargin - pxShift } });
-  if (magnified) {                                               // LWC only re-asks the provider when the visible range changes: nudge it
-    bindPriceZoom(candle);
-    try { const ts = chart.timeScale(), lr = ts.getVisibleLogicalRange(); if (lr) { ts.setVisibleLogicalRange({ from: lr.from + 0.01, to: lr.to }); ts.setVisibleLogicalRange(lr); } } catch (e) {}
-  }
+  chart.priceScale('right').applyOptions({ autoScale: true, scaleMargins: pxFix ? { top: 0, bottom: 0 } : { top: pxMargin, bottom: pxMargin } });
+  if (candle && candle.applyOptions) candle.applyOptions({ autoscaleInfoProvider: (o) => priceRangeProvider(o) });   // a fresh provider makes LWC re-ask it now; never nudge the time range (a range just set by fitRecent / keepZoom is not readable back until the next frame, so a nudge would undo it)
 }
 bindPriceZoom(candle);
 applyPriceZoom();
-function fitRecent(n) {   // frame the most recent n bars (+ a little right margin) and re-fit the price to them
-  pxMargin = PX_MARGIN_DEF; pxShift = 0; priceAuto = true; pxZoom = 1; pxOffset = 0;
+function fitRecent(n) {   // frame the most recent n bars (+ a little right margin) and return the price to AUTO
+  pxMargin = PX_MARGIN_DEF; priceAuto = true; pxFix = null;
   const li = idx - seriesFrom;                              // logical index of the latest bar in the windowed series
   const from = Math.max(0, li - (n - 1)), to = li + 6;
   try { chart.timeScale().setVisibleLogicalRange({ from, to }); } catch (e) { chart.timeScale().fitContent(); }
   applyPriceZoom();
 }
-function fitChart() { fitRecent(100); }   // Fit button / key 0 / dbl-click axis → recent ~100 bars (was: all revealed bars)
+function fitChart() { fitRecent(100); }   // Fit / key 0 / dbl-click axis → recent ~100 bars, price back to AUTO
+function keepZoom(n, recentre, spacing) {   // after new bars (timeframe switch / new day): AUTO re-fits as before; MANUAL keeps the zoom
+  if (!pxFix) return fitRecent(n);
+  const ts = chart.timeScale();
+  if (spacing) ts.applyOptions({ barSpacing: spacing });
+  ts.scrollToPosition(6, false);                            // latest bar at the right edge, same bar width as before
+  if (recentre && idx >= 0 && bars[idx]) pxFix.mid = bars[idx].close;   // another day = another price level: same zoom, centred on today
+  applyPriceZoom();
+}
 function priceAxisW() { try { const w = chart.priceScale('right').width(); if (w > 0) return w; } catch (e) {} return 62; }
 function overPriceAxis(clientX) { const r = $('chart').getBoundingClientRect(); return clientX - r.left >= r.width - Math.max(priceAxisW(), 44); }
-// wheel over the price axis = zoom price vertically; over the chart = LWC's native time zoom
+// wheel over the price axis = zoom price vertically (enters MANUAL); over the chart = LWC's native time zoom
 $('chart').addEventListener('wheel', (e) => {
   if (!overPriceAxis(e.clientX)) return;
   e.preventDefault(); e.stopPropagation();
-  priceAuto = false;                                                                  // manual zoom → freeze auto-fit (natural)
-  if (e.deltaY < 0) {                                                                 // up = zoom in: margins to 0 first, then magnify past the auto range
-    if (pxMargin > 0.001) pxMargin = Math.max(0, pxMargin - 0.03); else pxZoom = Math.min(PX_ZOOM_MAX, pxZoom * PX_ZOOM_STEP);
-  } else {                                                                            // down = zoom out: un-magnify first, then grow margins
-    if (pxZoom > 1) { pxZoom = Math.max(1, pxZoom / PX_ZOOM_STEP); if (pxZoom === 1) pxOffset = 0; } else pxMargin = Math.min(0.45, pxMargin + 0.03);
-  }
+  if (!freezePrice()) return;
+  pxFix.half = e.deltaY < 0 ? Math.max(TICK * 2, pxFix.half / PX_ZOOM_STEP) : pxFix.half * PX_ZOOM_STEP;
   applyPriceZoom();
 }, { capture: true, passive: false });
 // double-click the price axis = auto-fit (TradingView behaviour)
@@ -2046,10 +2052,7 @@ window.addEventListener('pointermove', e => {
   if (vpan && !drag && !dragH) {                   // free 2D pan: price follows vertical motion (1:1), LWC pans time on horizontal motion — both work, neither locked
     const idy = y - vpan.ly, idx = x - vpan.lx; vpan.lx = x; vpan.ly = y;
     if (idy !== 0 && Math.abs(idy) >= Math.abs(idx)) {
-      priceAuto = false;
-      if (pxZoom > 1) { const a = candle.coordinateToPrice(y), b = candle.coordinateToPrice(y - idy); if (a != null && b != null) pxOffset += (b - a); }   // magnified: move the window by the price under the pointer
-      else pxShift += idy / ($('chart').clientHeight || 1);
-      applyPriceZoom();
+      if (freezePrice()) { const a = candle.coordinateToPrice(y), b = candle.coordinateToPrice(y - idy); if (a != null && b != null) { pxFix.mid += (b - a); applyPriceZoom(); } }   // MANUAL: the price under the pointer follows it 1:1
     }
   }
   if (!drag) return;
@@ -2784,7 +2787,7 @@ async function enterTickMode(ds) {
   return loadTickDay(availTickDays[availTickDays.length - 1]);
 }
 async function loadTickDay(day) {
-  let d;
+  let d; const spKeep = chart.timeScale().options().barSpacing;   // MANUAL price view: keep the zoom across days (keepZoom)
   const { useNt, url: tickUrl } = tickFileFor(day);
   showLoading(true, `Loading tick tape ${day}${useNt ? ', NinjaTrader' : ''}…`);   // a 10–15 MB fetch + parse; silence here reads as a freeze
   try { d = await fetchJSON(tickUrl); }
@@ -2816,7 +2819,7 @@ async function loadTickDay(day) {
   $('startSlider').max = n - 1;
   rebuildTf();
   baseIdx = rthOpenIdx(sessions[0]); syncIdxFromBase();
-  sizeChart(); hardReveal(); fitRecent(150);
+  sizeChart(); hardReveal(); keepZoom(150, true, spKeep);
   if (chartType && chartType !== 'candles') { const _t = chartType; chartType = '__'; setChartType(_t); }
   if (!wired) { wire(); wired = true; }
   renderAll();
@@ -2957,7 +2960,8 @@ function setMtf(layout, tfs) {
 function rthOpenIdx(s) { for (let i = s.start; i <= s.end; i++) { const m = etMinutes(baseBars[i].time); if (m >= 570 && m < 960) return i; } return s.start; }  // first bar in 09:30–15:59 ET = US cash open (skips the 18:00 ET Globex open)
 function gotoSession(i) {
   if (locked()) return toast("Can't jump while in a position / working order");
-  pause(); baseIdx = rthOpenIdx(sessions[i]); syncIdxFromBase(); hardReveal(); fitRecent(150); renderAll();   // fitRecent: auto-fit recent bars on day change; renderAll so the dashboard "Today" tally follows
+  const sp = chart.timeScale().options().barSpacing;
+  pause(); baseIdx = rthOpenIdx(sessions[i]); syncIdxFromBase(); hardReveal(); keepZoom(150, true, sp); renderAll();   // fitRecent: auto-fit recent bars on day change; renderAll so the dashboard "Today" tally follows
   const sel = $('sessionSelect'); if (sel) sel.value = String(i);
   closeCal();
 }
@@ -2990,7 +2994,8 @@ function setTf(m) {
   if (v[0] === 't') tfTicks = +v.slice(1) || 0;          // "t500" = a bar every 500 trades
   else { tfTicks = 0; tf = +v; }
   saveJSON('rt_tf', tf); saveJSON('rt_tfticks', tfTicks);
-  rebuildTf(); syncIdxFromBase(); hardReveal(); fitRecent(150); renderLive();
+  const sp = chart.timeScale().options().barSpacing;
+  rebuildTf(); syncIdxFromBase(); hardReveal(); keepZoom(150, false, sp); renderLive();
 }
 
 // ---------- order helpers ----------
