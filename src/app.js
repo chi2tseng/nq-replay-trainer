@@ -1886,8 +1886,8 @@ function drawingHandles() {
       continue;
     }
     const x1 = X(d.p1.t), y1 = Y(d.p1.p), x2 = d.p2 ? X(d.p2.t) : null, y2 = d.p2 ? Y(d.p2.p) : null;
-    if (x1 != null && y1 != null) out.push({ d, hx: x1, hy: y1, apply: (t, p) => { if (d.type === 'channel' && d.p3) { const l0 = timeToLogical(d.p1.t), l3 = timeToLogical(d.p3.t), ln = t != null ? timeToLogical(t) : null; if (l0 != null && l3 != null && ln != null) { const nt = logicalToTime(l3 + ln - l0); if (nt != null) d.p3.t = nt; } d.p3.p += p - d.p1.p; } if (t != null) d.p1.t = t; d.p1.p = p; } });   // channel (NT L1A1): p3 rides along so the offset vector p3-p1 stays fixed
-    if (d.p2 && x2 != null && y2 != null) out.push({ d, hx: x2, hy: y2, apply: (t, p) => { if (t != null) d.p2.t = t; d.p2.p = p; } });
+    if (x1 != null && y1 != null) out.push({ d, hx: x1, hy: y1, other: d.p2 || null, apply: (t, p) => { if (d.type === 'channel' && d.p3) { const l0 = timeToLogical(d.p1.t), l3 = timeToLogical(d.p3.t), ln = t != null ? timeToLogical(t) : null; if (l0 != null && l3 != null && ln != null) { const nt = logicalToTime(l3 + ln - l0); if (nt != null) d.p3.t = nt; } d.p3.p += p - d.p1.p; } if (t != null) d.p1.t = t; d.p1.p = p; } });   // channel (NT L1A1): p3 rides along so the offset vector p3-p1 stays fixed
+    if (d.p2 && x2 != null && y2 != null) out.push({ d, hx: x2, hy: y2, other: d.p1, apply: (t, p) => { if (t != null) d.p2.t = t; d.p2.p = p; } });
     if (d.type === 'box' && d.p2) {   // box: also let the two cross-corners drag (each writes one t + one p)
       if (x2 != null && y1 != null) out.push({ d, hx: x2, hy: y1, apply: (t, p) => { if (t != null) d.p2.t = t; d.p1.p = p; } });
       if (x1 != null && y2 != null) out.push({ d, hx: x1, hy: y2, apply: (t, p) => { if (t != null) d.p1.t = t; d.p2.p = p; } });
@@ -2024,7 +2024,14 @@ window.addEventListener('pointermove', e => {
   const rect = dragRect || $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
   if (dragH) {                                    // editing a drawing endpoint: free time + price, magnet (Ctrl/Cmd inverts it, G9) decides the snap
     const p = candle.coordinateToPrice(y), ft = xToFreeTime(x);
-    if (p != null && ft != null) { const s = magnetSnap(ft, p, y, e.ctrlKey || e.metaKey); dragH.apply(dragH.horiz ? null : s.t, s.p); repaintOverlays(); }
+    if (p != null && ft != null) {
+      let s = magnetSnap(ft, p, y, e.ctrlKey || e.metaKey);
+      if (e.shiftKey && dragH.other && SHIFT_TOOLS[dragH.d.type]) {   // Shift on an endpoint (TV): lock the angle to 0/45/90 degrees against the other anchor (box: square), same rule as placing the 2nd point (G14/G16)
+        const ox = drawX(dragH.other.t), oy = drawY(dragH.other.p);
+        if (ox != null && oy != null) { const c = shiftConstrain(dragH.d.type, ox, oy, x, y), nt = xToFreeTime(c.x), np = candle.coordinateToPrice(c.y); if (nt != null && np != null) s = { t: nt, p: np }; }
+      }
+      dragH.apply(dragH.horiz ? null : s.t, s.p); repaintOverlays();
+    }
     return;
   }
   if (ctrlPress) {                                // Ctrl held on a body: first motion beyond 3px turns the press into a clone-drag (G18)

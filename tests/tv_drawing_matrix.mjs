@@ -336,6 +336,22 @@ try {
     report('G15', dt && !dp && !dt2 && dp2, `Shift-drag horizontal (+60,+40)px on an edge handle: time moved, price fixed(${dt}/${!dp}); Shift-drag vertical (+20,+50)px: time fixed, price moved(${!dt2}/${dp2})`);
   }
 
+  // ================= G15B Shift while dragging a trend-line ENDPOINT locks the angle to 0/45/90 degrees against the other end =================
+  await clear();
+  {
+    const xa = await barX(k), ya = geo.H * 0.5;
+    await drawTL(xa, ya, xa + 150, ya - 60);
+    const g0 = await geomOf(0);
+    await page.evaluate(() => window.__rt.setSel(0)); await paint();
+    await dragChart(g0.x2, g0.y2, g0.x2 + 60, g0.y1 - 8, ['Shift']);   // almost level -> exactly level
+    const g1 = await geomOf(0);
+    await dragChart(g1.x2, g1.y2, g1.x2 + 10, g1.y2 - 150, ['Shift']);  // steep -> 45 or 90 degrees
+    const g2 = await geomOf(0);
+    const ang = (q) => Math.atan2(q.y1 - q.y2, q.x2 - q.x1) * 180 / Math.PI, a1 = ang(g1), a2 = ang(g2);
+    const snapped = (a) => [0, 45, 90, -45, -90].some(v => Math.abs(a - v) < 0.5);
+    report('G15B', Math.abs(g1.p1 - g1.p2) < 1e-6 && Math.abs(a1) < 0.5 && snapped(a2) && Math.abs(a2) > 1, `Shift-drag of p2 near level -> ${a1.toFixed(2)} deg, prices equal(${Math.abs(g1.p1 - g1.p2) < 1e-6}); Shift-drag steep -> ${a2.toFixed(2)} deg (0/45/90 only)`);
+  }
+
   // ================= G16 Shift locks square (rectangle) =================
   await clear();
   {
@@ -1024,7 +1040,7 @@ try {
   await browser.close();
 }
 
-const order = ['G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G16', 'G17', 'G18', 'G19', 'G20', 'G21', 'G22', 'G23', 'G24', 'G25', 'G26', 'G27', 'G28', 'G29', 'G30', 'G31', 'G32', 'G33', 'G34', 'G35', 'G36', 'G37', 'G38', 'G39', 'G40', 'G41', 'G42', 'G43', 'G44', 'G45', 'G46', 'G47', 'G48', 'NT1', 'NT2', 'NT3', 'NT4', 'NT5', 'NT6', 'NT7', 'NT8', 'NT9', 'NT10', 'NT11', 'NT12', 'NT13', 'NT14', 'NT15', 'NT16', 'NT17', 'NT18', 'NT19', 'NT20', 'REG1-no-render-err', 'REG2-trading-hotkeys', 'REG3-hide-trades-unchanged', 'REG4-no-drift-on-rewindow', 'REG5-target-fills-at-limit'];
+const order = ['G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G15B', 'G16', 'G17', 'G18', 'G19', 'G20', 'G21', 'G22', 'G23', 'G24', 'G25', 'G26', 'G27', 'G28', 'G29', 'G30', 'G31', 'G32', 'G33', 'G34', 'G35', 'G36', 'G37', 'G38', 'G39', 'G40', 'G41', 'G42', 'G43', 'G44', 'G45', 'G46', 'G47', 'G48', 'NT1', 'NT2', 'NT3', 'NT4', 'NT5', 'NT6', 'NT7', 'NT8', 'NT9', 'NT10', 'NT11', 'NT12', 'NT13', 'NT14', 'NT15', 'NT16', 'NT17', 'NT18', 'NT19', 'NT20', 'REG1-no-render-err', 'REG2-trading-hotkeys', 'REG3-hide-trades-unchanged', 'REG4-no-drift-on-rewindow', 'REG5-target-fills-at-limit'];
 const byId = Object.fromEntries(results.map(r => [r.id, r.status]));
 const pass = order.filter(id => byId[id] === 'PASS').length, fail = order.filter(id => byId[id] === 'FAIL').length, sk = order.filter(id => byId[id] === 'SKIP').length, missing = order.filter(id => !(id in byId));
 console.log(`\n${pass} PASS / ${fail} FAIL / ${sk} SKIP out of ${order.length}${missing.length ? ` (missing: ${missing.join(',')})` : ''}`);
