@@ -1392,12 +1392,13 @@ const drawingsPrimitive = {
               ctx.save(); ctx.lineWidth = 1.5;
               if (tool === 'channel' && pendingPt2) {   // clicks 2->3: fixed trend line + parallel rail starting at the cursor
                 const x2c = X(pendingPt2.t), y2c = Y(pendingPt2.p);
-                if (x2c != null && y2c != null) { ctx.strokeStyle = '#000000'; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2c, y2c); ctx.moveTo(x2, y2); ctx.lineTo(x2 + x2c - x1, y2 + y2c - y1); ctx.stroke(); dbg.preview.rails = 2; }
+                if (x2c != null && y2c != null) { ctx.strokeStyle = hexA(LINE_DEFAULT.color, LINE_DEFAULT.opacity); ctx.lineWidth = LINE_DEFAULT.width; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2c, y2c); ctx.moveTo(x2, y2); ctx.lineTo(x2 + x2c - x1, y2 + y2c - y1); ctx.stroke(); dbg.preview.rails = 2; }
               } else if (tool === 'fib' || tool === 'measure') {   // these renderers need {t,p} for their level labels / delta text: hand them a throw-away p2
                 const tmp = { type: tool, p1: pendingPt, p2: { t: xToFreeTime(x2), p: candle.coordinateToPrice(y2) }, color: tool === 'fib' ? '#CC4400' : '' };
                 if (tmp.p2.t != null && tmp.p2.p != null) { if (tool === 'fib') drawFib(ctx, tmp, X, Y, W); else drawMeasure(ctx, tmp, X, Y, false, H); }
               } else {
-                ctx.strokeStyle = tool === 'box' ? '#6495ED' : '#000000'; ctx.fillStyle = ctx.strokeStyle;   // same look as the finished object (TV previews with the final style)
+                const lineTool = tool === 'tl' || tool === 'channel';
+                ctx.strokeStyle = tool === 'box' ? '#6495ED' : lineTool ? hexA(LINE_DEFAULT.color, LINE_DEFAULT.opacity) : '#000000'; ctx.fillStyle = ctx.strokeStyle; if (lineTool) ctx.lineWidth = LINE_DEFAULT.width;   // same look as the finished object (TV previews with the final style)
                 if (tool === 'box') { const x = Math.min(x1, x2), y = Math.min(y1, y2), w = Math.abs(x2 - x1), h = Math.abs(y2 - y1); ctx.globalAlpha = 0.12; ctx.fillRect(x, y, w, h); ctx.globalAlpha = 1; ctx.strokeRect(x, y, w, h); }
                 else { ctx.beginPath(); ctx.moveTo(x1, y1); if (tool === 'ray') { const e = rayEnd(x1, y1, x2, y2, W, H); ctx.lineTo(e.x, e.y); } else ctx.lineTo(x2, y2); ctx.stroke(); }
               }
@@ -1445,7 +1446,9 @@ function arrowHead(ctx, fx, fy, tx, ty, lw) {   // filled triangle at (tx,ty) po
 }
 const DASHES = [[], [6, 4], [2, 3]];   // style.dash: 0 solid, 1 dashed, 2 dotted
 function dashArr(v) { return DASHES[v | 0] || []; }
-function styleColor(d, fallback) { return (d.style && d.style.color) || d.color || fallback || '#000000'; }
+const LINE_DEFAULT = { color: '#03A9F4', width: 0.5, dash: 0, opacity: 0.5 };   // new trend lines / trend channels: 0.5 px light blue at 50% (user 2026-10-04); other tools keep their own defaults
+function hexA(hex, a) { const m = /^#([0-9a-f]{6})$/i.exec(hex || ''); if (!m || a == null || a >= 1) return hex; const n = parseInt(m[1], 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; }   // style.color stays plain hex (the colour pickers need it); opacity is applied here
+function styleColor(d, fallback) { return hexA((d.style && d.style.color) || d.color || fallback || '#000000', d.style && d.style.opacity); }
 function applyStyle(ctx, d) { const s = d.style || {}; ctx.strokeStyle = ctx.fillStyle = styleColor(d); ctx.lineWidth = s.width || 1.5; ctx.setLineDash(dashArr(s.dash)); }
 function shiftConstrain(t, x1, y1, x2, y2) {   // Shift while placing the 2nd point: trend line snaps to the nearest 45° multiple (G14), rectangle becomes a square (G16). Pixel space.
   const dx = x2 - x1, dy = y2 - y1;
@@ -1560,7 +1563,7 @@ function handleDrawClick(t, time, price, y, ev) {   // time = free epoch seconds
   if (t === 'channel') {   // NT8 Trend Channel: click 1 trend start, click 2 trend end, click 3 = point the parallel passes through (ParallelStartAnchor)
     if (!pendingPt) { pendingPt = { t: time, p: price }; pendingPt2 = null; previewXY = null; repaintOverlays(); return; }
     if (!pendingPt2) { pendingPt2 = { t: time, p: price }; previewXY = null; repaintOverlays(); return; }
-    snapshot(); drawings.push(newDrawing({ type: 'channel', p1: pendingPt, p2: pendingPt2, p3: { t: time, p: price }, levels: [], color: '#000000' }));
+    snapshot(); drawings.push(newDrawing({ type: 'channel', p1: pendingPt, p2: pendingPt2, p3: { t: time, p: price }, levels: [], color: LINE_DEFAULT.color, style: { ...LINE_DEFAULT } }));
     pendingPt = null; pendingPt2 = null; previewXY = null; selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return;
   }
   if (pendingPt || t === 'hl' || t === 'vline' || t === 'hray' || t === 'cross' || t === 'rr') snapshot();   // G21: every branch below that pushes a drawing (the first click of a 2-point tool only arms pendingPt)
@@ -1576,7 +1579,7 @@ function handleDrawClick(t, time, price, y, ev) {   // time = free epoch seconds
     selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return;
   }
   if (!pendingPt) { pendingPt = { t: time, p: price }; previewXY = null; repaintOverlays(); return; }   // TV shows no hint toast; the rubber-band preview is the cue
-  drawings.push(newDrawing({ type: t, p1: pendingPt, p2: { t: time, p: price }, color: t === 'box' ? '#6495ED' : t === 'fib' ? '#CC4400' : t === 'measure' ? '' : '#000000' }));   // measure: '' = auto green/red until recoloured (G17)
+  drawings.push(newDrawing({ type: t, p1: pendingPt, p2: { t: time, p: price }, color: t === 'box' ? '#6495ED' : t === 'fib' ? '#CC4400' : t === 'measure' ? '' : t === 'tl' ? LINE_DEFAULT.color : '#000000', ...(t === 'tl' ? { style: { ...LINE_DEFAULT } } : {}) }));   // measure: '' = auto green/red until recoloured (G17)
   pendingPt = null; previewXY = null; selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw();
 }
 function clearDrawings() {   // wipe everything drawn with the toolbar: lines / rays / h-lines / boxes / fib / measure / R:R AND the up/down/long/short arrow markers
@@ -1991,7 +1994,18 @@ function xToTime(x) {
 // LWC v4 coordinateToLogical() rounds to an integer (Math.ceil in the lib) -> recover the fraction from the integer anchor + barSpacing (x is linear in logical)
 function xToLogical(x) { const ts = chart.timeScale(), l0 = ts.coordinateToLogical(x); if (l0 == null) return null; const x0 = ts.logicalToCoordinate(l0), sp = ts.options().barSpacing; return (x0 == null || !sp) ? l0 : l0 + (x - x0) / sp; }
 function xToFreeTime(x) { return logicalToTime(xToLogical(x)); }
-chart.subscribeClick(param => {
+// Tool clicks come from the DOM, not chart.subscribeClick: LWC swallows any click within 500 ms of the previous one (its double-click
+// detector drops the 2nd mouseup whatever the distance), so a quick 2nd trend-line point or 3rd channel click silently vanished.
+let toolDown = null;
+$('chart').addEventListener('pointerdown', e => { if (e.button === 0) toolDown = { x: e.clientX, y: e.clientY }; }, true);
+$('chart').addEventListener('click', e => {
+  if (!tool || e.button !== 0) return;
+  if (toolDown && Math.hypot(e.clientX - toolDown.x, e.clientY - toolDown.y) > 5) return;   // that was a drag (pan), not a click
+  const r = $('chart').getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  if (x < 0 || y < 0 || x > chart.timeScale().width() || y > paneHeight()) return;   // price / time axis
+  onToolClick({ point: { x, y }, time: chart.timeScale().coordinateToTime(x), sourceEvent: e });
+});
+function onToolClick(param) {
   if (!tool || !param.point) return;   // param.time is null in the empty space after the last bar — drawings may still go there (G7)
   if (tool === 'start' || tool === 'au' || tool === 'ad' || tool === 'long' || tool === 'short') {   // bar-bound tools keep the exact-bar check
     if (param.time == null) return;
@@ -2001,7 +2015,7 @@ chart.subscribeClick(param => {
   }
   const time = xToFreeTime(param.point.x), price = candle.coordinateToPrice(param.point.y);   // hl / tl / ray / box / fib / measure / rr / hray / vline / cross
   if (time != null && price != null) handleDrawClick(tool, time, price, param.point.y, param.sourceEvent);
-});
+}
 $('chart').addEventListener('pointerdown', e => {
   if (e.button === 1) {                           // G25: middle-click on a drawing (anchor or body) deletes just that one; preventDefault keeps the browser's autoscroll away
     if (tool) return; const r1 = $('chart').getBoundingClientRect(), mx = e.clientX - r1.left, my = e.clientY - r1.top;
@@ -2178,7 +2192,8 @@ function openDrawSettings(d, tab) {
   const num = (k, label, v, step) => `<label class="ds-row ds-num"><span>${label}</span><input type="number" data-k="${k}" value="${v}" step="${step}"></label>`;
   const pt = (n, obj, hasT, hasP) => `<div class="ds-grp"><div class="ds-gh">${n}</div>${hasT ? num('t:' + obj, 'Bar #', abs(d[obj].t), 1) : ''}${hasP ? num('p:' + obj, 'Price', +(+d[obj].p).toFixed(2), TICK) : ''}</div>`;
   let style = `<label class="ds-row ds-num"><span>Color</span><input type="color" data-k="s:color" value="${/^#[0-9a-f]{6}$/i.test(s.color || '') ? s.color : '#000000'}"></label>` +
-    `<label class="ds-row ds-num"><span>Width</span><select data-k="s:width">${[1, 1.5, 2, 3, 4].map(w => `<option value="${w}" ${s.width == w ? 'selected' : ''}>${w}px</option>`).join('')}</select></label>` +
+    `<label class="ds-row ds-num"><span>Width</span><select data-k="s:width">${[0.5, 1, 1.5, 2, 3, 4].map(w => `<option value="${w}" ${s.width == w ? 'selected' : ''}>${w}px</option>`).join('')}</select></label>` +
+    `<label class="ds-row ds-num"><span>Opacity</span><select data-k="s:opacity">${[1, 0.75, 0.5, 0.25].map(o => `<option value="${o}" ${(s.opacity == null ? 1 : s.opacity) == o ? 'selected' : ''}>${o * 100}%</option>`).join('')}</select></label>` +
     `<label class="ds-row ds-num"><span>Line</span><select data-k="s:dash">${['Solid', 'Dashed', 'Dotted'].map((n, i) => `<option value="${i}" ${(s.dash | 0) === i ? 'selected' : ''}>${n}</option>`).join('')}</select></label>`;
   if (d.type === 'tl' || d.type === 'ray') style += `<label class="ds-row ds-num"><span>Extend</span><select data-k="d:extend">${['none', 'left', 'right', 'both'].map(v => `<option value="${v}" ${(d.extend || 'none') === v ? 'selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}</select></label>` + chk('d:arrowStart', 'Arrow at start', d.arrowStart) + chk('d:arrowEnd', 'Arrow at end', d.arrowEnd);
   if (d.type === 'box') style += chk('d:extendLeft', 'Extend left', d.extendLeft) + chk('d:extendRight', 'Extend right', d.extendRight) + chk('d:middleLine', 'Middle line', d.middleLine);

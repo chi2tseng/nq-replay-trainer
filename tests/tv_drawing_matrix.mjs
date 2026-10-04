@@ -25,6 +25,9 @@ async function load() {
   await page.goto(URL + Math.random(), { waitUntil: 'load' });
   await page.waitForFunction(() => typeof bars !== 'undefined' && bars.length > 100 && idx > 50, null, { timeout: 20000 });
   await page.waitForTimeout(1200);
+  await page.evaluate(() => {   // geometry / ink probes below assume opaque black 1.5 px lines: park the real trend-line default (STY1 tests it)
+    if (typeof LINE_DEFAULT === 'object' && !window.__LINE_REAL) { window.__LINE_REAL = { ...LINE_DEFAULT }; Object.assign(LINE_DEFAULT, { color: '#000000', width: 1.5, dash: 0, opacity: 1 }); }
+  });
   await page.evaluate(() => {
     const canvases = (rootId) => {
       const root = document.getElementById(rootId), rr = root.getBoundingClientRect();
@@ -923,9 +926,9 @@ try {
     const xr = PW - 30, yA = c.g.y1 + (c.g.y2 - c.g.y1) * (xr - c.g.x1) / (c.g.x2 - c.g.x1), yB = c.g.y3 + (c.g.y4 - c.g.y3) * (xr - c.g.x3) / (c.g.x4 - c.g.x3);
     const extInk = await inkDiff([[xr, yA], [xr, yB]]);
     await page.evaluate(() => openDrawSettings(drawings[0], 'coords'));
-    const coords = await page.evaluate(() => ({ txt: document.getElementById('drawSettings').textContent, ks: [...document.querySelectorAll('#drawSettings [data-k]')].map(i => i.dataset.k) }));
+    const coords = await page.evaluate(() => ({ txt: document.getElementById('drawSettings').textContent, ks: [...document.querySelectorAll('#drawSettings [data-k]')].map(i => i.dataset.k), dbg: `n=${drawings.length} d0=${drawings[0] && drawings[0].type} ds=${dsDrawing && dsDrawing.type} open=${document.getElementById('drawSettings').classList.contains('open')} keys=${document.querySelectorAll('#drawSettings [data-k]').length}` }));
     await page.evaluate(() => closeDrawSettings());
-    report('NT15', title === 'Trend channel settings' && lvl === '[50]' && inkMid50 >= 0.8 && extInk[0] && extInk[1] && yA > 0 && yA < geo.H && yB > 0 && yB < geo.H && /Parallel start/.test(coords.txt) && coords.ks.includes('t:p3') && coords.ks.includes('p:p3'), `title='${title}'; Levels "50" -> levels=${lvl}, midline ink ${inkMid50.toFixed(2)}; Extend=right -> ink at x=${xr.toFixed(0)} on trend(${extInk[0]}) and parallel(${extInk[1]}); Coordinates has a Parallel start group (${coords.ks.filter(q => q.endsWith('p3')).join(',')})`);
+    report('NT15', title === 'Trend channel settings' && lvl === '[50]' && inkMid50 >= 0.8 && extInk[0] && extInk[1] && yA > 0 && yA < geo.H && yB > 0 && yB < geo.H && /Parallel start/.test(coords.txt) && coords.ks.includes('t:p3') && coords.ks.includes('p:p3'), `title='${title}'; Levels "50" -> levels=${lvl}, midline ink ${inkMid50.toFixed(2)}; Extend=right -> ink at x=${xr.toFixed(0)} on trend(${extInk[0]}) and parallel(${extInk[1]}); Coordinates has a Parallel start group (${coords.ks.filter(q => q.endsWith('p3')).join(',')}) [${coords.dbg}]`);
 
     // NT17 renders past the last bar (placement in future space) / NT16 persists across reload
     await reset(); await page.evaluate(() => chart.timeScale().scrollToRealTime()); await page.waitForTimeout(250);   // last bar back at its rightOffset slot so 4 future bars are on the pane
@@ -967,6 +970,54 @@ try {
     const drwNT = await page.evaluate(() => window.__drw);
     report('NT18', errs.length === e0 && drwNT && drwNT.ok && !drwNT.err, `console errors during NT1-NT17: ${errs.length - e0}${errs.length > e0 ? ' (' + errs.slice(e0).join(' | ').slice(0, 300) + ')' : ''}; window.__drw=${JSON.stringify(drwNT)}`);
     await reset();
+  }
+
+  // ================= CLK1 quick clicks are not swallowed (LWC drops a 2nd click within 500 ms) / CLK2 a drag with a tool armed pans, it places nothing =================
+  await clear();
+  {
+    const C = await chartRect(), at = (fx, fy) => [C.left + geo.W * fx, C.top + geo.H * fy];
+    await page.evaluate(() => setTool('tl'));
+    await page.mouse.click(...at(0.30, 0.6)); await page.waitForTimeout(150); await page.mouse.click(...at(0.50, 0.4)); await page.waitForTimeout(200);
+    const tlN = await n();
+    await page.evaluate(() => setTool('channel'));
+    for (const [fx, fy] of [[0.30, 0.3], [0.50, 0.2], [0.35, 0.4]]) { await page.mouse.click(...at(fx, fy)); await page.waitForTimeout(150); }
+    const chN = await n(), types = await page.evaluate(() => drawings.map(d => d.type).join(','));
+    report('CLK1', tlN === 1 && chN === 2 && types === 'tl,channel', `clicks 150 ms apart: trend line placed(${tlN === 1}), channel's 3 clicks placed(${chN === 2}) -> [${types}]`);
+    await page.evaluate(() => setTool('tl'));
+    const [dx, dy] = at(0.4, 0.5); await page.mouse.move(dx, dy); await page.mouse.down(); await page.mouse.move(dx + 120, dy + 10, { steps: 8 }); await page.mouse.up(); await page.waitForTimeout(200);
+    const afterDrag = await page.evaluate(() => ({ pending: !!pendingPt, n: drawings.length, tool }));
+    await page.evaluate(() => setTool(''));
+    report('CLK2', !afterDrag.pending && afterDrag.n === 2 && afterDrag.tool === 'tl', `press-drag-release with the trend-line tool armed: no point placed(${!afterDrag.pending}), drawings ${afterDrag.n}, tool still armed(${afterDrag.tool})`);
+  }
+
+  // ================= STY1 new trend lines / trend channels default to 0.5 px light blue at 50% (user 2026-10-04) =================
+  await clear();
+  {
+    await page.evaluate(() => Object.assign(LINE_DEFAULT, window.__LINE_REAL));
+    const xa = await barX(k), ya = geo.H * 0.3;
+    await drawTL(xa, ya, xa + 160, ya + 50);
+    await clickChart(geo.W * 0.5, geo.H * 0.95);
+    await clickTool('#drwChannel'); await clickChart(xa, geo.H * 0.55); await clickChart(xa + 160, geo.H * 0.5); await clickChart(xa, geo.H * 0.65);
+    await clickChart(geo.W * 0.5, geo.H * 0.95); await paint();
+    const sty = await page.evaluate(() => drawings.map(d => ({ type: d.type, ...d.style, css: styleColor(d) })));
+    const g = await geomOf(0);
+    // a 0.5 px line at 50% lands as translucent pixels (alpha ~50) on the overlay canvas, which the shared probes skip (they need alpha > 80): read the raw overlay pixels
+    const blue = await page.evaluate(([x1, y1, x2, y2]) => {
+      const el = document.getElementById('chart'), er = el.getBoundingClientRect();
+      const cvs = [...el.querySelectorAll('canvas')].filter(c => c.getBoundingClientRect().width > er.width * 0.5);
+      let hits = 0;
+      for (let i = 0.3; i <= 0.7; i += 0.05) {
+        const x = x1 + (x2 - x1) * i, y = y1 + (y2 - y1) * i;
+        const found = cvs.some(c => { const cr = c.getBoundingClientRect(), sx = c.width / cr.width, ctx = c.getContext('2d');
+          for (let dy = -2; dy <= 2; dy++) { const d = ctx.getImageData(Math.round((x + er.left - cr.left) * sx), Math.round((y + dy + er.top - cr.top) * sx), 1, 1).data; if (d[3] >= 20 && d[3] <= 200 && d[2] > 150 && d[0] < 100) return true; }
+          return false; });
+        if (found) hits++;
+      }
+      return hits >= 6;   // translucent light blue along most of the body; an opaque black line would fail the alpha / colour test
+    }, [g.x1, g.y1, g.x2, g.y2]);
+    const ok = sty.length === 2 && sty.every(x => x.color === '#03A9F4' && x.width === 0.5 && x.opacity === 0.5 && x.css === 'rgba(3,169,244,0.5)') && sty.some(x => x.type === 'tl') && sty.some(x => x.type === 'channel') && blue;
+    report('STY1', ok, `drawn by mouse: ${sty.map(x => `${x.type} ${x.color} ${x.width}px ${x.opacity * 100}% -> ${x.css}`).join('; ')}; translucent light blue along the tl body(${blue})`);
+    await page.evaluate(() => Object.assign(LINE_DEFAULT, { color: '#000000', width: 1.5, dash: 0, opacity: 1 }));
   }
 
   // ================= REG5 a target is a resting limit: it fills at its own price even when the quoted bid lags in a sweep =================
@@ -1051,7 +1102,7 @@ try {
   await browser.close();
 }
 
-const order = ['G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G15B', 'G16', 'G17', 'G18', 'G19', 'G20', 'G21', 'G22', 'G23', 'G24', 'G25', 'G26', 'G27', 'G28', 'G29', 'G30', 'G31', 'G32', 'G33', 'G34', 'G35', 'G36', 'G37', 'G38', 'G39', 'G40', 'G41', 'G42', 'G43', 'G44', 'G45', 'G46', 'G47', 'G48', 'NT1', 'NT2', 'NT3', 'NT4', 'NT5', 'NT6', 'NT7', 'NT8', 'NT9', 'NT10', 'NT11', 'NT12', 'NT13', 'NT14', 'NT15', 'NT16', 'NT17', 'NT18', 'NT19', 'NT20', 'REG1-no-render-err', 'REG2-trading-hotkeys', 'REG3-hide-trades-unchanged', 'REG4-no-drift-on-rewindow', 'REG5-target-fills-at-limit'];
+const order = ['G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G15B', 'G16', 'G17', 'G18', 'G19', 'G20', 'G21', 'G22', 'G23', 'G24', 'G25', 'G26', 'G27', 'G28', 'G29', 'G30', 'G31', 'G32', 'G33', 'G34', 'G35', 'G36', 'G37', 'G38', 'G39', 'G40', 'G41', 'G42', 'G43', 'G44', 'G45', 'G46', 'G47', 'G48', 'NT1', 'NT2', 'NT3', 'NT4', 'NT5', 'NT6', 'NT7', 'NT8', 'NT9', 'NT10', 'NT11', 'NT12', 'NT13', 'NT14', 'NT15', 'NT16', 'NT17', 'NT18', 'NT19', 'NT20', 'REG1-no-render-err', 'REG2-trading-hotkeys', 'REG3-hide-trades-unchanged', 'REG4-no-drift-on-rewindow', 'REG5-target-fills-at-limit', 'CLK1', 'CLK2', 'STY1'];
 const byId = Object.fromEntries(results.map(r => [r.id, r.status]));
 const pass = order.filter(id => byId[id] === 'PASS').length, fail = order.filter(id => byId[id] === 'FAIL').length, sk = order.filter(id => byId[id] === 'SKIP').length, missing = order.filter(id => !(id in byId));
 console.log(`\n${pass} PASS / ${fail} FAIL / ${sk} SKIP out of ${order.length}${missing.length ? ` (missing: ${missing.join(',')})` : ''}`);
