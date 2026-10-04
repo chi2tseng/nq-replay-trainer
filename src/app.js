@@ -3589,41 +3589,53 @@ function setShowTrades(on) {
 // data/pats_reviews.json = {days: {"YYYY-MM-DD": [{id, t, d, k}]}} built by scripts/pats_reviews.py from the @PATsTrading channel.
 // On ES / MES days that have one, the toolbar shows a PATs button; it opens a floating YouTube player that follows the replay
 // to the next day. Hidden in the random-day game and the quiz (an episode title carries its date).
-var patsIdx = null, patsDay = null, patsOpen = false;   // var: renderLive may run before this line during start-up
-fetch('data/pats_reviews.json').then(r => r.ok ? r.json() : null).then(j => { patsIdx = (j && j.days) || null; patsSync(); }).catch(() => {});
+// Sources share one player: PATs (Mack, a review every trading day) and Thomas Wade (data/wade_reviews.json, dated by matching the
+// chart in each video to ES data — scripts in D:\PATs\wade). Each source has its own toolbar button; the player shows one at a time.
+var REV_SRC = {   // var + guard: renderLive can call patsSync before this line runs at start-up
+  pats: { file: 'data/pats_reviews.json', btn: 'btnPats', who: "Mack's PATs review", none: 'No PATs review for this day' },
+  wade: { file: 'data/wade_reviews.json', btn: 'btnWade', who: "Thomas Wade's video", none: 'No Thomas Wade video for this day' },
+};
+var patsIdx = null, patsDay = null, patsOpen = false, revIdx = {}, revSrc = 'pats';   // var: renderLive may run before this line during start-up
+for (const [k, s] of Object.entries(REV_SRC)) fetch(s.file).then(r => r.ok ? r.json() : null).then(j => { revIdx[k] = (j && j.days) || null; if (k === 'pats') patsIdx = revIdx[k]; patsSync(); }).catch(() => {});
 function curDayKey() { return tickMode ? curTickDay : ((sessions[currentSessionIdx()] || {}).key || null); }
 function patsAllowed() { return !rndMode && !quizMode && /^M?ES$/.test(INSTR.symbol); }
-function patsVids(day) { return (patsIdx && day && patsIdx[day]) || []; }
+function patsVids(day, src = revSrc) { const ix = revIdx[src]; return (ix && day && ix[day]) || []; }
 function patsSync() {
-  const b = $('btnPats'); if (!b) return;
-  const ok = patsAllowed(), day = curDayKey(), vids = ok ? patsVids(day) : [];
-  b.hidden = !ok || !patsIdx;   // always visible on ES / MES so it can be found; dimmed on days without a review
-  b.classList.toggle('none', !vids.length);
-  b.title = vids.length ? `Mack's PATs review of this day: ${vids[0].t}` : 'No PATs review for this day';
-  b.classList.toggle('on', patsOpen && !!vids.length);
+  if (!REV_SRC) return;
+  const ok = patsAllowed(), day = curDayKey();
+  for (const [k, s] of Object.entries(REV_SRC)) {
+    const b = $(s.btn); if (!b) continue;
+    const vids = ok ? patsVids(day, k) : [];
+    b.hidden = !ok || !revIdx[k];   // always visible on ES / MES so it can be found; dimmed on days without a video
+    b.classList.toggle('none', !vids.length);
+    b.title = vids.length ? `${s.who} of this day: ${vids[0].t}` : s.none;
+    const on = patsOpen && revSrc === k; b.classList.toggle('on', on && !!vids.length); b.setAttribute('aria-expanded', String(on));
+  }
   if (!ok) { if (patsOpen) patsClose(); return; }
-  if (patsOpen && day !== patsDay) patsShow(day);   // the replay moved to another day: follow it
+  if (patsOpen && day !== patsDay) patsShow(day, revSrc);   // the replay moved to another day: follow it
 }
-function patsShow(day) {
-  const vids = patsVids(day), pick = $('patsPick');
+function patsShow(day, src = revSrc) {
+  revSrc = src; const vids = patsVids(day, src), pick = $('patsPick');
   patsDay = day; patsOpen = true; $('patsPanel').hidden = false;
-  pick.innerHTML = vids.map((v, i) => `<option value="${i}">${escHtml((v.k === 'live' ? 'Live: ' : '') + v.t)}</option>`).join('');
+  pick.innerHTML = vids.map((v, i) => `<option value="${i}">${escHtml(v.t)}</option>`).join('');
   pick.hidden = vids.length < 2;
   patsLoad(vids[0] || null);
-  $('btnPats').classList.add('on'); $('btnPats').setAttribute('aria-expanded', 'true');
+  patsSync();
 }
 function patsLoad(v) {
-  $('patsTitle').textContent = v ? v.t : 'No PATs review for this day';
+  const s = REV_SRC[revSrc];
+  $('patsTitle').textContent = v ? `${revSrc === 'wade' ? 'Wade' : 'PATs'}: ${v.t}` : s.none;
+  $('patsEmpty').textContent = s.none;
   $('patsEmpty').hidden = !!v; $('patsFrame').hidden = !v;
-  const src = v ? `https://www.youtube-nocookie.com/embed/${v.id}?rel=0&modestbranding=1&vq=hd1080` : 'about:blank';   // vq = quality hint only: YouTube no longer lets embeds force quality, it picks by player size (bigger player -> higher quality)
+  const src = v ? `https://www.youtube-nocookie.com/embed/${v.id}?rel=0&modestbranding=1&vq=hd1080${v.at ? '&start=' + v.at : ''}` : 'about:blank';   // vq = quality hint only (YouTube picks by player size); at = where the matched chart appears
   if ($('patsFrame').getAttribute('src') !== src) $('patsFrame').setAttribute('src', src);
-  const a = $('patsOpen'); a.hidden = !v; if (v) a.href = `https://www.youtube.com/watch?v=${v.id}`;
+  const a = $('patsOpen'); a.hidden = !v; if (v) a.href = `https://www.youtube.com/watch?v=${v.id}${v.at ? '&t=' + v.at + 's' : ''}`;
 }
 function patsClose() {
   const hadFocus = $('patsPanel').contains(document.activeElement);
   patsOpen = false; patsDay = null; $('patsPanel').hidden = true; $('patsFrame').setAttribute('src', 'about:blank');
-  const b = $('btnPats'); b.classList.remove('on'); b.setAttribute('aria-expanded', 'false');
-  if (hadFocus && !b.hidden) b.focus();   // keyboard users land back on the button, not at the top of the page
+  patsSync();
+  const b = $(REV_SRC[revSrc].btn); if (hadFocus && b && !b.hidden) b.focus();   // keyboard users land back on the button, not at the top of the page
 }
 function patsPlace() {   // restore the last position / size, clamped to this window
   const b = loadJSON('rt_pats_box', null), p = $('patsPanel'); if (!b) return;
@@ -3634,7 +3646,7 @@ function patsSave() { const p = $('patsPanel'); if (p.hidden) return; const r = 
 (function patsWire() {
   const p = $('patsPanel'), head = $('patsHead'); if (!p) return;
   patsPlace();
-  $('btnPats').onclick = () => { if (patsOpen) patsClose(); else patsShow(curDayKey()); };
+  for (const [k, sr] of Object.entries(REV_SRC)) { const btn = $(sr.btn); if (btn) btn.onclick = () => { if (patsOpen && revSrc === k) patsClose(); else patsShow(curDayKey(), k); }; }
   $('patsClose').onclick = patsClose;
   $('patsPick').onchange = (e) => { patsLoad(patsVids(patsDay)[+e.target.value] || null); e.target.blur(); };
   let drag = null;

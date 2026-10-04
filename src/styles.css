@@ -717,7 +717,7 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 
 /* ===================== Indicators dropdown (top toolbar) ===================== */
 .tb-ind{ position:relative; }
-#btnIndicators.tb-btn, #btnMtf.tb-btn, #btnPats.tb-btn{ display:inline-flex; align-items:center; gap:5px; padding:5px 8px; line-height:1; }
+#btnIndicators.tb-btn, #btnMtf.tb-btn, #btnPats.tb-btn, #btnWade.tb-btn{ display:inline-flex; align-items:center; gap:5px; padding:5px 8px; line-height:1; }
 #btnIndicators .material-symbols-outlined{ font-size:18px; }
 #btnIndicators.active{ background:var(--brand); border-color:var(--brand); color:var(--on-brand); }
 #btnIndicators.active .material-symbols-outlined{ color:var(--on-brand); }
@@ -1102,8 +1102,8 @@ button.bs-stop.buy:hover:not(:disabled), button.bs-stop.sell:hover:not(:disabled
 @media (max-width:1499px){
   #toolbar{ padding-left:6px; padding-right:6px; }
   #symbol{ display:none; }                               /* "NQ" duplicates the #dataSelect value (labels are NQ / ES / MNQ / MES) */
-  #btnMtf.tb-btn, #btnIndicators.tb-btn, #btnPats.tb-btn{ font-size:0; gap:0; }         /* icon + title only; the icon keeps its own font-size */
-  #btnMtf .material-symbols-outlined, #btnPats .material-symbols-outlined{ font-size:18px; }
+  #btnMtf.tb-btn, #btnIndicators.tb-btn, #btnPats.tb-btn, #btnWade.tb-btn{ font-size:0; gap:0; }         /* icon + title only; the icon keeps its own font-size */
+  #btnMtf .material-symbols-outlined, #btnPats .material-symbols-outlined, #btnWade .material-symbols-outlined{ font-size:18px; }
   #startSlider{ --sl-w:clamp(80px, calc(80px + (100vw - 1366px) * .5), 240px); } /* 80px at 1366 -> 146px at 1499 */
 }
 
@@ -1220,3 +1220,9 @@ input, select, button{ -webkit-tap-highlight-color:transparent; }
 .ds-defs .mini[disabled]{opacity:.45;cursor:default}
 .pats-head:focus-visible{outline:2px solid var(--sel);outline-offset:-2px}
 @media (prefers-reduced-motion: reduce){.pats-head,.pats-grip{transition:none}}
+#btnWade[hidden]{display:none}
+#btnWade.on{ background:var(--brand); border-color:var(--brand); color:var(--on-brand); }
+#btnWade .material-symbols-outlined{ color:var(--brand); }
+#btnWade.on .material-symbols-outlined{ color:var(--on-brand); }
+#btnWade.none{ opacity:.45; }
+#btnWade.none .material-symbols-outlined{ color:var(--dim); }
