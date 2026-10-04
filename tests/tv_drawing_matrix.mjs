@@ -990,6 +990,22 @@ try {
     report('CLK2', !afterDrag.pending && afterDrag.n === 2 && afterDrag.tool === 'tl', `press-drag-release with the trend-line tool armed: no point placed(${!afterDrag.pending}), drawings ${afterDrag.n}, tool still armed(${afterDrag.tool})`);
   }
 
+  // ================= DEF1 Settings > "Save as default" makes new drawings of that tool start with the saved style; "Reset default" forgets it =================
+  await clear();
+  {
+    const xa = await barX(k), ya = geo.H * 0.3;
+    await drawTL(xa, ya, xa + 140, ya + 40); await clickChart(geo.W * 0.5, geo.H * 0.95);
+    await page.evaluate(() => { const d = drawings[0]; Object.assign(d.style, { color: '#ff00ff', width: 2, opacity: 0.75, dash: 1 }); d.extend = 'right'; openDrawSettings(d, 'style'); });
+    await page.click('#dsSaveDef'); await page.evaluate(() => closeDrawSettings());
+    await drawTL(xa, ya + 80, xa + 140, ya + 120); await clickChart(geo.W * 0.5, geo.H * 0.95);
+    const a = await page.evaluate(() => { const d = drawings[1]; return { ...d.style, extend: d.extend, saved: JSON.parse(localStorage.getItem('rt_drw_defaults') || '{}').tl }; });
+    await page.evaluate(() => openDrawSettings(drawings[1], 'style')); await page.click('#dsResetDef'); await page.evaluate(() => closeDrawSettings());
+    await drawTL(xa, ya + 160, xa + 140, ya + 200); await clickChart(geo.W * 0.5, geo.H * 0.95);
+    const b = await page.evaluate(() => { const d = drawings[2]; return { ...d.style, extend: d.extend || 'none', saved: JSON.parse(localStorage.getItem('rt_drw_defaults') || '{}').tl || null }; });
+    const ok = a.color === '#ff00ff' && a.width === 2 && a.opacity === 0.75 && a.dash === 1 && a.extend === 'right' && b.color === '#000000' && b.width === 1.5 && b.extend === 'none' && b.saved === null;
+    report('DEF1', ok, `after Save as default: new tl ${a.color} ${a.width}px ${a.opacity * 100}% dash ${a.dash} extend ${a.extend}; after Reset default: new tl ${b.color} ${b.width}px extend ${b.extend}, stored default ${b.saved === null ? 'gone' : 'still there'}`);
+  }
+
   // ================= STY1 new trend lines / trend channels default to 0.5 px light blue at 50% (user 2026-10-04) =================
   await clear();
   {
@@ -1102,7 +1118,7 @@ try {
   await browser.close();
 }
 
-const order = ['G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G15B', 'G16', 'G17', 'G18', 'G19', 'G20', 'G21', 'G22', 'G23', 'G24', 'G25', 'G26', 'G27', 'G28', 'G29', 'G30', 'G31', 'G32', 'G33', 'G34', 'G35', 'G36', 'G37', 'G38', 'G39', 'G40', 'G41', 'G42', 'G43', 'G44', 'G45', 'G46', 'G47', 'G48', 'NT1', 'NT2', 'NT3', 'NT4', 'NT5', 'NT6', 'NT7', 'NT8', 'NT9', 'NT10', 'NT11', 'NT12', 'NT13', 'NT14', 'NT15', 'NT16', 'NT17', 'NT18', 'NT19', 'NT20', 'REG1-no-render-err', 'REG2-trading-hotkeys', 'REG3-hide-trades-unchanged', 'REG4-no-drift-on-rewindow', 'REG5-target-fills-at-limit', 'CLK1', 'CLK2', 'STY1'];
+const order = ['G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G15B', 'G16', 'G17', 'G18', 'G19', 'G20', 'G21', 'G22', 'G23', 'G24', 'G25', 'G26', 'G27', 'G28', 'G29', 'G30', 'G31', 'G32', 'G33', 'G34', 'G35', 'G36', 'G37', 'G38', 'G39', 'G40', 'G41', 'G42', 'G43', 'G44', 'G45', 'G46', 'G47', 'G48', 'NT1', 'NT2', 'NT3', 'NT4', 'NT5', 'NT6', 'NT7', 'NT8', 'NT9', 'NT10', 'NT11', 'NT12', 'NT13', 'NT14', 'NT15', 'NT16', 'NT17', 'NT18', 'NT19', 'NT20', 'REG1-no-render-err', 'REG2-trading-hotkeys', 'REG3-hide-trades-unchanged', 'REG4-no-drift-on-rewindow', 'REG5-target-fills-at-limit', 'CLK1', 'CLK2', 'DEF1', 'STY1'];
 const byId = Object.fromEntries(results.map(r => [r.id, r.status]));
 const pass = order.filter(id => byId[id] === 'PASS').length, fail = order.filter(id => byId[id] === 'FAIL').length, sk = order.filter(id => byId[id] === 'SKIP').length, missing = order.filter(id => !(id in byId));
 console.log(`\n${pass} PASS / ${fail} FAIL / ${sk} SKIP out of ${order.length}${missing.length ? ` (missing: ${missing.join(',')})` : ''}`);

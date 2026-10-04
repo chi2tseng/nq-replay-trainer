@@ -1216,3 +1216,5 @@ input, select, button{ -webkit-tap-highlight-color:transparent; }
 .pats-panel.resizing #patsFrame{pointer-events:none}
 .pats-panel:hover .pats-grip,.pats-panel.resizing .pats-grip{opacity:1}
 @media (hover:none){.pats-grip{opacity:1}}
+.ds-defs{display:flex;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+.ds-defs .mini[disabled]{opacity:.45;cursor:default}

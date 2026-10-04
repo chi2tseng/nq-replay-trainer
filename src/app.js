@@ -1395,13 +1395,13 @@ const drawingsPrimitive = {
               ctx.save(); ctx.lineWidth = 1.5;
               if (tool === 'channel' && pendingPt2) {   // clicks 2->3: fixed trend line + parallel rail starting at the cursor
                 const x2c = X(pendingPt2.t), y2c = Y(pendingPt2.p);
-                if (x2c != null && y2c != null) { ctx.strokeStyle = hexA(LINE_DEFAULT.color, LINE_DEFAULT.opacity); ctx.lineWidth = LINE_DEFAULT.width; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2c, y2c); ctx.moveTo(x2, y2); ctx.lineTo(x2 + x2c - x1, y2 + y2c - y1); ctx.stroke(); dbg.preview.rails = 2; }
+                if (x2c != null && y2c != null) { const ts = toolStyle('channel'); ctx.strokeStyle = hexA(ts.color, ts.opacity); ctx.lineWidth = ts.width || 1.5; ctx.setLineDash(dashArr(ts.dash)); ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2c, y2c); ctx.moveTo(x2, y2); ctx.lineTo(x2 + x2c - x1, y2 + y2c - y1); ctx.stroke(); dbg.preview.rails = 2; }
               } else if (tool === 'fib' || tool === 'measure') {   // these renderers need {t,p} for their level labels / delta text: hand them a throw-away p2
                 const tmp = { type: tool, p1: pendingPt, p2: { t: xToFreeTime(x2), p: candle.coordinateToPrice(y2) }, color: tool === 'fib' ? '#CC4400' : '' };
                 if (tmp.p2.t != null && tmp.p2.p != null) { if (tool === 'fib') drawFib(ctx, tmp, X, Y, W); else drawMeasure(ctx, tmp, X, Y, false, H); }
               } else {
-                const lineTool = tool === 'tl' || tool === 'channel';
-                ctx.strokeStyle = tool === 'box' ? '#6495ED' : lineTool ? hexA(LINE_DEFAULT.color, LINE_DEFAULT.opacity) : '#000000'; ctx.fillStyle = ctx.strokeStyle; if (lineTool) ctx.lineWidth = LINE_DEFAULT.width;   // same look as the finished object (TV previews with the final style)
+                const ts = toolStyle(tool);
+                ctx.strokeStyle = ts ? hexA(ts.color, ts.opacity) : tool === 'box' ? '#6495ED' : '#000000'; ctx.fillStyle = ctx.strokeStyle; if (ts) { ctx.lineWidth = ts.width || 1.5; ctx.setLineDash(dashArr(ts.dash)); }   // same look as the finished object (TV previews with the final style)
                 if (tool === 'box') { const x = Math.min(x1, x2), y = Math.min(y1, y2), w = Math.abs(x2 - x1), h = Math.abs(y2 - y1); ctx.globalAlpha = 0.12; ctx.fillRect(x, y, w, h); ctx.globalAlpha = 1; ctx.strokeRect(x, y, w, h); }
                 else { ctx.beginPath(); ctx.moveTo(x1, y1); if (tool === 'ray') { const e = rayEnd(x1, y1, x2, y2, W, H); ctx.lineTo(e.x, e.y); } else ctx.lineTo(x2, y2); ctx.stroke(); }
               }
@@ -1450,6 +1450,15 @@ function arrowHead(ctx, fx, fy, tx, ty, lw) {   // filled triangle at (tx,ty) po
 const DASHES = [[], [6, 4], [2, 3]];   // style.dash: 0 solid, 1 dashed, 2 dotted
 function dashArr(v) { return DASHES[v | 0] || []; }
 const LINE_DEFAULT = { color: '#03A9F4', width: 0.5, dash: 0, opacity: 0.5 };   // new trend lines / trend channels: 0.5 px light blue at 50% (user 2026-10-04); other tools keep their own defaults
+let drwDefaults = loadJSON('rt_drw_defaults', {}) || {};   // per-tool "Save as default" (TV Template -> Save as default): {type: {style, props}}
+const DEF_PROPS = ['extend', 'arrowStart', 'arrowEnd', 'levels', 'extendLeft', 'extendRight', 'middleLine', 'fibLevels', 'reverse'];
+function applyDrwDefault(d) {   // a freshly placed drawing takes its tool's saved default (style + options)
+  const def = drwDefaults[d.type]; if (!def) return d;
+  d.style = { ...d.style, ...def.style }; if (def.style && def.style.color) d.color = def.style.color;
+  for (const k of DEF_PROPS) if (def.props && k in def.props) d[k] = JSON.parse(JSON.stringify(def.props[k]));
+  return d;
+}
+function toolStyle(t) { return (drwDefaults[t] && drwDefaults[t].style) || ((t === 'tl' || t === 'channel') ? LINE_DEFAULT : null); }   // what the rubber-band preview should look like
 function hexA(hex, a) { const m = /^#([0-9a-f]{6})$/i.exec(hex || ''); if (!m || a == null || a >= 1) return hex; const n = parseInt(m[1], 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; }   // style.color stays plain hex (the colour pickers need it); opacity is applied here
 function styleColor(d, fallback) { return hexA((d.style && d.style.color) || d.color || fallback || '#000000', d.style && d.style.opacity); }
 function applyStyle(ctx, d) { const s = d.style || {}; ctx.strokeStyle = ctx.fillStyle = styleColor(d); ctx.lineWidth = s.width || 1.5; ctx.setLineDash(dashArr(s.dash)); }
@@ -1566,13 +1575,13 @@ function handleDrawClick(t, time, price, y, ev) {   // time = free epoch seconds
   if (t === 'channel') {   // NT8 Trend Channel: click 1 trend start, click 2 trend end, click 3 = point the parallel passes through (ParallelStartAnchor)
     if (!pendingPt) { pendingPt = { t: time, p: price }; pendingPt2 = null; previewXY = null; repaintOverlays(); return; }
     if (!pendingPt2) { pendingPt2 = { t: time, p: price }; previewXY = null; repaintOverlays(); return; }
-    snapshot(); drawings.push(newDrawing({ type: 'channel', p1: pendingPt, p2: pendingPt2, p3: { t: time, p: price }, levels: [], color: LINE_DEFAULT.color, style: { ...LINE_DEFAULT } }));
+    snapshot(); drawings.push(applyDrwDefault(newDrawing({ type: 'channel', p1: pendingPt, p2: pendingPt2, p3: { t: time, p: price }, levels: [], color: LINE_DEFAULT.color, style: { ...LINE_DEFAULT } })));
     pendingPt = null; pendingPt2 = null; previewXY = null; selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return;
   }
   if (pendingPt || t === 'hl' || t === 'vline' || t === 'hray' || t === 'cross' || t === 'rr') snapshot();   // G21: every branch below that pushes a drawing (the first click of a 2-point tool only arms pendingPt)
-  if (t === 'hl') { drawings.push(newDrawing({ type: 'hl', p1: { t: time, p: price }, color: '#000000' })); selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return; }
-  if (t === 'vline') { drawings.push(newDrawing({ type: 'vline', p1: { t: time }, color: '#000000' })); selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return; }   // G37: time only
-  if (t === 'hray' || t === 'cross') { drawings.push(newDrawing({ type: t, p1: { t: time, p: price }, color: '#000000' })); selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return; }   // G36 / G38: one point
+  if (t === 'hl') { drawings.push(applyDrwDefault(newDrawing({ type: 'hl', p1: { t: time, p: price }, color: '#000000' }))); selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return; }
+  if (t === 'vline') { drawings.push(applyDrwDefault(newDrawing({ type: 'vline', p1: { t: time }, color: '#000000' }))); selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return; }   // G37: time only
+  if (t === 'hray' || t === 'cross') { drawings.push(applyDrwDefault(newDrawing({ type: t, p1: { t: time, p: price }, color: '#000000' }))); selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return; }   // G36 / G38: one point
   if (t === 'rr') {   // Long/Short position — ONE click: entry here, default risk below, target at 2R (then drag to adjust)
     const entry = price, riskT = rrDefaultRiskTicks();
     const stop = rnd(entry - riskT * TICK), target = rnd(entry + riskT * RR_DEFAULT * TICK);
@@ -1582,7 +1591,7 @@ function handleDrawClick(t, time, price, y, ev) {   // time = free epoch seconds
     selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return;
   }
   if (!pendingPt) { pendingPt = { t: time, p: price }; previewXY = null; repaintOverlays(); return; }   // TV shows no hint toast; the rubber-band preview is the cue
-  drawings.push(newDrawing({ type: t, p1: pendingPt, p2: { t: time, p: price }, color: t === 'box' ? '#6495ED' : t === 'fib' ? '#CC4400' : t === 'measure' ? '' : t === 'tl' ? LINE_DEFAULT.color : '#000000', ...(t === 'tl' ? { style: { ...LINE_DEFAULT } } : {}) }));   // measure: '' = auto green/red until recoloured (G17)
+  drawings.push(applyDrwDefault(newDrawing({ type: t, p1: pendingPt, p2: { t: time, p: price }, color: t === 'box' ? '#6495ED' : t === 'fib' ? '#CC4400' : t === 'measure' ? '' : t === 'tl' ? LINE_DEFAULT.color : '#000000', ...(t === 'tl' ? { style: { ...LINE_DEFAULT } } : {}) })));   // measure: '' = auto green/red until recoloured (G17)
   pendingPt = null; previewXY = null; selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw();
 }
 function clearDrawings() {   // wipe everything drawn with the toolbar: lines / rays / h-lines / boxes / fib / measure / R:R AND the up/down/long/short arrow markers
@@ -2203,6 +2212,8 @@ function openDrawSettings(d, tab) {
   if (d.type === 'fib') { const lv = Array.isArray(d.fibLevels) ? d.fibLevels : FIB_DEFAULT; style += `<div class="ds-gh">Levels</div><div class="ds-levels">${FIB_LEVELS.map(f => chk('fib:' + f.lv, f.lv, lv.some(v => Math.abs(v - f.lv) < 1e-6))).join('')}</div>` + chk('d:reverse', 'Reverse', d.reverse) + chk('d:extendLeft', 'Extend left', d.extendLeft) + chk('d:extendRight', 'Extend right', d.extendRight); }
   if (d.type === 'channel') style += `<label class="ds-row ds-num"><span>Extend</span><select data-k="d:extend">${['none', 'left', 'right', 'both'].map(v => `<option value="${v}" ${(d.extend || 'none') === v ? 'selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}</select></label>` +
     `<label class="ds-row ds-num"><span>Levels %</span><input type="text" data-k="lv:levels" value="${(d.levels || []).join(', ')}" placeholder="50"></label>`;   // NT: no arrows on a channel
+  const TOOL_NAME = { tl: 'trend lines', ray: 'rays', hl: 'horizontal lines', hray: 'horizontal rays', vline: 'vertical lines', cross: 'cross lines', box: 'rectangles', fib: 'fib retracements', measure: 'measures', rr: 'risk/reward', channel: 'trend channels' }[d.type] || d.type;
+  style += `<div class="ds-defs"><button type="button" class="mini" id="dsSaveDef" title="New ${TOOL_NAME} will start with this style">Save as default</button><button type="button" class="mini" id="dsResetDef" ${drwDefaults[d.type] ? '' : 'disabled'} title="Forget the saved default for ${TOOL_NAME}">Reset default</button></div>`;
   let coords = '';
   if (d.type === 'hl') coords = pt('Price', 'p1', false, true);
   else if (d.type === 'vline') coords = pt('Point', 'p1', true, false);
@@ -2216,6 +2227,12 @@ function openDrawSettings(d, tab) {
     `<div class="ds-body"><div class="ds-pane" data-pane="style" ${dsTab === 'style' ? '' : 'hidden'}>${style}</div><div class="ds-pane" data-pane="coords" ${dsTab === 'coords' ? '' : 'hidden'}>${coords}</div><div class="ds-pane" data-pane="vis" ${dsTab === 'vis' ? '' : 'hidden'}>${vis}</div></div></div>`;
   const el = $('drawSettings'); el.classList.add('open'); modalOpened(el);
   $('dsClose').onclick = closeDrawSettings;
+  $('dsSaveDef').onclick = () => {
+    const props = {}; for (const k of DEF_PROPS) if (d[k] !== undefined) props[k] = JSON.parse(JSON.stringify(d[k]));
+    drwDefaults[d.type] = { style: { ...d.style }, props }; saveJSON('rt_drw_defaults', drwDefaults);
+    $('dsResetDef').disabled = false; toast('Saved: new ' + TOOL_NAME + ' will look like this');
+  };
+  $('dsResetDef').onclick = () => { delete drwDefaults[d.type]; saveJSON('rt_drw_defaults', drwDefaults); $('dsResetDef').disabled = true; toast('Default for ' + TOOL_NAME + ' reset'); };
   el.querySelectorAll('.ds-tab').forEach(b => { b.onclick = () => { dsTab = b.dataset.tab; el.querySelectorAll('.ds-tab').forEach(x => x.classList.toggle('active', x === b)); el.querySelectorAll('.ds-pane').forEach(p => { p.hidden = p.dataset.pane !== dsTab; }); }; });
   el.querySelectorAll('[data-k]').forEach(inp => { inp[inp.type === 'color' || inp.type === 'number' ? 'oninput' : 'onchange'] = () => applyDrawSetting(d, inp.dataset.k, inp.type === 'checkbox' ? inp.checked : inp.value); });
 }
