@@ -257,7 +257,7 @@ try {
     await clickChart(geo.W * 0.5, geo.H * 0.9); await hoverChart(20, 20);
     let dbg = await paint();
     const noSel = await page.evaluate(() => ({ sel: selDrawing, n: selSet.size }));
-    const inkP1Unsel = await page.evaluate(([x, y]) => window.__ptInk('chart', x - 2, y + 2, 0) || window.__ptInk('chart', x + 2, y - 2, 0), [g.x1, g.y1]);
+    const inkP1Unsel = await page.evaluate(([x, y]) => window.__colorNear('chart', x - 2, y + 2, 'b > 180 && r < 140', 0) || window.__colorNear('chart', x + 2, y - 2, 'b > 180 && r < 140', 0), [g.x1, g.y1]);   // handle-blue, like inkP1Sel below: a plain ink test fired on whatever candle sits under p1 that day
     const handlesUnsel = dbg.handles;
     await hoverChart((g.x1 + g.x2) / 2, (g.y1 + g.y2) / 2);
     const hov = await page.evaluate(() => ({ h: hoverDrawing && hoverDrawing.type, handles: window.__drwDbg.handles }));
@@ -279,7 +279,7 @@ try {
     const mSel = await page.evaluate(([x, y]) => window.__colorNear('chart', x - 2, y - 2, 'b > 180 && r < 140', 0), [m.x1, m.y1]);
     await page.evaluate(() => { selectDrawing(drawings[1], false); repaintOverlays(); }); await paint();
     const rSel = await page.evaluate(([x, y]) => window.__colorNear('chart', x - 2, y - 2, 'b > 180 && r < 140', 0), [rrXa, rrYt]);
-    report('G12', tlOk && !mUn && !rUn && mSel && rSel, `tl: no handles unselected(${handlesUnsel === 0}), handles on hover(${hov.handles}) and on select(${dbg.handles}); measure/rr: handle ink appears only after select (measure ${mUn}->${mSel}, rr ${rUn}->${rSel})`);
+    report('G12', tlOk && !mUn && !rUn && mSel && rSel, `tl: no handles unselected(${handlesUnsel === 0}, blue at p1 ${inkP1Unsel}->${inkP1Sel}), handles on hover(${hov.handles}) and on select(${dbg.handles}); measure/rr: handle ink appears only after select (measure ${mUn}->${mSel}, rr ${rUn}->${rSel})`);
   }
 
   // ================= G13 floating toolbar =================
@@ -565,9 +565,20 @@ try {
     const leftBefore = await page.evaluate(([x, y]) => window.__ptInk('chart', x, y, 1), [g.x1 - 60, yAt(g.x1 - 60)]);
     await page.evaluate(() => { drawings[0].extend = 'both'; drawings[0].arrowEnd = true; saveJSON('rt_drawings', drawings); repaintOverlays(); }); await paint();
     const leftAfter = await page.evaluate(([x, y]) => ({ ink: window.__ptInk('chart', x, y, 1), hit: drawingAt(x, y) && drawingAt(x, y).type }), [g.x1 - 60, yAt(g.x1 - 60)]);
-    const a = Math.atan2(g.y2 - g.y1, g.x2 - g.x1), w = Math.PI / 7, wing = [g.x2 - 8 * Math.cos(a - 0.6 * w), g.y2 - 8 * Math.sin(a - 0.6 * w)];
-    const arrow = await page.evaluate(([x, y]) => window.__ptInk('chart', x, y, 0), wing);
-    report('G34', !leftBefore && leftAfter.ink && leftAfter.hit === 'tl' && arrow, `no extend: nothing left of p1(${!leftBefore}); extend='both': line + hit-test both extend left(${leftAfter.ink}/${leftAfter.hit}); arrowEnd draws a wing at p2(${arrow})`);
+    // arrowhead probe: the renderer puts the head at the VISIBLE end of the (extended) segment (tlSeg), not at p2. Probe 4 points inside
+    // the head, 3 px either side of the shaft (the 1.5 px line itself never reaches them), dark pixels only (candles are green / red).
+    const arrowPts = await page.evaluate(() => {
+      const d = drawings[0], sg = tlSeg(d, drawX(d.p1.t), drawY(d.p1.p), drawX(d.p2.t), drawY(d.p2.p), chart.timeScale().width(), paneHeight());
+      const L = Math.hypot(sg.bx - sg.ax, sg.by - sg.ay), ux = (sg.bx - sg.ax) / L, uy = (sg.by - sg.ay) / L, nx = -uy, ny = ux;
+      return [[9, 3], [9, -3], [8, 2.5], [8, -2.5]].map(([r, o]) => [Math.round(sg.bx - r * ux + o * nx), Math.round(sg.by - r * uy + o * ny)]);
+    });
+    const darkCount = () => page.evaluate((pts) => pts.filter(([x, y]) => window.__colorNear('chart', x, y, 'r < 90 && g < 90 && b < 90', 0)).length, arrowPts);
+    await page.evaluate(() => { drawings[0].arrowEnd = false; repaintOverlays(); }); await paint();
+    const darkNoArrow = await darkCount();
+    await page.evaluate(() => { drawings[0].arrowEnd = true; saveJSON('rt_drawings', drawings); repaintOverlays(); }); await paint();
+    const darkArrow = await darkCount();
+    const arrow = darkArrow >= 3 && darkNoArrow === 0;   // the head fills them, and nothing else there is dark (negative control)
+    report('G34', !leftBefore && leftAfter.ink && leftAfter.hit === 'tl' && arrow, `no extend: nothing left of p1(${!leftBefore}); extend='both': line + hit-test both extend left(${leftAfter.ink}/${leftAfter.hit}); arrowEnd draws a head at the visible end(${arrow}: ${darkArrow}/4 dark with it, ${darkNoArrow}/4 without)`);
   }
 
   // ================= G35 Ray with dx===0 (same-bar points) still extends vertically & stays clickable =================
