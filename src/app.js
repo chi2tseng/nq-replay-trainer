@@ -294,6 +294,9 @@ $('chart').addEventListener('wheel', (e) => {
   pxFix.half = e.deltaY < 0 ? Math.max(TICK * 2, pxFix.half / PX_ZOOM_STEP) : pxFix.half * PX_ZOOM_STEP;
   applyPriceZoom();
 }, { capture: true, passive: false });
+// LWC's own price-axis drag scaling turns autoScale off behind our back: adopt that view as MANUAL, so a later timeframe / day
+// switch keeps it instead of re-fitting (user 2026-10-04: "調整過上下高低後一移動還是會autofit")
+window.addEventListener('pointerup', () => requestAnimationFrame(() => { if (!pxFix && chart.priceScale('right').options().autoScale === false && freezePrice()) applyPriceZoom(); }));
 // double-click the price axis = auto-fit (TradingView behaviour)
 $('chart').addEventListener('dblclick', (e) => { if (overPriceAxis(e.clientX)) fitChart(); });
 
