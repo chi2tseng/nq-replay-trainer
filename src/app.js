@@ -3550,8 +3550,70 @@ function setShowTrades(on) {
 }
 
 // ---------- rendering ----------
+// ---------- PATs (Mack) daily review videos ----------
+// data/pats_reviews.json = {days: {"YYYY-MM-DD": [{id, t, d, k}]}} built by scripts/pats_reviews.py from the @PATsTrading channel.
+// On ES / MES days that have one, the toolbar shows a PATs button; it opens a floating YouTube player that follows the replay
+// to the next day. Hidden in the random-day game and the quiz (an episode title carries its date).
+var patsIdx = null, patsDay = null, patsOpen = false;   // var: renderLive may run before this line during start-up
+fetch('data/pats_reviews.json').then(r => r.ok ? r.json() : null).then(j => { patsIdx = (j && j.days) || null; patsSync(); }).catch(() => {});
+function curDayKey() { return tickMode ? curTickDay : ((sessions[currentSessionIdx()] || {}).key || null); }
+function patsAllowed() { return !rndMode && !quizMode && /^M?ES$/.test(INSTR.symbol); }
+function patsVids(day) { return (patsIdx && day && patsIdx[day]) || []; }
+function patsSync() {
+  const b = $('btnPats'); if (!b) return;
+  const ok = patsAllowed(), day = curDayKey(), vids = ok ? patsVids(day) : [];
+  b.hidden = !vids.length;
+  if (vids.length) b.title = `Mack's PATs review of this day: ${vids[0].t}`;
+  b.classList.toggle('on', patsOpen && !!vids.length);
+  if (!ok) { if (patsOpen) patsClose(); return; }
+  if (patsOpen && day !== patsDay) patsShow(day);   // the replay moved to another day: follow it
+}
+function patsShow(day) {
+  const vids = patsVids(day), pick = $('patsPick');
+  patsDay = day; patsOpen = true; $('patsPanel').hidden = false;
+  pick.innerHTML = vids.map((v, i) => `<option value="${i}">${escHtml((v.k === 'live' ? 'Live: ' : '') + v.t)}</option>`).join('');
+  pick.hidden = vids.length < 2;
+  patsLoad(vids[0] || null);
+  $('btnPats').classList.add('on');
+}
+function patsLoad(v) {
+  $('patsTitle').textContent = v ? v.t : 'No PATs review for this day';
+  $('patsEmpty').hidden = !!v; $('patsFrame').hidden = !v;
+  const src = v ? `https://www.youtube-nocookie.com/embed/${v.id}?rel=0&modestbranding=1` : 'about:blank';
+  if ($('patsFrame').getAttribute('src') !== src) $('patsFrame').setAttribute('src', src);
+  const a = $('patsOpen'); a.hidden = !v; if (v) a.href = `https://www.youtube.com/watch?v=${v.id}`;
+}
+function patsClose() { patsOpen = false; patsDay = null; $('patsPanel').hidden = true; $('patsFrame').setAttribute('src', 'about:blank'); $('btnPats').classList.remove('on'); }
+function patsPlace() {   // restore the last position / size, clamped to this window
+  const b = loadJSON('rt_pats_box', null), p = $('patsPanel'); if (!b) return;
+  const w = Math.min(b.w, innerWidth - 16), h = Math.min(b.h, innerHeight - 16);
+  Object.assign(p.style, { width: w + 'px', height: h + 'px', left: Math.max(0, Math.min(b.x, innerWidth - w)) + 'px', top: Math.max(0, Math.min(b.y, innerHeight - h)) + 'px', right: 'auto', bottom: 'auto' });
+}
+function patsSave() { const p = $('patsPanel'); if (p.hidden) return; const r = p.getBoundingClientRect(); saveJSON('rt_pats_box', { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }); }
+(function patsWire() {
+  const p = $('patsPanel'), head = $('patsHead'); if (!p) return;
+  patsPlace();
+  $('btnPats').onclick = () => { if (patsOpen) patsClose(); else patsShow(curDayKey()); };
+  $('patsClose').onclick = patsClose;
+  $('patsPick').onchange = (e) => { patsLoad(patsVids(patsDay)[+e.target.value] || null); e.target.blur(); };
+  let drag = null;
+  head.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || e.target.closest('button, select, a')) return;
+    const r = p.getBoundingClientRect(); drag = { dx: e.clientX - r.left, dy: e.clientY - r.top, w: r.width, h: r.height };
+    head.setPointerCapture(e.pointerId); p.classList.add('dragging'); e.preventDefault();
+  });
+  head.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const x = Math.max(0, Math.min(e.clientX - drag.dx, innerWidth - drag.w)), y = Math.max(0, Math.min(e.clientY - drag.dy, innerHeight - drag.h));
+    Object.assign(p.style, { left: x + 'px', top: y + 'px', right: 'auto', bottom: 'auto' });
+  });
+  const end = () => { if (!drag) return; drag = null; p.classList.remove('dragging'); patsSave(); };
+  head.addEventListener('pointerup', end); head.addEventListener('pointercancel', end);
+  let t = null; new ResizeObserver(() => { clearTimeout(t); t = setTimeout(patsSave, 300); }).observe(p);   // corner resize (CSS resize: both)
+})();
 function renderAll() { renderLive(); renderTrades(); renderDash(); }
 function renderLive() {
+  patsSync();
   { const ck = $('clock'), full = baseBars.length ? tFmt(curBaseT()) : '', tOnly = full.replace(/^\d\d\/\d\d\s*/, '');   // blind modes: time only, date hidden; <=1799 the CSS hides .ck-d too
     ck.innerHTML = !full ? '--:--' : blindDate() ? tOnly : `<span class="ck-d">${full.slice(0, 6)}</span>${tOnly}`; ck.title = blindDate() ? '' : full; }
   $('clockPrice').textContent = baseBars.length ? f2(curPx()) : '--';
