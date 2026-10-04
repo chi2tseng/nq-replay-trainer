@@ -1187,13 +1187,15 @@ input, select, button{ -webkit-tap-highlight-color:transparent; }
 .popover .pop-row:is(button), #ctxMenu button.ctx-item{ width:100%; background:transparent; border:0; text-align:left; font:inherit; color:var(--txt); }
 
 /* ---- PATs review player: floating, draggable by the header, resizable from the corner ---- */
-.pats-panel{position:fixed;z-index:900;right:16px;bottom:16px;width:min(560px,calc(100vw - 32px));height:min(352px,calc(100vh - 32px));min-width:280px;min-height:190px;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line-hi);resize:both;overflow:hidden}
+.pats-panel{position:fixed;z-index:900;right:16px;bottom:16px;width:min(560px,calc(100vw - 32px));height:min(315px,calc(100vh - 32px));min-width:240px;min-height:160px;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line-hi);overflow:hidden}
 .pats-panel[hidden]{display:none}
-.pats-head{display:flex;align-items:center;gap:6px;height:32px;padding:0 4px 0 8px;background:var(--bg);border-bottom:1px solid var(--line);cursor:move;user-select:none;touch-action:none;flex:none}
-.pats-head .material-symbols-outlined{font-size:18px;color:var(--brand)}
-.pats-title{flex:1 1 auto;min-width:0;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pats-head{position:absolute;top:0;left:0;right:0;z-index:3;display:flex;align-items:center;gap:4px;height:24px;padding:0 2px 0 6px;background:rgba(230,231,232,.94);border-bottom:1px solid var(--line);cursor:move;user-select:none;touch-action:none;opacity:0;pointer-events:none;transition:opacity .12s}
+.pats-panel:hover .pats-head,.pats-panel:focus-within .pats-head,.pats-panel.dragging .pats-head,.pats-panel.resizing .pats-head{opacity:1;pointer-events:auto}   /* the bar shows only while the pointer is over the player */
+@media (hover:none){.pats-head{opacity:1;pointer-events:auto}}   /* touch: no hover, keep it */
+.pats-head .material-symbols-outlined{font-size:15px;color:var(--brand)}
+.pats-title{flex:1 1 auto;min-width:0;font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #patsPick{max-width:40%;font-size:12px}
-.pats-ico{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:0;background:none;color:var(--dim);cursor:pointer;text-decoration:none}
+.pats-ico{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:0;background:none;color:var(--dim);cursor:pointer;text-decoration:none}
 .pats-ico:hover{background:var(--hover);color:var(--txt)}
 .pats-ico .material-symbols-outlined{color:inherit}
 .pats-ico:focus-visible{outline:2px solid var(--sel);outline-offset:-2px}
@@ -1208,3 +1210,9 @@ input, select, button{ -webkit-tap-highlight-color:transparent; }
 .pats-panel [hidden]{display:none !important}   /* the empty-state text, the open-on-YouTube link and the frame set display themselves */
 #btnPats.none{ opacity:.45; }
 #btnPats.none .material-symbols-outlined{ color:var(--dim); }
+.pats-grip{position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;touch-action:none;z-index:3;opacity:0;transition:opacity .12s;
+  background:linear-gradient(135deg,transparent 0 50%,var(--line-hi) 50% 58%,transparent 58% 70%,var(--line-hi) 70% 78%,transparent 78%)}
+.pats-panel{position:fixed}   /* the grip is positioned against the panel */
+.pats-panel.resizing #patsFrame{pointer-events:none}
+.pats-panel:hover .pats-grip,.pats-panel.resizing .pats-grip{opacity:1}
+@media (hover:none){.pats-grip{opacity:1}}

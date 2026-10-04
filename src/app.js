@@ -3595,7 +3595,7 @@ function patsShow(day) {
 function patsLoad(v) {
   $('patsTitle').textContent = v ? v.t : 'No PATs review for this day';
   $('patsEmpty').hidden = !!v; $('patsFrame').hidden = !v;
-  const src = v ? `https://www.youtube-nocookie.com/embed/${v.id}?rel=0&modestbranding=1` : 'about:blank';
+  const src = v ? `https://www.youtube-nocookie.com/embed/${v.id}?rel=0&modestbranding=1&vq=hd1080` : 'about:blank';   // vq = quality hint only: YouTube no longer lets embeds force quality, it picks by player size (bigger player -> higher quality)
   if ($('patsFrame').getAttribute('src') !== src) $('patsFrame').setAttribute('src', src);
   const a = $('patsOpen'); a.hidden = !v; if (v) a.href = `https://www.youtube.com/watch?v=${v.id}`;
 }
@@ -3625,7 +3625,19 @@ function patsSave() { const p = $('patsPanel'); if (p.hidden) return; const r = 
   });
   const end = () => { if (!drag) return; drag = null; p.classList.remove('dragging'); patsSave(); };
   head.addEventListener('pointerup', end); head.addEventListener('pointercancel', end);
-  let t = null; new ResizeObserver(() => { clearTimeout(t); t = setTimeout(patsSave, 300); }).observe(p);   // corner resize (CSS resize: both)
+  let t = null; new ResizeObserver(() => { clearTimeout(t); t = setTimeout(patsSave, 300); }).observe(p);
+  const size = (w) => {   // 16:9 (the bar floats over the video), clamped to the window, top-left corner kept
+    const r = p.getBoundingClientRect(); w = Math.max(240, Math.min(w, innerWidth - 8)); let h = Math.round(w * 9 / 16);
+    if (h > innerHeight - 8) { h = innerHeight - 8; w = Math.round(h * 16 / 9); }
+    Object.assign(p.style, { width: w + 'px', height: h + 'px', left: Math.max(0, Math.min(r.left, innerWidth - w)) + 'px', top: Math.max(0, Math.min(r.top, innerHeight - h)) + 'px', right: 'auto', bottom: 'auto' });
+  };
+  $('patsSmaller').onclick = () => { size(p.getBoundingClientRect().width / 1.25); patsSave(); };
+  $('patsBigger').onclick = () => { size(p.getBoundingClientRect().width * 1.25); patsSave(); };
+  const grip = $('patsGrip'); let rs = null;   // corner grip (the native CSS resize corner sat under the iframe and could not be grabbed)
+  grip.addEventListener('pointerdown', (e) => { if (e.button !== 0) return; const r = p.getBoundingClientRect(); rs = { x: e.clientX, w: r.width }; grip.setPointerCapture(e.pointerId); p.classList.add('resizing'); e.preventDefault(); });
+  grip.addEventListener('pointermove', (e) => { if (rs) size(rs.w + e.clientX - rs.x); });
+  const rsEnd = () => { if (!rs) return; rs = null; p.classList.remove('resizing'); patsSave(); };
+  grip.addEventListener('pointerup', rsEnd); grip.addEventListener('pointercancel', rsEnd);
 })();
 function renderAll() { renderLive(); renderTrades(); renderDash(); }
 function renderLive() {
