@@ -1,0 +1,235 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body>
+<title>價格行為圖解</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@600;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one schematic chart per rule, read top to bottom; each figure = drawing + 2-line caption. */
+:root{
+  --bg:#f3f5f7; --paper:#ffffff; --fg:#17212b; --muted:#5b6977; --line:#d4dbe2; --grid:#e8edf1;
+  --accent:#0f6a73; --accent-soft:#dcefef;
+  --up:#1f7a4d; --dn:#b23a3a; --note:#a86a00; --note-soft:#fbeed2; --stop:#b23a3a; --go:#1f7a4d; --go-soft:#def3e6; --stop-soft:#f8e1e1;
+  --display:"Noto Serif TC",Georgia,serif; --body:"Noto Sans TC",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#121a21; --paper:#1a242d; --fg:#e6ebef; --muted:#9aa8b4; --line:#2e3b47; --grid:#232f3a;
+  --accent:#5fc1c8; --accent-soft:#163d41;
+  --up:#6fd39b; --dn:#f08a8a; --note:#f0b652; --note-soft:#43310f; --stop:#f08a8a; --go:#6fd39b; --go-soft:#163b2a; --stop-soft:#452020; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#121a21; --paper:#1a242d; --fg:#e6ebef; --muted:#9aa8b4; --line:#2e3b47; --grid:#232f3a;
+  --accent:#5fc1c8; --accent-soft:#163d41;
+  --up:#6fd39b; --dn:#f08a8a; --note:#f0b652; --note-soft:#43310f; --stop:#f08a8a; --go:#6fd39b; --go-soft:#163b2a; --stop-soft:#452020; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);line-height:1.6;margin:0}
+.wrap{max-width:960px;margin:0 auto;padding-inline:16px;padding-block:28px 56px}
+h1{font-family:var(--display);font-weight:800;font-size:clamp(1.6rem,4vw,2.3rem);line-height:1.2;margin:0 0 6px;text-wrap:balance}
+.sub{color:var(--muted);margin:0 0 20px;max-width:62ch}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:.85rem;color:var(--muted);margin:0 0 20px}
+.legend i{display:inline-block;width:22px;height:0;border-top:2px solid;vertical-align:middle;margin-right:6px}
+.legend .ema i{border-color:var(--accent)} .legend .tl i{border-color:var(--fg);border-top-style:dashed} .legend .en i{border-color:var(--go);width:12px;height:12px;border:2px solid var(--go);border-radius:50%} .legend .st i{border-color:var(--stop)}
+h2{font-family:var(--display);font-weight:600;font-size:1.2rem;margin:34px 0 8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+h2 .tag{font-family:var(--mono);font-size:.72rem;letter-spacing:.08em;color:var(--accent);background:var(--accent-soft);padding:2px 8px;border-radius:4px}
+figure{margin:0 0 10px;background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:12px 12px 8px;min-width:0}
+figure svg{display:block;width:100%;height:auto;max-width:100%;font-family:var(--body)}
+figcaption{font-size:.9rem;color:var(--muted);margin-top:6px;max-width:70ch}
+figcaption b{color:var(--fg)}
+.rule{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin:8px 0 0;font-size:.88rem}
+.rule div{padding:8px 10px;border-radius:6px;background:var(--bg);border:1px solid var(--line)}
+.rule .ok{background:var(--go-soft);border-color:transparent} .rule .no{background:var(--stop-soft);border-color:transparent} .rule .w{background:var(--note-soft);border-color:transparent}
+/* svg classes */
+.c-up{fill:var(--up);stroke:var(--up)} .c-dn{fill:var(--dn);stroke:var(--dn)}
+.wick{stroke-width:1.2}
+.ema{fill:none;stroke:var(--accent);stroke-width:2}
+.tl{stroke:var(--fg);stroke-width:1.6;stroke-dasharray:7 5;fill:none}
+.tlc{stroke:var(--muted);stroke-width:1.2;stroke-dasharray:3 4;fill:none}
+.grid line{stroke:var(--grid)}
+.lbl{font-size:12px;fill:var(--fg)}
+.lbl.n{fill:var(--note);font-weight:700} .lbl.g{fill:var(--go);font-weight:700} .lbl.r{fill:var(--stop);font-weight:700} .lbl.m{fill:var(--muted)}
+.box{fill:var(--note-soft);stroke:var(--note);stroke-width:1;opacity:.55}
+.box.g{fill:var(--go-soft);stroke:var(--go)} .box.r{fill:var(--stop-soft);stroke:var(--stop)}
+.ar{stroke:var(--note);stroke-width:1.6;fill:none} .ar.g{stroke:var(--go)} .ar.r{stroke:var(--stop)}
+.hl{stroke-width:1.6} .hl.g{stroke:var(--go)} .hl.r{stroke:var(--stop)} .hl.m{stroke:var(--muted);stroke-dasharray:4 4}
+.ent{fill:none;stroke:var(--go);stroke-width:2.2} .ent.r{stroke:var(--stop)}
+.note{font-size:.82rem;color:var(--muted);margin-top:28px;border-top:1px solid var(--line);padding-top:12px}
+</style>
+
+<div class="wrap">
+<h1>價格行為圖解</h1>
+<p class="sub">每一條規則一張圖。K 棒是示意走勢，不是真實行情；重點是形狀、EMA 的位置、趨勢線怎麼被破，以及進場、停損要放哪裡。以 Mack（PATs）為主，Brooks、Wade 在圖說裡對照。</p>
+<div class="legend"><span class="ema"><i></i>21 EMA</span><span class="tl"><i></i>趨勢線 / 通道線</span><span class="en"><i></i>進場 K</span><span class="st"><i></i>停損 / 做空</span></div>
+
+<h2><span class="tag">圖 1</span>趨勢長什麼樣：EMA 單側、HH / HL、趨勢線 3 觸點</h2>
+<figure><svg id="f1" role="img" aria-label="上升趨勢示意：價格停在 21 EMA 上方，低點越墊越高，三個低點連成趨勢線，平移到高點就是通道線"></svg>
+<figcaption><b>Mack：</b>價格一直在 21 EMA 同一側、低點越來越高（HL）、高點越來越高（HH），這就是趨勢。連接三個低點（3 個觸點）才算確認的趨勢線；把它複製到高點那一側就是通道線，告訴你這一波大概在哪裡會停。</figcaption></figure>
+<div class="rule"><div class="ok">趨勢中只做順勢</div><div class="no">趨勢線沒被破之前，任何逆勢單都不做</div><div class="w">通道上緣：減碼，不反手</div></div>
+
+<h2><span class="tag">圖 2</span>最好的順勢進場：兩腿回調到 EMA 的第二進場（H2）</h2>
+<figure><svg id="f2" role="img" aria-label="上升趨勢中兩腿回調到 21 EMA，第二腿的訊號 K 高點上方一 tick 進場，停損在訊號 K 低點下方"></svg>
+<figcaption><b>Mack：</b>回調分兩腿（Leg 1 → 小反彈 → Leg 2）落到 EMA 或趨勢線，Leg 2 的轉折 K 就是訊號 K。進場掛在訊號 K 高點上方 1 tick；停損在訊號 K 低點下方 1 到 2 tick、最多 8 tick。這個型態看起來像在做頭，輸家在這裡放空，贏家在這裡做多。</figcaption></figure>
+
+<h2><span class="tag">圖 3</span>破線不等於趨勢結束</h2>
+<figure><svg id="f3" role="img" aria-label="上升趨勢線被收盤跌破後，價格仍然轉回上方並兩腿做出新高；破線到新高之間只能做順勢"></svg>
+<figcaption><b>Mack：</b>要有「收盤在趨勢線外」才算破線，而且破線只是線索。已確認的趨勢線被破後，價格通常還會轉回趨勢方向、兩腿做出比之前更高的新高。從破線到前高被回測之前，仍然只做順勢，不可以放空。<b>Wade</b> 的趨勢線規則一樣：破線後先預期新極值。</figcaption></figure>
+<div class="rule"><div class="w">① 破線 = 線索</div><div class="w">② 等前高被回測</div><div class="no">回測前不逆勢</div></div>
+
+<h2><span class="tag">圖 4</span>趨勢結束 A：新高之後，順勢第二進場「失敗」</h2>
+<figure><svg id="f4" role="img" aria-label="破線後做出新高，順勢第二進場在拿到利潤前被反向突破前一根 K，形成陷阱並反轉向下"></svg>
+<figcaption><b>Mack：</b>破線 → 回測 → 做出新高之後，順勢的 H2 如果在拿到利潤前先反向跌破前一根 K 的收盤 1 tick，就是「失敗的第二進場」。這幾乎必然是陷阱：被困的多單停損處放 sell stop，讓他們的停損把你掃進新的下跌趨勢。</figcaption></figure>
+
+<h2><span class="tag">圖 5</span>趨勢結束 B：回測失敗，做出 lower high（雙頂）</h2>
+<figure><svg id="f5" role="img" aria-label="趨勢線被破後反彈回測前高失敗，形成較低的高點，逆勢第二進場放空，此時才被允許"></svg>
+<figcaption><b>Mack：</b>破線後反彈回測前高，但到不了（lower high / 雙頂），再一次推高失敗就是逆勢的第二進場。只有「破線 + 回測極值」兩個條件都成立，Mack 才允許逆勢。<b>Brooks</b> 的 MTR 四步：強趨勢、破線、測極值、反轉訊號 K。</figcaption></figure>
+<div class="rule"><div class="ok">兩個條件都成立 → 可以逆勢</div><div class="no">只破線沒回測 → 不行</div><div class="w">結束後：反向趨勢，或變區間</div></div>
+
+<h2><span class="tag">圖 6</span>區間長什麼樣：EMA 走平、價格來回穿越、K 棒重疊</h2>
+<figure><svg id="f6" role="img" aria-label="交易區間示意：價格在上緣與下緣之間來回，21 EMA 走平並被反覆穿越，中段 K 棒大量重疊"></svg>
+<figcaption><b>Mack：</b>EMA 走平、價格一直從 EMA 一側跑到另一側、上下緣各被測不只一次、K 棒重疊（congestion 就是小型區間）。<b>Brooks：</b>回調超過約 20 根 K 就當區間看。<b>Wade：</b>兩端規律被測、價位靜態才是健康區間。</figcaption></figure>
+<div class="rule"><div class="ok">只在上下緣做：買低賣高</div><div class="no">中間不做</div><div class="no">絕不追原始突破</div></div>
+
+<h2><span class="tag">圖 7</span>區間突破的兩條合法路線：fade 失敗突破，或等突破回調</h2>
+<figure><svg id="f7" role="img" aria-label="區間向上突破第一次失敗回到區間內可以放空；第二次突破後回調守住上緣再轉回向上，是突破回調做多進場"></svg>
+<figcaption><b>Mack：</b>原始突破不追，大多數至少先失敗一次。路線 1：突破失敗跌回區間 → fade（放空）。路線 2：突破後回調失去動能、守住上緣、重新轉回突破方向 → breakout pullback 做多。回調成功後就當新趨勢，切回趨勢規則。</figcaption></figure>
+
+<h2><span class="tag">圖 8</span>陷阱單：突破只多 1 到 2 tick 就反轉</h2>
+<figure><svg id="f8" role="img" aria-label="小整理區上緣被多穿一兩個 tick 後立刻反轉，sell stop 放在被困多單的停損處，被掃進場後價格快速下跌"></svg>
+<figcaption><b>Mack：</b>一群人在前一根 K 高點上方 1 tick 進場做多，價格只多走 1 到 2 tick 就反轉，他們被困住，會在前一根 K 低點下方停損。把 sell stop 放在那裡，他們的停損就是你的進場。逆勢方向的失敗突破最要警覺。目標 4 tick 先出一部分，其餘移保本。</figcaption></figure>
+
+<p class="note">僅供練習與覆盤使用，非投資建議。文字版規則與來源在 nq-replay-trainer 的 docs/trending-rules-route-mindmaps.md 與 docs/trendline-and-range-rules.md。</p>
+</div>
+
+<script>
+(function(){
+const NS='http://www.w3.org/2000/svg';
+function el(n,a,txt){const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);if(txt!=null)e.textContent=txt;return e;}
+// closes from segments: [n, from, to, wiggle]
+function seg(n,a,b,w){const out=[];for(let i=1;i<=n;i++){const t=i/n;const z=((i%2)?1:-1)*w*(i%3?1:.4);out.push(a+(b-a)*t+z);}return out;}
+function bars(closes,w){const b=[];let prev=closes[0];closes.forEach((c,i)=>{const o=i?prev:c-(w*0.5);const hi=Math.max(o,c)+w*(0.35+((i*7)%4)/8);const lo=Math.min(o,c)-w*(0.35+((i*5)%4)/8);b.push({o,c,h:hi,l:lo});prev=c;});return b;}
+function ema(b,n){const k=2/(n+1);let e=b[0].c;return b.map((x,i)=>{e=i?x.c*k+e*(1-k):e;return e;});}
+function draw(id,closes,w,ann,opts){
+  opts=opts||{};const W=760,H=320,padL=12,padR=70,padT=24,padB=16;
+  const svg=document.getElementById(id);svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const b=bars(closes,w),e=ema(b,21);
+  let lo=Infinity,hi=-Infinity;b.forEach(x=>{lo=Math.min(lo,x.l);hi=Math.max(hi,x.h);});
+  if(opts.lo!=null)lo=Math.min(lo,opts.lo);if(opts.hi!=null)hi=Math.max(hi,opts.hi);
+  const span=hi-lo;lo-=span*.08;hi+=span*.12;
+  const n=b.length,step=(W-padL-padR)/n,cw=Math.max(3,step*.62);
+  const X=i=>padL+i*step+step/2, Y=p=>padT+(hi-p)/(hi-lo)*(H-padT-padB);
+  const g=el('g',{class:'grid'});for(let k=0;k<5;k++){const y=padT+k*(H-padT-padB)/4;g.appendChild(el('line',{x1:padL,x2:W-padR,y1:y,y2:y}));}svg.appendChild(g);
+  // annotations behind candles (boxes, trendlines)
+  const back=el('g',{}),front=el('g',{});svg.appendChild(back);
+  // candles
+  b.forEach((x,i)=>{const up=x.c>=x.o;const cls=up?'c-up':'c-dn';svg.appendChild(el('line',{class:cls+' wick',x1:X(i),x2:X(i),y1:Y(x.h),y2:Y(x.l)}));const top=Y(Math.max(x.o,x.c)),bot=Y(Math.min(x.o,x.c));svg.appendChild(el('rect',{class:cls,x:X(i)-cw/2,y:top,width:cw,height:Math.max(1.5,bot-top),rx:.8}));});
+  // ema
+  const d=e.map((v,i)=>(i?'L':'M')+X(i).toFixed(1)+' '+Y(v).toFixed(1)).join(' ');svg.appendChild(el('path',{class:'ema',d}));
+  svg.appendChild(front);
+  const defs=el('defs',{});const mk=(id,cls)=>{const m=el('marker',{id,viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:7,markerHeight:7,orient:'auto-start-reverse'});m.appendChild(el('path',{d:'M0 0L10 5L0 10z',fill:'currentColor'}));return m;};
+  defs.appendChild(mk('ah'));svg.appendChild(defs);
+  ann.forEach(a=>{
+    if(a.t==='tl'){ // trend line through bar i1,i2 on side, extended to i3
+      const p1=a.side==='l'?b[a.i1].l:b[a.i1].h,p2=a.side==='l'?b[a.i2].l:b[a.i2].h;
+      const sl=(p2-p1)/(a.i2-a.i1);const i0=a.i0!=null?a.i0:a.i1,i3=a.i3!=null?a.i3:n-1;
+      const off=a.off||0;
+      back.appendChild(el('line',{class:a.cls||'tl',x1:X(i0),y1:Y(p1+sl*(i0-a.i1)+off),x2:X(i3),y2:Y(p1+sl*(i3-a.i1)+off)}));
+      if(a.text)front.appendChild(el('text',{class:'lbl m',x:X(i3)+4,y:Y(p1+sl*(i3-a.i1)+off)+4},a.text));
+    }
+    if(a.t==='hl'){back.appendChild(el('line',{class:'hl '+(a.cls||'m'),x1:X(a.i1),x2:X(a.i2),y1:Y(a.y),y2:Y(a.y)}));if(a.text)front.appendChild(el('text',{class:'lbl '+(a.lc||'m'),x:X(a.i2)+4,y:Y(a.y)+4},a.text));}
+    if(a.t==='box'){back.appendChild(el('rect',{class:'box '+(a.cls||''),x:X(a.i1)-step/2,y:Y(a.y2),width:X(a.i2)-X(a.i1)+step,height:Y(a.y1)-Y(a.y2),rx:3}));}
+    if(a.t==='txt'){const lines=String(a.text).split('\n');const tx=X(a.i)+(a.dx||0),ty=Y(a.y)+(a.dy||0);lines.forEach((ln,k)=>front.appendChild(el('text',{class:'lbl '+(a.cls||''),x:tx,y:ty+k*14,'text-anchor':a.anchor||'middle'},ln)));}
+    if(a.t==='ar'){front.appendChild(el('line',{class:'ar '+(a.cls||''),x1:X(a.i1)+(a.dx1||0),y1:Y(a.y1),x2:X(a.i2)+(a.dx2||0),y2:Y(a.y2),'marker-end':'url(#ah)',style:'color:var(--'+(a.cls==='g'?'go':a.cls==='r'?'stop':'note')+')'}));}
+    if(a.t==='ent'){const x=b[a.i];front.appendChild(el('circle',{class:'ent '+(a.cls||''),cx:X(a.i),cy:Y((x.h+x.l)/2),r:Math.max(cw*.9,8)}));}
+    if(a.t==='dot'){front.appendChild(el('circle',{cx:X(a.i),cy:Y(a.side==='l'?b[a.i].l:b[a.i].h),r:4,fill:'var(--fg)'}));}
+  });
+}
+// ---------- Figure 1: trend ----------
+{const c=[].concat(seg(10,100,112,.8),seg(4,112,107.5,.6),seg(10,107.5,122,.8),seg(5,122,116.5,.6),seg(10,116.5,132,.8),seg(4,132,127,.6),seg(9,127,141,.8));
+draw('f1',c,.9,[
+ {t:'tl',i1:13,i2:28,side:'l',i0:0,i3:51,text:'趨勢線'},
+ {t:'tl',i1:9,i2:23,side:'h',i0:0,i3:51,cls:'tlc',text:'通道線'},
+ {t:'dot',i:13,side:'l'},{t:'dot',i:28,side:'l'},{t:'dot',i:47,side:'l'},
+ {t:'txt',i:13,y:106,dy:16,text:'HL ①',cls:'n'},{t:'txt',i:28,y:115,dy:16,text:'HL ②',cls:'n'},{t:'txt',i:47,y:126,dy:16,text:'HL ③ 第 3 觸點 = 確認',cls:'n'},
+ {t:'txt',i:9,y:113,dy:-8,text:'HH'},{t:'txt',i:23,y:123,dy:-8,text:'HH'},{t:'txt',i:38,y:133,dy:-8,text:'HH'},
+ {t:'txt',i:30,y:107,dy:0,text:'價格全程在 EMA 上方 → 只做多',cls:'g'},
+]);}
+// ---------- Figure 2: H2 ----------
+{const c=[].concat(seg(16,100,120,.8),seg(4,120,115.5,.6),seg(3,115.5,118,.5),seg(4,118,113.2,.6),seg(13,113.2,131,.8));
+draw('f2',c,.8,[
+ {t:'box',i1:16,i2:19,y1:114,y2:121,cls:''},{t:'box',i1:23,i2:26,y1:112,y2:119,cls:''},
+ {t:'txt',i:17.5,y:121,dy:-8,text:'Leg 1',cls:'n'},{t:'txt',i:24.5,y:119,dy:-8,text:'Leg 2 回到 EMA',cls:'n'},
+ {t:'txt',i:21,y:125.5,dy:0,text:'看起來像做頭（輸家在這裡放空）',cls:'m'},
+ {t:'ent',i:26},{t:'txt',i:26,y:112,dy:34,text:'訊號 K',cls:'g'},
+ {t:'hl',i1:26,i2:31,y:115.2,cls:'g',text:'進場：訊號 K 高點 +1 tick',lc:'g'},
+ {t:'hl',i1:26,i2:31,y:111.9,cls:'r',text:'停損：低點 −1~2 tick，最多 8 tick',lc:'r'},
+ {t:'ar',i1:27,y1:122,i2:31,y2:128,cls:'g'},{t:'txt',i:32,y:118,dy:0,text:'4 tick 先出\n其餘保本拉波段',cls:'g',anchor:'start',dx:-6},
+]);}
+// ---------- Figure 3: TL break is not the end ----------
+{const c=[].concat(seg(8,100,110,.7),seg(3,110,107,.5),seg(8,107,118,.7),seg(3,118,115,.5),seg(7,115,125,.7),seg(7,125,111.5,.8),seg(7,111.5,121.5,.7),seg(3,121.5,117.5,.5),seg(9,117.5,131,.8));
+draw('f3',c,.8,[
+ {t:'tl',i1:10,i2:21,side:'l',i0:0,i3:39,text:''},
+ {t:'dot',i:10,side:'l'},{t:'dot',i:21,side:'l'},
+ {t:'hl',i1:28,i2:54,y:125.6,cls:'m',text:'前高'},
+ {t:'txt',i:33,y:109,dy:34,text:'① 收盤跌破趨勢線（這只是線索）',cls:'n'},
+ {t:'ar',i1:36,y1:113,i2:42,y2:121,cls:''},{t:'ar',i1:45,y1:118,i2:52,y2:129,cls:''},
+ {t:'txt',i:41,y:124,dy:-22,text:'② 兩腿回測前高',cls:'n'},
+ {t:'txt',i:50,y:131,dy:-10,text:'③ 新高：趨勢還沒結束',cls:'g',anchor:'end',dx:14},
+ {t:'box',i1:29,i2:46,y1:109,y2:123,cls:'r'},{t:'txt',i:38,y:109,dy:14,text:'破線到回測之間：仍只做順勢，不放空',cls:'r'},
+]);}
+// ---------- Figure 4: failed 2nd entry at new high ----------
+{const c=[].concat(seg(8,100,112,.7),seg(6,112,104,.8),seg(8,104,116,.7),seg(3,116,122,.6),seg(3,122,118.5,.5),seg(3,118.5,121,.5),seg(2,121,119,.4),seg(2,119,120.4,.4),seg(12,120.4,104,.9));
+draw('f4',c,.7,[
+ {t:'tl',i1:3,i2:13,side:'l',i0:0,i3:24,text:''},
+ {t:'hl',i1:4,i2:24,y:112.6,cls:'m',text:'前高'},
+ {t:'txt',i:12,y:104,dy:18,text:'破線',cls:'n'},
+ {t:'txt',i:23,y:123,dy:-10,text:'回測後做出新高',cls:'n'},
+ {t:'box',i1:25,i2:30,y1:117.5,y2:122.5},{t:'txt',i:27.5,y:117.5,dy:16,text:'H1 ｜ H2',cls:'n'},
+ {t:'ent',i:30},{t:'txt',i:30,y:122.5,dy:-10,text:'順勢 H2 進場（多）',cls:'g'},
+ {t:'hl',i1:30,i2:34,y:118.7,cls:'r',text:'反向破前一根 K 1 tick = 失敗',lc:'r'},
+ {t:'ar',i1:32,y1:116,i2:36,y2:107,cls:'r'},{t:'txt',i:38,y:117.5,dy:0,text:'被困多單停損 = 你的 sell stop\n→ 陷阱，新趨勢向下',cls:'r',anchor:'start',dx:-6},
+]);}
+// ---------- Figure 5: lower high / double top ----------
+{const c=[].concat(seg(8,100,110,.7),seg(3,110,107,.5),seg(8,107,118,.7),seg(3,118,115,.5),seg(6,115,124.5,.7),seg(7,124.5,113,.8),seg(6,113,121.5,.7),seg(2,121.5,119,.4),seg(3,119,121,.4),seg(12,121,101,.9));
+draw('f5',c,.8,[
+ {t:'tl',i1:10,i2:21,side:'l',i0:0,i3:38,text:''},
+ {t:'hl',i1:27,i2:52,y:125.2,cls:'m'},{t:'txt',i:28,y:125.2,dy:-6,text:'前高',cls:'m',anchor:'start'},
+ {t:'txt',i:33,y:113,dy:22,text:'① 收盤破線',cls:'n'},
+ {t:'ar',i1:36,y1:116,i2:40,y2:121.5,cls:''},{t:'txt',i:37,y:125.2,dy:-24,text:'② 回測前高失敗\nlower high / 雙頂',cls:'n'},
+ {t:'box',i1:41,i2:45,y1:118,y2:123},
+ {t:'ent',i:45,cls:'r'},{t:'txt',i:46,y:125.2,dy:-24,text:'③ 逆勢 2nd entry 放空\n（此時才被允許）',cls:'r',anchor:'start',dx:-6},
+ {t:'hl',i1:45,i2:50,y:118.2,cls:'r',text:'進場：訊號 K 低點 −1 tick',lc:'r'},
+ {t:'ar',i1:48,y1:115,i2:55,y2:104,cls:'r'},
+]);}
+// ---------- Figure 6: range ----------
+{const c=[].concat(seg(6,105,111.5,.9),seg(7,111.5,100.8,.9),seg(5,100.8,106,1.2),seg(4,106,104,1.4),seg(6,104,111.8,.9),seg(7,111.8,100.5,.9),seg(5,100.5,105.5,1.3),seg(5,105.5,107,1.5),seg(6,107,111.6,.9),seg(7,111.6,100.9,.9),seg(5,100.9,106,1.1));
+draw('f6',c,1.0,[
+ {t:'hl',i1:0,i2:62,y:112.5,cls:'m',text:'上緣'},{t:'hl',i1:0,i2:62,y:100,cls:'m',text:'下緣'},
+ {t:'txt',i:5,y:112.5,dy:-8,text:'測 ①',cls:'r'},{t:'txt',i:33,y:112.5,dy:-8,text:'測 ②',cls:'r'},{t:'txt',i:56,y:112.5,dy:-8,text:'測 ③ → 放空',cls:'r'},
+ {t:'txt',i:12,y:100,dy:18,text:'測 ①',cls:'g'},{t:'txt',i:35,y:100,dy:18,text:'測 ②',cls:'g'},{t:'txt',i:58,y:100,dy:18,text:'測 ③ → 做多',cls:'g'},
+ {t:'box',i1:18,i2:21,y1:102,y2:108.5},{t:'box',i1:40,i2:44,y1:102.5,y2:109.5},
+ {t:'txt',i:20,y:108.5,dy:-8,text:'重疊 K',cls:'n'},{t:'txt',i:42,y:109.5,dy:-8,text:'congestion = 小區間',cls:'n'},
+ {t:'txt',i:31,y:100,dy:34,text:'EMA 走平，價格一直穿越兩側 → 區間規則',cls:'n'},
+ {t:'txt',i:31,y:106,dy:4,text:'中間：不做',cls:'m'},
+]);}
+// ---------- Figure 7: breakout two routes ----------
+{const c=[].concat(seg(5,105,111,.8),seg(6,111,101,.8),seg(6,101,111,.8),seg(5,111,102,.8),seg(5,102,111.5,.8),seg(3,111.5,116,.7),seg(5,116,107,.9),seg(4,107,103,.7),seg(7,103,112,.8),seg(4,112,118,.8),seg(4,118,113,.6),seg(10,113,128,.9));
+draw('f7',c,.8,[
+ {t:'hl',i1:0,i2:56,y:112.2,cls:'m'},{t:'txt',i:3,y:112.2,dy:-6,text:'區間上緣',cls:'m',anchor:'start'},{t:'hl',i1:0,i2:40,y:100.5,cls:'m',text:'下緣'},
+ {t:'txt',i:29,y:116.5,dy:-10,text:'原始突破：不追',cls:'r'},
+ {t:'ent',i:34,cls:'r'},{t:'txt',i:30,y:98.6,dy:0,text:'路線 1：跌回區間 → fade 放空',cls:'r'},
+ {t:'ar',i1:35,y1:107,i2:38,y2:103.5,cls:'r'},
+ {t:'txt',i:46,y:118.5,dy:-10,text:'第二次突破',cls:'n'},
+ {t:'box',i1:49,i2:52,y1:112.3,y2:117,cls:'g'},
+ {t:'ent',i:52},{t:'txt',i:50,y:112.3,dy:18,text:'路線 2：回調守住上緣\n→ breakout pullback 做多',cls:'g',anchor:'start',dx:-10},
+ {t:'ar',i1:55,y1:120,i2:61,y2:127,cls:'g'},{t:'txt',i:58,y:128,dy:-10,text:'成功 → 新趨勢',cls:'g'},
+]);}
+// ---------- Figure 8: trap ----------
+{const c=[].concat(seg(5,100,104.5,.6),seg(12,104.5,106,1.1),seg(1,106,107.6,.3),seg(1,107.6,105.3,.3),seg(1,105.3,103.5,.3),seg(10,103.5,96,.9));
+draw('f8',c,.6,[
+ {t:'hl',i1:5,i2:21,y:107.2,cls:'m',text:'整理區高點'},
+ {t:'box',i1:5,i2:16,y1:103,y2:107.2},{t:'txt',i:10.5,y:107.2,dy:-8,text:'小整理區（重疊 K）',cls:'n'},
+ {t:'txt',i:17,y:108.2,dy:-10,text:'只多穿 1~2 tick\n多單在這裡進場',cls:'n'},
+ {t:'ar',i1:17,y1:108.1,i2:18,y2:105.6,cls:'r'},
+ {t:'hl',i1:16,i2:24,y:103.3,cls:'r',text:'被困多單停損處 = 放 sell stop',lc:'r'},
+ {t:'ent',i:19,cls:'r'},{t:'txt',i:17,y:102,dy:0,text:'被掃進場',cls:'r',anchor:'end',dx:-8},
+ {t:'hl',i1:19,i2:24,y:101.6,cls:'g',text:'4 tick 先出',lc:'g'},
+ {t:'ar',i1:22,y1:101,i2:28,y2:97,cls:'r'},{t:'txt',i:27,y:99,dy:-14,text:'他們的停損 = 燃料',cls:'r',anchor:'start',dx:-10},
+]);}
+})();
+</script>
+</body></html>
