@@ -1206,3 +1206,5 @@ input, select, button{ -webkit-tap-highlight-color:transparent; }
 #btnPats .material-symbols-outlined{ color:var(--brand); }
 #btnPats.on .material-symbols-outlined{ color:var(--on-brand); }
 .pats-panel [hidden]{display:none !important}   /* the empty-state text, the open-on-YouTube link and the frame set display themselves */
+#btnPats.none{ opacity:.45; }
+#btnPats.none .material-symbols-outlined{ color:var(--dim); }

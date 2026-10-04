@@ -3577,8 +3577,9 @@ function patsVids(day) { return (patsIdx && day && patsIdx[day]) || []; }
 function patsSync() {
   const b = $('btnPats'); if (!b) return;
   const ok = patsAllowed(), day = curDayKey(), vids = ok ? patsVids(day) : [];
-  b.hidden = !vids.length;
-  if (vids.length) b.title = `Mack's PATs review of this day: ${vids[0].t}`;
+  b.hidden = !ok || !patsIdx;   // always visible on ES / MES so it can be found; dimmed on days without a review
+  b.classList.toggle('none', !vids.length);
+  b.title = vids.length ? `Mack's PATs review of this day: ${vids[0].t}` : 'No PATs review for this day';
   b.classList.toggle('on', patsOpen && !!vids.length);
   if (!ok) { if (patsOpen) patsClose(); return; }
   if (patsOpen && day !== patsDay) patsShow(day);   // the replay moved to another day: follow it
