@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>NQ Replay Trainer</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0e16'/%3E%3Cline x1='11' y1='5' x2='11' y2='27' stroke='%2316c784' stroke-width='2'/%3E%3Crect x='8' y='12' width='6' height='11' rx='1' fill='%2316c784'/%3E%3Cline x1='21' y1='6' x2='21' y2='28' stroke='%23ea3943' stroke-width='2'/%3E%3Crect x='18' y='10' width='6' height='9' rx='1' fill='%23ea3943'/%3E%3C/svg%3E" />
-<link rel="stylesheet" href="src/styles.css?v=152" />
+<link rel="stylesheet" href="src/styles.css?v=153" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,400..600,0..1,0&display=block">
@@ -26,7 +26,7 @@
         <div id="datePopover" class="popover cal"></div>
       </div>
       <select id="sessionSelect" class="hidden-select"></select>
-      <button id="btnPats" class="tb-btn" title="Mack's PATs Trading review of this day (YouTube)" aria-controls="patsPanel" hidden><span aria-hidden="true" class="material-symbols-outlined">smart_display</span>PATs</button>
+      <button id="btnPats" class="tb-btn" title="Mack's PATs Trading review of this day (YouTube)" aria-controls="patsPanel" aria-expanded="false" translate="no" hidden><span aria-hidden="true" class="material-symbols-outlined">smart_display</span>PATs</button>
       <span id="modeBadge" class="mode-badge"></span>
       <select id="tickSrcSel" title="Tick data source for this day (both tapes exist)" style="display:none"><option value="db">Databento</option><option value="nt">NinjaTrader</option></select>
       <div class="tb-ind">
@@ -325,9 +325,9 @@
 </div>
 <!-- floating drawing toolbar (TradingView-style): follows the selected drawing; Settings opens the Style / Coordinates / Visibility panel -->
 <div id="drawToolbar" class="drw-tb" hidden>
-  <input type="color" id="dtColor" title="Color" />
-  <select id="dtWidth" title="Line width"><option value="0.5">0.5px</option><option value="1">1px</option><option value="1.5">1.5px</option><option value="2">2px</option><option value="3">3px</option><option value="4">4px</option></select>
-  <select id="dtDash" title="Line style"><option value="0">Solid</option><option value="1">Dashed</option><option value="2">Dotted</option></select>
+  <input type="color" id="dtColor" title="Color" aria-label="Line color" />
+  <select id="dtWidth" title="Line width" aria-label="Line width"><option value="0.5">0.5px</option><option value="1">1px</option><option value="1.5">1.5px</option><option value="2">2px</option><option value="3">3px</option><option value="4">4px</option></select>
+  <select id="dtDash" title="Line style" aria-label="Line style"><option value="0">Solid</option><option value="1">Dashed</option><option value="2">Dotted</option></select>
   <button id="dtLock" class="dt-btn" title="Lock" aria-label="Lock"><span aria-hidden="true" class="material-symbols-outlined">lock_open</span></button>
   <button id="dtSettings" class="dt-btn" title="Settings" aria-label="Settings"><span aria-hidden="true" class="material-symbols-outlined">settings</span></button>
   <button id="dtDelete" class="dt-btn" title="Delete (Del)" aria-label="Delete (Del)"><span aria-hidden="true" class="material-symbols-outlined">delete</span></button>
@@ -337,13 +337,13 @@
 <div id="quizModal" class="day-detail" role="dialog" aria-modal="true" tabindex="-1"></div>
 <div id="helpModal" class="day-detail" role="dialog" aria-modal="true" tabindex="-1"></div>
 <div id="patsPanel" class="pats-panel" role="dialog" aria-label="PATs review video" hidden>
-  <div id="patsHead" class="pats-head">
+  <div id="patsHead" class="pats-head" tabindex="0" aria-label="Move the player: drag, or use the arrow keys">
     <span aria-hidden="true" class="material-symbols-outlined">smart_display</span>
-    <span id="patsTitle" class="pats-title"></span>
-    <select id="patsPick" title="Videos for this day" hidden></select>
+    <span id="patsTitle" class="pats-title" translate="no"></span>
+    <select id="patsPick" title="Videos for this day" aria-label="Videos for this day" hidden></select>
     <button id="patsSmaller" class="pats-ico" type="button" title="Smaller" aria-label="Make the player smaller"><span aria-hidden="true" class="material-symbols-outlined">remove</span></button>
     <button id="patsBigger" class="pats-ico" type="button" title="Bigger" aria-label="Make the player bigger"><span aria-hidden="true" class="material-symbols-outlined">add</span></button>
-    <a id="patsOpen" class="pats-ico" target="_blank" rel="noopener" title="Open on YouTube"><span aria-hidden="true" class="material-symbols-outlined">open_in_new</span></a>
+    <a id="patsOpen" class="pats-ico" target="_blank" rel="noopener" title="Open on YouTube" aria-label="Open on YouTube"><span aria-hidden="true" class="material-symbols-outlined">open_in_new</span></a>
     <button id="patsClose" class="pats-ico" type="button" aria-label="Close video"><span aria-hidden="true" class="material-symbols-outlined">close</span></button>
   </div>
   <div class="pats-body">
@@ -352,6 +352,6 @@
   </div>
   <div id="patsGrip" class="pats-grip" title="Drag to resize" aria-hidden="true"></div>
 </div>
-<script src="src/app.js?v=177"></script>
+<script src="src/app.js?v=178"></script>
 </body>
 </html>

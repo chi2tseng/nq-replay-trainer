@@ -3610,7 +3610,7 @@ function patsShow(day) {
   pick.innerHTML = vids.map((v, i) => `<option value="${i}">${escHtml((v.k === 'live' ? 'Live: ' : '') + v.t)}</option>`).join('');
   pick.hidden = vids.length < 2;
   patsLoad(vids[0] || null);
-  $('btnPats').classList.add('on');
+  $('btnPats').classList.add('on'); $('btnPats').setAttribute('aria-expanded', 'true');
 }
 function patsLoad(v) {
   $('patsTitle').textContent = v ? v.t : 'No PATs review for this day';
@@ -3619,7 +3619,12 @@ function patsLoad(v) {
   if ($('patsFrame').getAttribute('src') !== src) $('patsFrame').setAttribute('src', src);
   const a = $('patsOpen'); a.hidden = !v; if (v) a.href = `https://www.youtube.com/watch?v=${v.id}`;
 }
-function patsClose() { patsOpen = false; patsDay = null; $('patsPanel').hidden = true; $('patsFrame').setAttribute('src', 'about:blank'); $('btnPats').classList.remove('on'); }
+function patsClose() {
+  const hadFocus = $('patsPanel').contains(document.activeElement);
+  patsOpen = false; patsDay = null; $('patsPanel').hidden = true; $('patsFrame').setAttribute('src', 'about:blank');
+  const b = $('btnPats'); b.classList.remove('on'); b.setAttribute('aria-expanded', 'false');
+  if (hadFocus && !b.hidden) b.focus();   // keyboard users land back on the button, not at the top of the page
+}
 function patsPlace() {   // restore the last position / size, clamped to this window
   const b = loadJSON('rt_pats_box', null), p = $('patsPanel'); if (!b) return;
   const w = Math.min(b.w, innerWidth - 16), h = Math.min(b.h, innerHeight - 16);
@@ -3645,6 +3650,13 @@ function patsSave() { const p = $('patsPanel'); if (p.hidden) return; const r = 
   });
   const end = () => { if (!drag) return; drag = null; p.classList.remove('dragging'); patsSave(); };
   head.addEventListener('pointerup', end); head.addEventListener('pointercancel', end);
+  head.addEventListener('keydown', (e) => {   // keyboard alternative to dragging: arrows move 20 px (Shift: 80 px)
+    const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key]; if (!d || e.target !== head) return;
+    e.preventDefault(); e.stopPropagation();
+    const r = p.getBoundingClientRect(), stp = e.shiftKey ? 80 : 20;
+    Object.assign(p.style, { left: Math.max(0, Math.min(r.left + d[0] * stp, innerWidth - r.width)) + 'px', top: Math.max(0, Math.min(r.top + d[1] * stp, innerHeight - r.height)) + 'px', right: 'auto', bottom: 'auto' });
+    patsSave();
+  });
   let t = null; new ResizeObserver(() => { clearTimeout(t); t = setTimeout(patsSave, 300); }).observe(p);
   const size = (w) => {   // 16:9 (the bar floats over the video), clamped to the window, top-left corner kept
     const r = p.getBoundingClientRect(); w = Math.max(240, Math.min(w, innerWidth - 8)); let h = Math.round(w * 9 / 16);

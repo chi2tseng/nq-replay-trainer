@@ -1218,3 +1218,5 @@ input, select, button{ -webkit-tap-highlight-color:transparent; }
 @media (hover:none){.pats-grip{opacity:1}}
 .ds-defs{display:flex;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
 .ds-defs .mini[disabled]{opacity:.45;cursor:default}
+.pats-head:focus-visible{outline:2px solid var(--sel);outline-offset:-2px}
+@media (prefers-reduced-motion: reduce){.pats-head,.pats-grip{transition:none}}
