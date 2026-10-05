@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>NQ Replay Trainer</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0e16'/%3E%3Cline x1='11' y1='5' x2='11' y2='27' stroke='%2316c784' stroke-width='2'/%3E%3Crect x='8' y='12' width='6' height='11' rx='1' fill='%2316c784'/%3E%3Cline x1='21' y1='6' x2='21' y2='28' stroke='%23ea3943' stroke-width='2'/%3E%3Crect x='18' y='10' width='6' height='9' rx='1' fill='%23ea3943'/%3E%3C/svg%3E" />
-<link rel="stylesheet" href="src/styles.css?v=163" />
+<link rel="stylesheet" href="src/styles.css?v=172" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,400..600,0..1,0&display=block">
@@ -343,17 +343,28 @@
     <span aria-hidden="true" class="material-symbols-outlined">smart_display</span>
     <span id="patsTitle" class="pats-title" translate="no"></span>
     <select id="patsPick" title="Videos for this day" aria-label="Videos for this day" hidden></select>
-    <button id="patsSmaller" class="pats-ico" type="button" title="Smaller" aria-label="Make the player smaller"><span aria-hidden="true" class="material-symbols-outlined">remove</span></button>
-    <button id="patsBigger" class="pats-ico" type="button" title="Bigger" aria-label="Make the player bigger"><span aria-hidden="true" class="material-symbols-outlined">add</span></button>
+    <button id="clipToggle" class="pats-ico" type="button" title="Clip editor (Alt+C)" aria-label="Clip editor" aria-expanded="false" aria-controls="clipPanel" disabled><span aria-hidden="true" class="material-symbols-outlined">content_cut</span></button>
     <a id="patsOpen" class="pats-ico" target="_blank" rel="noopener" title="Open on YouTube" aria-label="Open on YouTube"><span aria-hidden="true" class="material-symbols-outlined">open_in_new</span></a>
+    <button id="patsMin" class="pats-ico" type="button" title="Minimize to the toolbar button (click it to bring the video back)" aria-label="Minimize the player"><span aria-hidden="true" class="material-symbols-outlined">minimize</span></button>
     <button id="patsClose" class="pats-ico" type="button" aria-label="Close video"><span aria-hidden="true" class="material-symbols-outlined">close</span></button>
   </div>
   <div class="pats-body">
     <iframe id="patsFrame" title="Review video" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
     <div id="patsEmpty" class="pats-empty" hidden>No PATs review for this day</div>
   </div>
+  <div id="clipPanel" class="cp" tabindex="-1" role="group" aria-label="Clip editor" hidden>
+    <div class="cp-prog" id="cpProg" hidden></div>
+    <div class="cp-strip" id="cpStrip"><div class="cp-tiles" id="cpTiles"></div><div id="cpSegs"></div><div class="cp-seg on" id="cpActive" title="Drag the clip onto the chart" hidden></div><div class="cp-grab" id="cpGA" title="Drag to trim the in point" hidden></div><div class="cp-grab" id="cpGB" title="Drag to trim the out point" hidden></div><div class="cp-hvline" id="cpHvLine" hidden></div><div class="cp-playhead" id="cpPlayhead"></div></div>
+    <div class="cp-scale"><span id="cpL"></span>
+      <div class="cp-mid"><button type="button" class="cp-ib" id="cpIn" title="In point at the playhead (I)" aria-label="Set the in point"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h7v2.5h-4.5v11H15V20H8z"/></svg></button><button type="button" class="cp-ib" id="cpOut" title="Out point at the playhead (O)" aria-label="Set the out point"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 4H9v2.5h4.5v11H9V20h7z"/></svg></button><button type="button" class="cp-ib" id="cpGoIn" title="Go to the in point (Shift+I)" aria-label="Go to the in point"><span aria-hidden="true" class="material-symbols-outlined">first_page</span></button><button type="button" class="cp-ib" id="cpGoOut" title="Go to the out point (Shift+O)" aria-label="Go to the out point"><span aria-hidden="true" class="material-symbols-outlined">last_page</span></button></div>
+      <div class="cp-end"><button type="button" class="cp-fit" id="cpFit" title="Show the whole video">Fit</button><span id="cpR"></span></div></div>
+    <div class="cp-segrow"><div class="cp-list" id="cpList"></div><button type="button" class="cp-add" id="cpAdd" title="Add a 60 s clip at the playhead (A)"><span aria-hidden="true" class="material-symbols-outlined">add</span>Add clip</button></div>
+    <div class="cp-foot"><span class="cp-msg" id="cpMsg" role="status"></span><button type="button" class="cp-ib" id="cpPlayAll" title="Preview the clips in order (P)" aria-label="Preview the clips" hidden><span aria-hidden="true" class="material-symbols-outlined">play_arrow</span></button><button type="button" class="cp-cut" id="cpCut" title="Cut the clips on this computer (E)" disabled><span aria-hidden="true" class="material-symbols-outlined">content_cut</span><span>Cut</span></button></div>
+    <div class="cp-tray" id="cpTray" aria-label="Cut clips: drag onto the chart"></div>
+  </div>
+  <div id="cpHover" class="cp-hover" hidden aria-hidden="true"><div class="cp-hvimg" id="cpHvImg"></div><div class="cp-hvtime" id="cpHvTime"></div></div>
   <div id="patsGrip" class="pats-grip" title="Drag to resize" aria-hidden="true"></div>
 </div>
-<script src="src/app.js?v=193"></script>
+<script src="src/app.js?v=216"></script>
 </body>
 </html>

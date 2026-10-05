@@ -446,7 +446,8 @@ button.pc-day{font:inherit;text-align:left;color:var(--txt);align-items:stretch}
 .dd-trow .pos{color:var(--pos)} .dd-trow .neg{color:var(--neg)}
 .dd-meta{display:inline-flex;align-items:baseline;gap:12px;margin-left:12px;font-size:12px;color:var(--dim)}
 .dd-sub{display:flex;flex-wrap:wrap;gap:0 12px;font-size:11px;color:var(--dim);margin-top:4px;font-variant-numeric:tabular-nums}
-.dd-chart{display:block;width:100%;height:260px;background:var(--chart-bg);border:1px solid var(--line)}
+.dd-chart{display:block;position:relative;width:100%;height:300px;background:var(--chart-bg);border:1px solid var(--line)}
+.dd-note{position:absolute;left:8px;top:6px;z-index:3;font-size:11px;color:var(--dim);pointer-events:none}
 /* saved trade logs modal */
 .log-row{display:flex;align-items:center;gap:12px;background:var(--panel2);border:1px solid var(--line);padding:12px 12px}
 .log-info{flex:1;min-width:0}
@@ -1043,7 +1044,7 @@ button.bs-stop.buy:hover:not(:disabled), button.bs-stop.sell:hover:not(:disabled
 /* ===================== Tablet (iPad Pro 12.9: 1366×1024 / 1024×1366) ===================== */
 /* Touch: pointer events drive every drag (chart lines, drawings, gutters, cards); touch-action:none keeps
    the browser from stealing those gestures for page scroll. The chart canvas itself pans/zooms via LWC. */
-#chart, .gutter, #rndHud, #quizCard, .dd-chart canvas{ touch-action:none; }
+#chart, .gutter, #rndHud, #quizCard, .dd-chart{ touch-action:none; }
 #app{ height:100dvh; }   /* Safari's collapsing address bar: dvh tracks the visible height */
 /* ===================== Uniform control heights ===================== */
 /* One height per zone, applied as a hard `height` (not min-height) so buttons, selects and inputs in the
@@ -1206,7 +1207,7 @@ input, select, button{ -webkit-tap-highlight-color:transparent; }
 .popover .pop-row:is(button), #ctxMenu button.ctx-item{ width:100%; background:transparent; border:0; text-align:left; font:inherit; color:var(--txt); }
 
 /* ---- PATs review player: floating, draggable by the header, resizable from the corner ---- */
-.pats-panel{position:fixed;z-index:900;right:16px;bottom:16px;width:min(560px,calc(100vw - 32px));height:min(315px,calc(100vh - 32px));min-width:240px;min-height:160px;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line-hi);overflow:hidden}
+.pats-panel{position:fixed;z-index:900;right:16px;bottom:16px;width:min(560px,calc(100vw - 32px));height:min(315px,calc(100vh - 32px));min-width:160px;min-height:120px;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line-hi);overflow:hidden}
 .pats-panel[hidden]{display:none}
 .pats-head{position:absolute;top:0;left:0;right:0;z-index:3;display:flex;align-items:center;gap:4px;height:24px;padding:0 2px 0 6px;background:rgba(230,231,232,.94);border-bottom:1px solid var(--line);cursor:move;user-select:none;touch-action:none;opacity:0;pointer-events:none;transition:opacity .12s}
 .pats-panel:hover .pats-head,.pats-panel:focus-within .pats-head,.pats-panel.dragging .pats-head,.pats-panel.resizing .pats-head{opacity:1;pointer-events:auto}   /* the bar shows only while the pointer is over the player */
@@ -1245,8 +1246,107 @@ input, select, button{ -webkit-tap-highlight-color:transparent; }
 #btnWade.on .material-symbols-outlined{ color:var(--on-brand); }
 #btnWade.none{ opacity:.45; }
 #btnWade.none .material-symbols-outlined{ color:var(--dim); }
+/* the player parked in its button (minimized): the video waits there, a click brings it back */
+.pats-panel.min{visibility:hidden;pointer-events:none}
+#btnPats.min, #btnWade.min{ border-color:var(--brand); box-shadow:inset 0 -2px 0 var(--brand); }
 
 /* saved sessions dialog: header actions + what a session holds */
 .log-hacts{display:flex;align-items:center;gap:6px}
 .log-import{cursor:pointer}
 .log-at{color:var(--txt);font-weight:600}
+
+/* review-video clips: [ ] + a chip in the player bar; boxes over the chart (#clipLayer lives in #chart, clipped to the pane) */
+.clip-ghost{position:fixed;z-index:2000;pointer-events:none;transform:translate(8px,8px);display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:var(--panel);border:1px dashed var(--line-hi);color:var(--dim);font-size:11px;font-weight:600;white-space:nowrap}
+.clip-ghost.over{border:1px solid var(--brand);color:var(--brand)}
+.clip-ghost .material-symbols-outlined{font-size:15px}
+#clipLayer{position:absolute;left:0;top:0;z-index:4;pointer-events:none;overflow:hidden}
+.clip-box{position:absolute;pointer-events:auto;display:flex;flex-direction:column;background:#000;border:1px solid var(--line-hi);box-shadow:0 2px 8px rgba(0,0,0,.18)}
+.clip-head{display:flex;align-items:center;gap:4px;height:22px;padding:0 2px 0 6px;background:var(--bg);border-bottom:1px solid var(--line);cursor:move;user-select:none;touch-action:none;font-size:11px;font-weight:600;color:var(--txt)}
+.clip-head .material-symbols-outlined{font-size:15px;color:var(--brand)}
+.clip-title{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.clip-x{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border:0;background:none;color:var(--dim);cursor:pointer}
+.clip-x .material-symbols-outlined{color:inherit}
+.clip-x:hover{background:var(--hover);color:var(--txt)}
+.clip-body{position:relative;aspect-ratio:16/9;background:#000}
+.clip-body video,.clip-body iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#000}
+.clip-wait{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:8px;text-align:center;color:#ddd;font-size:12px}
+.clip-wait small{color:#aaa;font-size:11px;max-height:3em;overflow:hidden}
+.clip-bar{width:60%;height:3px;background:rgba(255,255,255,.2)}
+.clip-bar i{display:block;height:100%;width:3%;background:var(--brand);transition:width .3s}
+.clip-acts{display:flex;gap:6px}
+.clip-acts button{height:24px;padding:0 10px;font-size:11px}
+.clip-grip{position:absolute;right:0;bottom:0;width:14px;height:14px;cursor:nwse-resize;touch-action:none;z-index:2;
+  background:linear-gradient(135deg,transparent 0 50%,var(--line-hi) 50% 58%,transparent 58% 70%,var(--line-hi) 70% 78%,transparent 78%)}
+
+/* clip editor docked under the review video (the yt-clip extension's layout, in this app's colours) */
+#clipToggle.on{color:var(--brand)}
+#clipToggle:disabled{opacity:.35;cursor:default}
+.cp{flex:none;position:relative;padding:8px 10px 6px;border-top:1px solid var(--line);background:var(--panel);color:var(--txt);font-size:12px;user-select:none;outline:none}
+.cp[hidden]{display:none}
+.cp-prog{position:absolute;left:0;right:0;top:0;height:2px;background:var(--brand);transform-origin:left;transform:scaleX(var(--p,0));transition:transform .3s}
+.cp-strip{position:relative;height:44px;overflow:hidden;background:#1b1b1b;cursor:pointer;touch-action:none}
+.cp-tiles{position:absolute;inset:0;display:flex;pointer-events:none}
+.cp-tiles div{flex:none;height:100%;background-repeat:no-repeat}
+.cp-seg{position:absolute;top:0;bottom:0;box-sizing:border-box;border:2px solid var(--brand);background:rgba(204,68,0,.18);opacity:.6}
+.cp-seg.on{opacity:1;border-width:3px;background:none;box-shadow:0 0 0 999px rgba(0,0,0,.35);cursor:grab}
+.cp-seg.on.moving{cursor:grabbing}
+.cp-mark{position:absolute;top:0;bottom:0;width:3px;margin-left:-1.5px;background:var(--brand);pointer-events:none}
+.cp-grab{position:absolute;top:0;bottom:0;width:12px;margin-left:-6px;cursor:ew-resize;touch-action:none}
+.cp-grab::after{content:'';position:absolute;left:3px;top:11px;bottom:11px;width:6px;background:var(--brand)}
+.cp-grab::before{content:'';position:absolute;inset:0 -4px}
+#cpGA.out{margin-left:-12px}   /* a narrow clip: the handles sit just OUTSIDE it, so its box can still be grabbed and pulled out */
+#cpGB.out{margin-left:0}
+#cpGA.out::after{left:6px}
+#cpGB.out::after{left:0}
+#cpGA.out::before{inset:0 0 0 -4px}
+#cpGB.out::before{inset:0 -4px 0 0}
+#cpGA.in{margin-left:0}   /* narrow clip against the strip's edge: that handle sits inside the box */
+#cpGB.in{margin-left:-12px}
+#cpGA.in::after{left:0;max-width:100%}   /* the bar never sticks out of a thin inside handle (it would steal the box's middle) */
+#cpGB.in::after{left:auto;right:0;max-width:100%}
+#cpGA.in::before,#cpGB.in::before{inset:0}
+button.cp-cut:hover:not(:disabled){background:var(--brand);color:var(--on-brand);filter:brightness(1.1)}
+.cp-playhead{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:#fff;box-shadow:0 0 2px rgba(0,0,0,.6);pointer-events:none}
+.cp-hvline{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:rgba(255,255,255,.55);pointer-events:none}
+.cp-scale{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;height:32px;color:var(--dim);font-variant-numeric:tabular-nums}
+.cp-mid{display:flex;gap:2px}
+.cp-end{display:flex;justify-content:flex-end;align-items:center;gap:6px}
+.cp-ib{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;background:none;color:var(--txt);cursor:pointer}
+.cp-ib:hover:not(:disabled){background:var(--hover)}
+.cp-ib:disabled{opacity:.35;cursor:default}
+.cp-ib svg{width:18px;height:18px;fill:currentColor}
+.cp-ib .material-symbols-outlined{font-size:18px;color:inherit}
+.cp-ib:focus-visible,.cp-add:focus-visible,.cp-cut:focus-visible,.cp-fit:focus-visible{outline:2px solid var(--brand);outline-offset:-2px}
+.cp-fit{height:22px;padding:0 8px;border:1px solid var(--line);background:var(--panel);color:var(--txt);font-size:11px;cursor:pointer}
+.cp-segrow{display:flex;align-items:flex-start;gap:8px}
+.cp-list{flex:1;min-width:0;max-height:78px;overflow:auto}
+.cp-row{display:flex;align-items:center;gap:6px;height:26px;padding:0 2px 0 6px;cursor:pointer}
+.cp-row:hover,.cp-row.on{background:var(--hover)}
+.cp-row .n{width:14px;color:var(--dim);text-align:center}
+.cp-row .t{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.cp-row .d{color:var(--dim);font-variant-numeric:tabular-nums}
+.cp-empty{display:flex;align-items:center;min-height:28px;color:var(--dim)}
+.cp-add{display:inline-flex;align-items:center;gap:2px;height:26px;padding:0 10px 0 6px;border:1px solid var(--line);background:var(--panel);color:var(--txt);font-size:12px;cursor:pointer;white-space:nowrap}
+.cp-add:disabled{opacity:.4;cursor:default}
+.cp-add .material-symbols-outlined{font-size:16px;color:inherit}
+.cp-foot{display:flex;align-items:center;gap:6px;margin-top:4px;padding-top:6px;border-top:1px solid var(--line)}
+.cp-msg{flex:1;min-width:0;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cp-msg.err{color:var(--neg)}
+.cp-undo{height:20px;margin-left:4px;padding:0 6px;border:1px solid var(--line);background:var(--panel);color:var(--txt);font-size:11px;cursor:pointer}
+.cp-cut{display:inline-flex;align-items:center;gap:4px;height:28px;padding:0 14px 0 10px;border:0;background:var(--brand);color:var(--on-brand);font-weight:600;cursor:pointer}
+.cp-cut:disabled{opacity:.4;cursor:default}
+.cp-cut .material-symbols-outlined{font-size:16px;color:inherit}
+.cp-tray{display:flex;gap:6px;overflow-x:auto;padding-top:6px}
+.cp-tray:empty{display:none}
+.cp-card{flex:none;display:flex;align-items:center;gap:6px;height:31px;padding:0 8px 0 1px;border:1px solid var(--line);background:var(--panel);cursor:grab;touch-action:none;white-space:nowrap}
+.cp-card:hover{border-color:var(--line-hi)}
+.cp-card:active{cursor:grabbing}
+.cp-card .th{flex:none;width:48px;height:27px;background:#222 no-repeat}
+.cp-card .lb{font-size:11px;font-variant-numeric:tabular-nums}
+.cp-card small{color:var(--dim);font-size:10px;font-variant-numeric:tabular-nums}
+.cp-card small.run{color:var(--brand)}
+.cp-card small.bad{color:var(--neg)}
+.cp-hover{position:absolute;z-index:6;display:flex;flex-direction:column;align-items:center;gap:4px;pointer-events:none}
+.cp-hover[hidden]{display:none}
+.cp-hvimg{border:2px solid #fff;background:#000 no-repeat;box-shadow:0 2px 10px rgba(0,0,0,.5)}
+.cp-hvtime{padding:1px 8px;background:rgba(0,0,0,.72);color:#fff;font:500 12px/18px var(--mono, monospace);font-variant-numeric:tabular-nums}

@@ -33,3 +33,8 @@ data/*_db_15s.json
 data/*_db_5s.json
 data/*.weeks
 auto_start.vbs.bak
+
+# YouTube review clips cut by serve.py /api/clip (local cache, re-cut on demand; never committed)
+data/clips/
+# daily PATs / Wade review-list refresh: console output of the latest run
+data/daily_reviews.last.txt

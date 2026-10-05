@@ -1138,13 +1138,33 @@ try {
       openPosition('long', 7796.75, t0, 'Struct SL · fixed TP', 1);
       const tp = orders.find(o => o.type === 'target').price;
       bboAt = () => [tp - 6 * TICK, tp];   // stale bid 6 ticks under the print, as on 09/25 ES 13:01:21
-      processSub({ time: t0, open: tp - TICK, high: tp, low: tp - TICK, close: tp, volume: 1 }, baseIdx);
+      processSub({ time: t0, open: tp - TICK, high: tp + TICK, low: tp - TICK, close: tp, volume: 1 }, baseIdx);   // trades 1 tick through (a touch alone is not a fill: REG5b)
       bboAt = realBbo;
       const t = trades[trades.length - 1], out = { tp, exit: t && t.exit, type: t && t.exitType, flat: !position };
       trades.splice(keep); saveJSON('rt_trades', trades); position = sv.position; orders = sv.orders; entryOrder = sv.entryOrder; renderAll();
       return out;
     });
-    report('REG5-target-fills-at-limit', r5.type === 'target' && Math.abs(r5.exit - r5.tp) < 1e-9 && r5.flat, `long target ${r5.tp} touched while the bid sat 6 ticks lower -> booked at ${r5.exit} (${r5.type}); must equal the target, never the bid`);
+    report('REG5-target-fills-at-limit', r5.type === 'target' && Math.abs(r5.exit - r5.tp) < 1e-9 && r5.flat, `long target ${r5.tp} traded through while the bid sat 6 ticks lower -> booked at ${r5.exit} (${r5.type}); must equal the target, never the bid`);
+  }
+  // ================= REG5b a take-profit needs price to trade 1 tick THROUGH it; a touch does not fill =================
+  {
+    const r = await page.evaluate(() => {
+      const keep = trades.length, t0 = baseBars[baseIdx].time, sv = { position, orders, entryOrder }, out = {};
+      for (const side of ['long', 'short']) {
+        openPosition(side, 7796.75, t0, 'Struct SL · fixed TP', 1);
+        const tp = orders.find(o => o.type === 'target').price, n0 = trades.length, L = side === 'long';
+        processSub({ time: t0, open: L ? tp - TICK : tp + TICK, high: L ? tp : tp + TICK, low: L ? tp - TICK : tp, close: tp, volume: 1 }, baseIdx);   // touch
+        const touched = trades.length > n0;
+        processSub({ time: t0, open: tp, high: L ? tp + TICK : tp, low: L ? tp : tp - TICK, close: tp, volume: 1 }, baseIdx);   // 1 tick through
+        const t = trades[trades.length - 1];
+        out[side] = { tp, touched, filled: trades.length > n0 && t.exitType === 'target', exit: t && t.exit };
+        position = null; orders = [];
+      }
+      trades.splice(keep); saveJSON('rt_trades', trades); position = sv.position; orders = sv.orders; entryOrder = sv.entryOrder; renderAll();
+      return out;
+    });
+    const ok = ['long', 'short'].every(k => !r[k].touched && r[k].filled && Math.abs(r[k].exit - r[k].tp) < 1e-9);
+    report('REG5b-target-needs-trade-through', ok, `long ${r.long.tp}: touch filled(${r.long.touched}), +1 tick filled(${r.long.filled}) @ ${r.long.exit}; short ${r.short.tp}: touch filled(${r.short.touched}), -1 tick filled(${r.short.filled}) @ ${r.short.exit}`);
   }
 
   // ================= Regression guards (Stage 5 doc, 4 of them) =================
@@ -1213,7 +1233,7 @@ try {
   await browser.close();
 }
 
-const order = ['G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G15B', 'G16', 'G17', 'G18', 'G19', 'G20', 'G21', 'G22', 'G23', 'G24', 'G25', 'G26', 'G27', 'G28', 'G29', 'G30', 'G31', 'G32', 'G33', 'G34', 'G35', 'G36', 'G37', 'G38', 'G39', 'G40', 'G41', 'G42', 'G43', 'G44', 'G45', 'G46', 'G47', 'G48', 'NT1', 'NT2', 'NT3', 'NT4', 'NT5', 'NT6', 'NT7', 'NT8', 'NT9', 'NT10', 'NT11', 'NT12', 'NT13', 'NT14', 'NT15', 'NT16', 'NT17', 'NT18', 'NT19', 'NT20', 'REG1-no-render-err', 'REG2-trading-hotkeys', 'REG3-hide-trades-unchanged', 'REG4-no-drift-on-rewindow', 'REG5-target-fills-at-limit', 'CLK1', 'CLK2', 'DEF1', 'STY1', 'TXT1', 'TXT2', 'TXT3', 'TXT4', 'TXT5', 'TXT6', 'TXT7'];
+const order = ['G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G15B', 'G16', 'G17', 'G18', 'G19', 'G20', 'G21', 'G22', 'G23', 'G24', 'G25', 'G26', 'G27', 'G28', 'G29', 'G30', 'G31', 'G32', 'G33', 'G34', 'G35', 'G36', 'G37', 'G38', 'G39', 'G40', 'G41', 'G42', 'G43', 'G44', 'G45', 'G46', 'G47', 'G48', 'NT1', 'NT2', 'NT3', 'NT4', 'NT5', 'NT6', 'NT7', 'NT8', 'NT9', 'NT10', 'NT11', 'NT12', 'NT13', 'NT14', 'NT15', 'NT16', 'NT17', 'NT18', 'NT19', 'NT20', 'REG1-no-render-err', 'REG2-trading-hotkeys', 'REG3-hide-trades-unchanged', 'REG4-no-drift-on-rewindow', 'REG5-target-fills-at-limit', 'REG5b-target-needs-trade-through', 'CLK1', 'CLK2', 'DEF1', 'STY1', 'TXT1', 'TXT2', 'TXT3', 'TXT4', 'TXT5', 'TXT6', 'TXT7'];
 const byId = Object.fromEntries(results.map(r => [r.id, r.status]));
 const pass = order.filter(id => byId[id] === 'PASS').length, fail = order.filter(id => byId[id] === 'FAIL').length, sk = order.filter(id => byId[id] === 'SKIP').length, missing = order.filter(id => !(id in byId));
 console.log(`\n${pass} PASS / ${fail} FAIL / ${sk} SKIP out of ${order.length}${missing.length ? ` (missing: ${missing.join(',')})` : ''}`);

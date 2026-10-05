@@ -43,6 +43,7 @@ const etDMHMS = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York',
 function etP(ts) { const o = {}; for (const x of etDMHMS.formatToParts(new Date(ts * 1000))) o[x.type] = x.value; return o; }
 const tFmt = (ts) => { const o = etP(ts); return `${o.month}/${o.day} ${o.hour}:${o.minute}:${o.second} ET`; };  // US cash open reads 09:30:00 ET
 const tHM = (ts) => tFmt(ts).replace(/^\d\d\/\d\d\s*/, '');   // time only, for rows inside a single-day view
+const sHM = (ts) => typeof ts === 'number' && ts > 0 && ts < 8e12 ? tHM(ts) : '–', sF2 = (p) => typeof p === 'number' && isFinite(p) ? f2(p) : '–';   // a damaged record field shows a dash instead of breaking the dialog
 const EXIT_LBL = { manual: 'Closed manually', stop: 'Stopped out', target: 'Target hit', reverse: 'Reversed' };
 const dayKey = (ts) => { const d = new Date(ts * 1000); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}`; };
 const _tdkCache = new Map();   // hour-bucket memo: buildSessions calls this once PER BAR — a two-month chunk load was 460k Intl.format calls (~seconds of freeze on every chunk-day switch)
@@ -71,10 +72,15 @@ function etTickFmt(ts, type) { const o = etP(ts); if (type === _TM.Year || type 
 const etCrosshairFmtImpl = (ts) => { const o = etP(ts); const t = tfTicks ? `${o.hour}:${o.minute}:${o.second}` : `${o.hour}:${o.minute}`; return blindDate() ? `${t} ET` : `${o.month}/${o.day} ${t} ET`; };
 const etCrosshairFmt = (ts) => etCrosshairFmtImpl(ts);
 const loadJSON = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
-const saveJSON = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+let _quotaToast = 0;
+const saveJSON = (k, v) => {   // true when stored; a full store is reported (at most every 10 s) instead of throwing mid-way through an order / exit
+  try { localStorage.setItem(k, JSON.stringify(v)); return true; }
+  catch (e) { if (Date.now() - _quotaToast > 10000) { _quotaToast = Date.now(); try { toast('Browser storage is full: export and delete old sessions or trades'); } catch (_) {} } return false; }
+};
 
 // ---------- state ----------
 let rndMode = false, rndCurKey = null, rndStartCount = 0, rndRounds = [], rndPrevMin = null, rndSettled = false;   // random-date practice mode
+let _dsBusy = 0, _lastPosTimer = 0;   // a dataset switch in flight (its bars and symbol don't match yet) / the pending last-position save
 let quizMode = false;   // quiz mode: replay the user's OWN past trades up to the bar before entry and re-decide (declared here so the date-blinding formatters can read it)
 let rndSavedTrades = null, rndSavedMarkers = null;   // real trades/markers parked while the random-mode sandbox runs
 let baseBars = [];           // raw 1-min bars
@@ -103,15 +109,32 @@ let deepMode = false, deepSym = null, deepIndex = [], deepAllDays = new Set(), d
 let fO = 0, fH = 0, fL = 0, fC = 0, fV = 0, fBucket = -1;   // live-forming candle accumulator
 
 let position = null;         // {side,qty,entry,entryTime,atm,slTicks,maxFav,beDone}
+const TP_THROUGH = 1;   // ticks price must trade past a take-profit limit before it counts as filled (7740.25 needs a 7740.50 print)
 let orders = [];             // working: {type:'stop'|'target', price, qty, ticks?}
 let entryOrder = null;       // pending entry: {side, kind:'limit'|'stop', price, atm, mult}
+function tradeOk(t) {   // a record the journal, calendar and review cards can show: real numbers, epoch-second times a date can format
+  const n = (v) => typeof v === 'number' && isFinite(v), tm = (v) => n(v) && v > 1e9 && v < 4e9;
+  return !!t && typeof t === 'object' && n(t.pnl) && tm(t.entryTime) && tm(t.exitTime) && n(t.entry) && n(t.exit);
+}
+function fixTrade(t) {   // in place: a non-number R means "no R"; tps keeps only target objects (a null one used to stop the app at start-up)
+  if (t.R != null && !(typeof t.R === 'number' && isFinite(t.R))) t.R = null;
+  if (t.tps != null) t.tps = Array.isArray(t.tps) ? t.tps.filter(x => x && typeof x === 'object' && (Number.isFinite(x.ticks) || Number.isFinite(x.price))) : [];
+  return t;
+}
+function tradesSane(list) {   // drops records that would break the dialogs (kept in rt_trades_bad, never lost); a non-number R becomes "no R"
+  const ok = [], bad = [];
+  for (const t of Array.isArray(list) ? list : []) { if (tradeOk(t)) ok.push(fixTrade(t)); else bad.push(t); }
+  if (bad.length) { try { localStorage.setItem('rt_trades_bad', JSON.stringify(JSON.parse(localStorage.getItem('rt_trades_bad') || '[]').concat(bad).slice(-500))); } catch (e) {} }
+  return ok;
+}
 let trades = loadJSON('rt_trades', []);
-(() => { const bk = loadJSON('rt_trades_prerandom', null); if (bk) { trades = bk; saveJSON('rt_trades', trades); localStorage.removeItem('rt_trades_prerandom'); } })();   // recover real trades if a random-mode session was interrupted mid-round
+{ const ok = tradesSane(trades); if (!Array.isArray(trades) || ok.length !== trades.length) { trades = ok; try { localStorage.setItem('rt_trades', JSON.stringify(trades)); } catch (e) {} } }
+(() => { const bk = loadJSON('rt_trades_prerandom', null); if (bk) { trades = tradesSane(bk); saveJSON('rt_trades', trades); localStorage.removeItem('rt_trades_prerandom'); } })();   // recover real trades if a random-mode session was interrupted mid-round
 function fixTargetFills(list) {   // 2026-08-25..10-04 target exits crossed the spread (sold at the bid): re-book each at its own target price. Returns how many changed.
   const TV = { NQ: 5, ES: 12.5, MNQ: 0.5, MES: 1.25 }; let n = 0;
-  for (const t of list || []) {
-    if (t.exitType !== 'target' || !Array.isArray(t.tps) || !t.tps.length || t.exit == null) continue;
-    const long = t.side === 'long', px = t.tps.map(p => p.price).filter(p => p != null);
+  for (const t of Array.isArray(list) ? list : []) {
+    if (!t || typeof t !== 'object' || t.exitType !== 'target' || !Array.isArray(t.tps) || !t.tps.length || typeof t.exit !== 'number' || typeof t.entry !== 'number' || !isFinite(t.entry)) continue;
+    const long = t.side === 'long', px = t.tps.map(p => p && p.price).filter(p => typeof p === 'number' && isFinite(p));
     const tp = long ? Math.min(...px.filter(p => p >= t.exit - 1e-9)) : Math.max(...px.filter(p => p <= t.exit + 1e-9));   // the target this exit belongs to: crossing only ever made the fill worse
     if (!isFinite(tp) || Math.abs(tp - t.exit) < 1e-9) continue;
     const tv = TV[t.sym] || (t.ticks ? Math.abs(t.pnl / (t.ticks * (t.qty || 1))) : 0); if (!tv) continue;
@@ -125,19 +148,19 @@ function fixTargetFills(list) {   // 2026-08-25..10-04 target exits crossed the 
   if (loadJSON('rt_tgtfix_done', false)) return;
   const logs = loadJSON('rt_trade_logs', []);
   saveJSON('rt_trades_bak_tgtfix', trades); saveJSON('rt_trade_logs_bak_tgtfix', logs);
-  const n = fixTargetFills(trades) + logs.reduce((s, l) => s + fixTargetFills(l.trades), 0);
+  const n = fixTargetFills(trades) + (Array.isArray(logs) ? logs : []).reduce((s, l) => s + (l && typeof l === 'object' ? fixTargetFills(l.trades) : 0), 0);
   if (n) { saveJSON('rt_trades', trades); saveJSON('rt_trade_logs', logs); setTimeout(() => toast(`Fixed ${n} target exit${n > 1 ? 's' : ''} that were booked at the bid instead of the target price`), 1500); }
   saveJSON('rt_tgtfix_done', true);
 })();
 let showTrades = loadJSON('rt_show_trades', true);   // show entry/exit trade arrows on the chart
-let tradeLogs = (loadJSON('rt_trade_logs', []) || []).filter(l => l && typeof l === 'object' && Array.isArray(l.trades)).map(l => ({ ...l, trades: l.trades.filter(t => t && typeof t === 'object') }));   // saved sessions / trade logs: [{id,name,ts,trades:[...], v2: drawings, markers, sym, t, tf}]
+let tradeLogs = [].concat(loadJSON('rt_trade_logs', []) || []).filter(l => l && typeof l === 'object' && Array.isArray(l.trades)).map(l => ({ ...l, trades: l.trades.filter(t => t && typeof t === 'object').map(fixTrade) }));   // saved sessions / trade logs: [{id,name,ts,trades:[...], v2: drawings, markers, sym, t, tf}]
 // Trades taken before 2026-09-13 have no planned-R:R fields, but they DO carry the stop ticks and the
 // initial target list from entry — enough to reconstruct the plan (mean of the targets ÷ stop).
 function backfillPlanRR(list) {
   let n = 0;
   (list || []).forEach(t => {
     if (t.planRR != null || !(t.stopTicks > 0) || !Array.isArray(t.tps) || !t.tps.length) return;
-    const tp = t.tps.reduce((a, x) => a + (x.ticks || 0), 0) / t.tps.length;
+    const tk = t.tps.map(x => x && x.ticks).filter(v => typeof v === 'number' && v > 0), tp = tk.length ? tk.reduce((a, v) => a + v, 0) / tk.length : 0;   // only real targets count
     if (!(tp > 0)) return;
     t.planSl = t.stopTicks; t.planTp = tp; t.planRR = tp / t.stopTicks; n++;
   });
@@ -224,7 +247,7 @@ const chart = LightweightCharts.createChart($('chart'), {
   localization: { timeFormatter: etCrosshairFmt },                 // crosshair label in ET
   timeScale: { borderColor: '#BCBDBF', timeVisible: true, secondsVisible: true, rightOffset: 6, tickMarkFormatter: etTickFmt }, // axis labels in ET (open = 09:30)
 });
-let candle = chart.addCandlestickSeries({ upColor: '#32CD32', downColor: '#FF0000', borderVisible: true, borderUpColor: '#1E8A1E', borderDownColor: '#B30000', wickUpColor: '#1E8A1E', wickDownColor: '#B30000' });
+let candle = chart.addCandlestickSeries({ priceFormat: { type: 'price', minMove: TICK, precision: 2 }, upColor: '#32CD32', downColor: '#FF0000', borderVisible: true, borderUpColor: '#1E8A1E', borderDownColor: '#B30000', wickUpColor: '#1E8A1E', wickDownColor: '#B30000' });
 let vol = chart.addHistogramSeries({ priceScaleId: 'vol', priceFormat: { type: 'volume' } });
 chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
 // Volume histogram toggle (Indicators menu). On tick-count bars every bar holds ~the same volume, so the
@@ -1326,43 +1349,47 @@ function drawY(p) {   // price -> y. LWC v4 priceToCoordinate is a linear map th
   if (p == null) return null;
   const y = candle.priceToCoordinate(p); return y != null && isFinite(y) ? y : null;
 }
+const crispPx = (v) => v == null ? null : Math.round(v - 0.75) + 0.75;   // 1.5px line centred at n+0.75 covers one full column + one half -> crisp (integer centre would split 75%/75%)
+function paintDrawing(ctx, d, X, Y, W, H, sel, dbg, env) {   // env (review charts): { logical(t), px, qty } instead of the live main chart's   // one drawing's body in pixels; X / Y map time / price to this chart (the main chart, or a trade review chart)
+  if (d.type === 'clip') return;   // a video clip is a DOM box over the chart (syncClipBoxes), never canvas ink
+  if (d.type === 'hl') { const y = crispPx(Y(d.p1.p)); if (y == null) return; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); return; }
+  if (d.type === 'vline') { const x = crispPx(X(d.p1.t)); if (x == null) return; dbg.lastX = x; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); return; }   // G37: time only, full height (oscChart pane via oscVlinePrimitive)
+  if (d.type === 'hray') { const x = crispPx(X(d.p1.t)), y = crispPx(Y(d.p1.p)); if (x == null || y == null) return; dbg.lastX = x; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(W, y); ctx.stroke(); return; }   // G36: one point, extends right only
+  if (d.type === 'cross') { const x = crispPx(X(d.p1.t)), y = crispPx(Y(d.p1.p)); if (x == null || y == null) return; dbg.lastX = x; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); return; }   // G38: full-width + full-height through one point
+  if (d.type === 'fib') { drawFib(ctx, d, X, Y, W); return; }
+  if (d.type === 'measure') { drawMeasure(ctx, d, X, Y, sel, H, env); return; }
+  if (d.type === 'rr') { drawRR(ctx, d, X, Y, W, sel, env); return; }
+  if (d.type === 'text') { drawText(ctx, d, X, Y); return; }
+  if (d.type === 'channel') { const g = chanGeom(d, X, Y, W, H); if (!g) return; dbg.lastX = g.x1; ctx.beginPath(); for (const s of [g.a, g.b, ...g.lv]) { ctx.moveTo(s.ax, s.ay); ctx.lineTo(s.bx, s.by); } ctx.stroke(); return; }   // no fill, no midline unless a Level is set (NT)
+  if (!d.p2) return;   // an unknown one-point type must not throw here (the catch below would stop every drawing painting)
+  const x1 = X(d.p1.t), y1 = Y(d.p1.p), x2 = X(d.p2.t), y2 = Y(d.p2.p);
+  if (x1 == null || y1 == null || x2 == null || y2 == null) return;
+  dbg.lastX = x1;
+  if (d.type === 'box') {   // G39: Extend left/right clamp each side independently to the chart edge; Middle line = horizontal line at the price midpoint (TV does not state the direction; assumed horizontal)
+    const r = boxRect(d, x1, y1, x2, y2, W); ctx.globalAlpha = 0.12; ctx.fillRect(r.x, r.y, r.w, r.h); ctx.globalAlpha = 1; ctx.strokeRect(r.x, r.y, r.w, r.h);
+    if (d.middleLine) { const ym = Y((d.p1.p + d.p2.p) / 2); if (ym != null) { ctx.beginPath(); ctx.moveTo(r.x, ym); ctx.lineTo(r.x + r.w, ym); ctx.stroke(); } }
+  } else {   // tl / ray: Extend none/left/right/both (G34) via pixel extrapolation; optional arrowheads at the visible ends
+    const s = tlSeg(d, x1, y1, x2, y2, W, H); ctx.beginPath(); ctx.moveTo(s.ax, s.ay); ctx.lineTo(s.bx, s.by); ctx.stroke();
+    if (d.arrowStart) arrowHead(ctx, s.bx, s.by, s.ax, s.ay, ctx.lineWidth); if (d.arrowEnd) arrowHead(ctx, s.ax, s.ay, s.bx, s.by, ctx.lineWidth);
+  }
+}
 const drawingsPrimitive = {
   attached(p) { this._req = p.requestUpdate; },
   updateAllViews() {},
   paneViews: () => [{
     zOrder: () => 'top',
     renderer: () => ({ draw: (target) => {
-      if (hideFlags.drawings || (!drawings.length && !pendingPt)) { placeDrawToolbar(null); window.__drwDbg = { hidden: !!hideFlags.drawings, drawn: 0, handles: 0 }; return; }   // G33/G45: guard lives INSIDE the draw callback
+      if (hideFlags.drawings || (!drawings.length && !pendingPt)) { placeDrawToolbar(null); syncClipBoxes(); window.__drwDbg = { hidden: !!hideFlags.drawings, drawn: 0, handles: 0 }; return; }   // G33/G45: guard lives INSIDE the draw callback
       try {
         target.useMediaCoordinateSpace((scope) => {
           const ctx = scope.context, W = scope.mediaSize.width, H = (scope.mediaSize && scope.mediaSize.height) || 9999;
-          const X = drawX, Y = drawY, dbg = { lastX: null, drawn: 0, handles: 0 }, px = (v) => v == null ? null : Math.round(v - 0.75) + 0.75;   // 1.5px line centred at n+0.75 covers one full column + one half -> crisp (integer centre would split 75%/75%)
+          const X = drawX, Y = drawY, dbg = { lastX: null, drawn: 0, handles: 0 };
           const bb = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity, n: 0, bad: false };   // selection bbox (pixels) -> #drawToolbar anchor (G13); any null coordinate marks it bad -> toolbar hidden
           const bbAdd = (x, y) => { if (x == null || y == null) { bb.bad = true; return; } bb.n++; bb.x0 = Math.min(bb.x0, x); bb.y0 = Math.min(bb.y0, y); bb.x1 = Math.max(bb.x1, x); bb.y1 = Math.max(bb.y1, y); };
           for (const d of drawings) {   // axis-aligned one-point lines render at Math.round() pixels (crisp, like TV); free {t,p} stays fractional in the data
             if (!drawingVisible(d)) continue;   // G42 per-timeframe visibility / hidden flag (continue, never return: the handle pass below shares this callback)
             applyStyle(ctx, d); dbg.drawn++;
-            const sel = isSelected(d) || d === hoverDrawing;   // G12: measure / rr draw their own grab points only when selected or hovered
-            if (d.type === 'hl') { const y = px(Y(d.p1.p)); if (y == null) continue; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); continue; }
-            if (d.type === 'vline') { const x = px(X(d.p1.t)); if (x == null) continue; dbg.lastX = x; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); continue; }   // G37: time only, full height (oscChart pane via oscVlinePrimitive)
-            if (d.type === 'hray') { const x = px(X(d.p1.t)), y = px(Y(d.p1.p)); if (x == null || y == null) continue; dbg.lastX = x; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(W, y); ctx.stroke(); continue; }   // G36: one point, extends right only
-            if (d.type === 'cross') { const x = px(X(d.p1.t)), y = px(Y(d.p1.p)); if (x == null || y == null) continue; dbg.lastX = x; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); continue; }   // G38: full-width + full-height through one point
-            if (d.type === 'fib') { drawFib(ctx, d, X, Y, W); continue; }
-            if (d.type === 'measure') { drawMeasure(ctx, d, X, Y, sel, H); continue; }
-            if (d.type === 'rr') { drawRR(ctx, d, X, Y, W, sel); continue; }
-            if (d.type === 'text') { drawText(ctx, d); continue; }
-            if (d.type === 'channel') { const g = chanGeom(d, X, Y, W, H); if (!g) continue; dbg.lastX = g.x1; ctx.beginPath(); for (const s of [g.a, g.b, ...g.lv]) { ctx.moveTo(s.ax, s.ay); ctx.lineTo(s.bx, s.by); } ctx.stroke(); continue; }   // no fill, no midline unless a Level is set (NT)
-            if (!d.p2) continue;   // an unknown one-point type must not throw here (the catch below would stop every drawing painting)
-            const x1 = X(d.p1.t), y1 = Y(d.p1.p), x2 = X(d.p2.t), y2 = Y(d.p2.p);
-            if (x1 == null || y1 == null || x2 == null || y2 == null) continue;
-            dbg.lastX = x1;
-            if (d.type === 'box') {   // G39: Extend left/right clamp each side independently to the chart edge; Middle line = horizontal line at the price midpoint (TV does not state the direction; assumed horizontal)
-              const r = boxRect(d, x1, y1, x2, y2, W); ctx.globalAlpha = 0.12; ctx.fillRect(r.x, r.y, r.w, r.h); ctx.globalAlpha = 1; ctx.strokeRect(r.x, r.y, r.w, r.h);
-              if (d.middleLine) { const ym = Y((d.p1.p + d.p2.p) / 2); if (ym != null) { ctx.beginPath(); ctx.moveTo(r.x, ym); ctx.lineTo(r.x + r.w, ym); ctx.stroke(); } }
-            } else {   // tl / ray: Extend none/left/right/both (G34) via pixel extrapolation; optional arrowheads at the visible ends
-              const s = tlSeg(d, x1, y1, x2, y2, W, H); ctx.beginPath(); ctx.moveTo(s.ax, s.ay); ctx.lineTo(s.bx, s.by); ctx.stroke();
-              if (d.arrowStart) arrowHead(ctx, s.bx, s.by, s.ax, s.ay, ctx.lineWidth); if (d.arrowEnd) arrowHead(ctx, s.ax, s.ay, s.bx, s.by, ctx.lineWidth);
-            }
+            paintDrawing(ctx, d, X, Y, W, H, isSelected(d) || d === hoverDrawing, dbg);   // G12: measure / rr draw their own grab points only when selected or hovered
           }
           ctx.setLineDash([]); ctx.lineWidth = 1.5;
           // anchor handles only for the hovered drawing (white) and the selected set (blue) — G12 / G19
@@ -1381,7 +1408,7 @@ const drawingsPrimitive = {
             for (const pt of hpts(hoverDrawing)) { if (pt.x == null || pt.y == null) continue; ctx.beginPath(); ctx.arc(pt.x, pt.y, 3.5, 0, 7); ctx.fillStyle = '#FFFFFF'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = (hoverDrawing.style && hoverDrawing.style.color) || hoverDrawing.color || '#000000'; ctx.stroke(); dbg.handles++; }
           }
           for (const d of drawings) {
-            if (!isSelected(d) || !drawingVisible(d)) continue;
+            if (!isSelected(d) || !drawingVisible(d) || d.type === 'clip') continue;
             if (d.type === 'text') { const r = textRect(d); if (!r) { bb.bad = true; continue; } bbAdd(r.x, r.y); bbAdd(r.x + r.w, r.y + r.h); textBox(d, '#6495ED'); continue; }   // the floating toolbar sits above the whole box
             const pts = hpts(d); if (!pts.length) bb.bad = true;
             for (const pt of pts) {
@@ -1418,6 +1445,7 @@ const drawingsPrimitive = {
           }
           dbg.toolbar = placeDrawToolbar(bb, W, H);   // G13: floating toolbar follows the selection bbox on every paint (pan / zoom / replay), hidden when off-screen or a coordinate is null
           if (txtEd) placeTextEditor(W, H);   // the typing box rides along with its anchor (clipped to this pane)
+          syncClipBoxes(W, H);
           window.__drwDbg = dbg;
         });
         window.__drw = { n: ((window.__drw || {}).n || 0) + 1, ok: true };
@@ -1484,13 +1512,13 @@ function textLayout(d, str) {   // one box model for the canvas, the hit-test an
   const base = Math.round(asc != null && desc != null ? (lh - asc - desc) / 2 + asc : lh * 0.78);   // baseline inside a line box, centred the way CSS does it (keeps the caret on the glyphs)
   return { font, lines, lh, padX, padY, base, w: Math.ceil(w) + 2 * padX, h: lines.length * lh + 2 * padY };
 }
-function textRect(d) {   // whole-px box: the fill, the border, the glyphs and the editor then snap identically
-  const x = drawX(d.p1.t), y = drawY(d.p1.p); if (x == null || y == null) return null;
+function textRect(d, X = drawX, Y = drawY) {   // whole-px box: the fill, the border, the glyphs and the editor then snap identically
+  const x = X(d.p1.t), y = Y(d.p1.p); if (x == null || y == null) return null;
   const L = textLayout(d, d.text || (txtEd && txtEd.id === d.id ? TEXT_HINT : ''));
   return { x: Math.round(x), y: Math.round(y), w: L.w, h: L.h, L };
 }
-function drawText(ctx, d) {   // the canvas always paints the glyphs, also while typing (the textarea above is see-through): no jump on edit / finish at any DPR
-  const r = textRect(d); if (!r) return; const s = d.style || {}, L = r.L;
+function drawText(ctx, d, X, Y) {   // the canvas always paints the glyphs, also while typing (the textarea above is see-through): no jump on edit / finish at any DPR
+  const r = textRect(d, X, Y); if (!r) return; const s = d.style || {}, L = r.L;
   ctx.save(); ctx.setLineDash([]);
   if (s.bg) { ctx.fillStyle = hexA(s.bgColor || TEXT_DEFAULT.bgColor, s.bgOpacity == null ? 1 : +s.bgOpacity); ctx.fillRect(r.x, r.y, r.w, r.h); }
   if (s.border) { ctx.strokeStyle = s.borderColor || TEXT_DEFAULT.borderColor; ctx.lineWidth = 1; ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1); }
@@ -1759,11 +1787,11 @@ function drawFib(ctx, d, X, Y, W) {
 }
 // ---- Measure / ruler (drawing type 'measure', 2-point) ----
 function fmtDur(sec) { if (sec < 60) return Math.round(sec) + 's'; const m = Math.round(sec / 60); if (m < 60) return m + 'm'; const h = Math.floor(m / 60), rm = m % 60; if (h < 24) return rm ? `${h}h ${pad(rm)}m` : `${h}h`; const d = Math.floor(h / 24), rh = h % 24; return rh ? `${d}d ${pad(rh)}h` : `${d}d`; }
-function drawMeasure(ctx, d, X, Y, selected, H = 9999) {   // selected: draw the two grab dots (G12)
+function drawMeasure(ctx, d, X, Y, selected, H = 9999, env) {   // selected: draw the two grab dots (G12)
   const x1 = X(d.p1.t), y1 = Y(d.p1.p), x2 = X(d.p2.t), y2 = Y(d.p2.p);
   if (x1 == null || y1 == null || x2 == null || y2 == null) return;
   const dPts = d.p2.p - d.p1.p, dTicks = tcount(d.p2.p, d.p1.p), dPct = d.p1.p ? (dPts / d.p1.p) * 100 : 0;
-  const l1 = timeToLogical(d.p1.t), l2 = timeToLogical(d.p2.t);   // points may sit between bars (free time, G6) -> fractional logical distance
+  const lgOf = (env && env.logical) || timeToLogical, l1 = lgOf(d.p1.t), l2 = lgOf(d.p2.t);   // points may sit between bars (free time, G6) -> fractional logical distance
   const nBars = (l1 != null && l2 != null) ? Math.round(Math.abs(l2 - l1)) : 0, dSec = Math.abs(d.p2.t - d.p1.t), up = dPts >= 0;
   const bx = Math.min(x1, x2), by = Math.min(y1, y2), bw = Math.max(1, Math.abs(x2 - x1)), bh = Math.max(1, Math.abs(y2 - y1)), col = styleColor(d, up ? '#1E8A1E' : '#B30000');   // style.color overrides the auto up/down colour once set (G17)
   ctx.save(); ctx.setLineDash([]);
@@ -1799,7 +1827,7 @@ function rrDefaultRiskTicks() {          // a visible default = ~25% of the last
   const range = (isFinite(hi) && isFinite(lo)) ? hi - lo : 0;
   return Math.max(8, Math.round((range * 0.25) / TICK) || 8);
 }
-function drawRR(ctx, d, X, Y, W, selected) {   // selected: draw the corner / edge handles (G12); style.color drives the entry line + border (G17)
+function drawRR(ctx, d, X, Y, W, selected, env) {   // selected: draw the corner / edge handles (G12); style.color drives the entry line + border (G17)
   const ye = Y(d.p1.p), ys = Y(d.stop), yt = Y(d.target);
   if (ye == null || ys == null || yt == null) return;
   const { xa, xb } = rrRange(d, X), w = Math.max(2, xb - xa), cx = (xa + xb) / 2, col = styleColor(d, '#000000');
@@ -1816,13 +1844,13 @@ function drawRR(ctx, d, X, Y, W, selected) {   // selected: draw the corner / ed
   const sq = (x, y) => { ctx.fillStyle = '#6495ED'; ctx.strokeStyle = '#000000'; ctx.lineWidth = 1.5; ctx.fillRect(x - 3.5, y - 3.5, 7, 7); ctx.strokeRect(x - 3.5, y - 3.5, 7, 7); };
   const ci = (x, y) => { ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fillStyle = '#6495ED'; ctx.fill(); ctx.strokeStyle = '#000000'; ctx.lineWidth = 1.5; ctx.stroke(); };
   // metrics + centered label pills — matches TradingView's Long/Short position tool
-  const qty = Math.max(1, parseInt(($('qty') || {}).value, 10) || 1);
-  const long = d.target >= d.p1.p, pv = INSTR.tickValue / INSTR.tickSize;          // $ per point
+  const qty = env && env.qty ? Math.max(1, env.qty | 0) : Math.max(1, parseInt(($('qty') || {}).value, 10) || 1);
+  const tv = (env && env.tv) || INSTR.tickValue, long = d.target >= d.p1.p, pv = tv / ((env && env.tsz) || INSTR.tickSize);          // $ per point (a review card: the trade's contract)
   const riskT = Math.abs(tcount(d.p1.p, d.stop)), rewT = Math.abs(tcount(d.target, d.p1.p));
   const rr = riskT > 0 ? rewT / riskT : 0;
   const tPct = d.p1.p ? (d.target - d.p1.p) / d.p1.p * 100 : 0, sPct = d.p1.p ? (d.stop - d.p1.p) / d.p1.p * 100 : 0;
   const tPts = Math.abs(d.target - d.p1.p), sPts = Math.abs(d.p1.p - d.stop);
-  const cur = (typeof curPx === 'function' && baseBars.length) ? curPx() : d.p1.p;
+  const cur = env ? (isFinite(env.px) ? env.px : d.p1.p) : (typeof curPx === 'function' && baseBars.length) ? curPx() : d.p1.p;
   const openPnl = (long ? cur - d.p1.p : d.p1.p - cur) * pv * qty;                  // P&L if entered at the entry line, marked at the live bar
   const sgn = v => (v >= 0 ? '+' : '');
   const pill = (text, y, bg, fg) => {
@@ -1835,9 +1863,9 @@ function drawRR(ctx, d, X, Y, W, selected) {   // selected: draw the corner / ed
     ctx.globalAlpha = 1; ctx.fillStyle = fg;
     lines.forEach((ln, i) => ctx.fillText(ln, px + pw / 2, py + 4 + lh / 2 + i * lh));
   };
-  pill(`Target: ${f2(d.target)} (${sgn(tPct)}${tPct.toFixed(2)}%) ${tPts.toFixed(2)}, Amount: ${usd(rewT * INSTR.tickValue * qty)}`, yt, '#D3D3D3', '#1E8A1E');
+  pill(`Target: ${f2(d.target)} (${sgn(tPct)}${tPct.toFixed(2)}%) ${tPts.toFixed(2)}, Amount: ${usd(rewT * tv * qty)}`, yt, '#D3D3D3', '#1E8A1E');
   pill(`Open PnL: ${usd(openPnl)}, Qty: ${qty}\nRisk/reward ratio: ${rr.toFixed(2)}`, ye, '#D3D3D3', '#000000');
-  pill(`Stop: ${f2(d.stop)} (${sgn(sPct)}${sPct.toFixed(2)}%) ${sPts.toFixed(2)}, Amount: ${usd(riskT * INSTR.tickValue * qty)}`, ys, '#D3D3D3', '#B30000');
+  pill(`Stop: ${f2(d.stop)} (${sgn(sPct)}${sPct.toFixed(2)}%) ${sPts.toFixed(2)}, Amount: ${usd(riskT * tv * qty)}`, ys, '#D3D3D3', '#B30000');
   if (selected) { sq(xa, yt); sq(xb, yt); sq(xa, ys); sq(xb, ys); ci(xa, ye); ci(xb, ye); }   // handles last = on top of the pills
   ctx.restore();
 }
@@ -2026,7 +2054,7 @@ function drawingHandles() {
   for (const d of drawings) {
     if (!drawingVisible(d)) continue;
     if (d.type === 'hl') { const y = Y(d.p1.p); if (y != null) out.push({ d, horiz: true, hy: y, apply: (t, p) => { d.p1.p = p; } }); continue; }
-    if (d.type === 'text') continue;   // no anchor dot: the whole box drags (keeps the grab offset, no magnet jump)
+    if (d.type === 'text' || d.type === 'clip') continue;   // no anchor dot: the whole box drags (keeps the grab offset, no magnet jump)
     if (d.type === 'vline') { const x = X(d.p1.t); if (x != null) out.push({ d, vert: true, hx: x, apply: (t, p) => { if (t != null) d.p1.t = t; } }); continue; }   // G37: time only (mirror of hl's horiz)
     if (d.type === 'rr') {   // entry handle shifts all 3 levels; stop/target move individually; grabbable at both box edges
       const { xa, xb } = rrRange(d, X), eY = Y(d.p1.p), sY = Y(d.stop), tY = Y(d.target);
@@ -2065,6 +2093,7 @@ function drawingAt(x, y) {
     if (!drawingVisible(d)) continue;
     if (d.type === 'hl') { const yy = Y(d.p1.p); if (yy != null && Math.abs(yy - y) < TH) return d; continue; }
     if (d.type === 'vline') { const xx = X(d.p1.t); if (xx != null && Math.abs(xx - x) < TH) return d; continue; }
+    if (d.type === 'clip') continue;   // its box takes its own pointer events
     if (d.type === 'text') { const r = textRect(d); if (r && x >= r.x - 3 && x <= r.x + r.w + 3 && y >= r.y - 3 && y <= r.y + r.h + 3) return d; continue; }   // anywhere on the box
     const x1 = X(d.p1.t), y1 = Y(d.p1.p);
     if (d.type === 'hray') { if (x1 != null && y1 != null && x >= x1 - TH && Math.abs(y1 - y) < TH) return d; continue; }
@@ -2536,6 +2565,9 @@ function cd(b) {
   return { time: b.time, open: b.open, high: b.high, low: b.low, close: b.close }; // candles / bars
 }
 
+function syncTickFormat() {   // price axis marks, crosshair and last-price labels on the contract's tick grid (ES/NQ: .00 .25 .50 .75 only)
+  if (candle) candle.applyOptions({ priceFormat: { type: 'price', minMove: TICK, precision: (String(TICK).split('.')[1] || '').length } });
+}
 // ---- create the correct series for the active chart type ----
 function makePriceSeries() {
   switch (chartType) {
@@ -2571,7 +2603,7 @@ function setChartType(type) {
   lines = [];                       // those PriceLine handles died with the old series
 
   // 2) build + assign the new series to the SAME `candle` variable the whole app uses
-  candle = makePriceSeries();
+  candle = makePriceSeries(); syncTickFormat();
   bindPriceZoom(candle);
 
   // 3) re-feed exactly what is currently revealed within the render window (idx = last revealed TF bar)
@@ -2613,7 +2645,21 @@ const mBucket = (ts) => {
 
 // ---------- init ----------
 init();
-async function init() { buildDataSelect(); initLayout(); await loadDataset(DATASETS[0]); }
+async function init() {   // a reload comes back to the last symbol, moment and timeframe (rt_last_pos); first visit / unusable record: the default dataset
+  buildDataSelect(); initLayout();
+  const last = loadJSON('rt_last_pos', null), ds = last && DATASETS[last.ds];
+  if (ds && !ds.hidden && ds.instr && typeof last.t === 'number' && isFinite(last.t)) { try { if (await gotoMoment(ds.instr.symbol, last.t, last.tf)) return; } catch (e) {} }
+  if (!baseBars.length) await loadDataset(DATASETS[0]);
+}
+// ---- remember where the replay is (symbol, moment, timeframe) so a reload resumes there; the blind practice modes are never recorded ----
+function saveLastPos(force) {   // trailing: the state a second after the last change is the one kept; never mid-load (the old bars under the new symbol)
+  if (!force) { if (!_lastPosTimer) _lastPosTimer = setTimeout(() => { _lastPosTimer = 0; saveLastPos(true); }, 1000); return; }
+  if (_dsBusy || rndMode || quizMode || !baseBars.length) return;
+  const t = replayTime(); if (t == null) return;
+  saveJSON('rt_last_pos', { ds: dataIdx, t, tf: tfTicks ? 't' + tfTicks : tf });
+}
+window.addEventListener('pagehide', () => saveLastPos(true));
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveLastPos(true); });
 
 function detectBaseTf(b) { let mn = Infinity; for (let i = 1; i < Math.min(b.length, 800); i++) { const dl = b[i].time - b[i - 1].time; if (dl > 0 && dl < mn) mn = dl; } return mn === Infinity ? 1 : Math.max(1 / 60, mn / 60); }  // floor 1s so 15s/30s bases detect correctly
 function buildTfOptions() { const bs = Math.round(BASE_TF * 60); TF_OPTIONS = [BASE_TF, ...STD_TF.filter(m => m > BASE_TF && Math.round(m * 60) % bs === 0)]; }   // only clean multiples of the base (so 20s never shows on a 15s base, etc.)
@@ -2675,7 +2721,7 @@ async function loadDataset(ds, wantT) {   // wantT (epoch s): open the day that 
   try { data = await fetchJSON(url); }
   catch (e) { showLoading(false); toast('This dataset is not ready yet'); return false; }
   pause(); position = null; entryOrder = null; orders = []; markers = []; tool = ''; pendingPt = null;
-  if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; }   // switch active contract spec (tick grid + $/tick + symbol)
+  if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; syncTickFormat(); }   // switch active contract spec (tick grid + $/tick + symbol)
   if ($('symbol')) $('symbol').textContent = INSTR.symbol;
   if ($('entryPrice')) $('entryPrice').step = String(TICK);
   finishLoad(data, ds);
@@ -2706,7 +2752,7 @@ function finishLoad(data, ds) {   // shared tail of loadDataset() / loadDeepMont
 // (state vars declared up top near tickMode — see the TDZ note there)
 async function enterDeepMode(ds, wantT) {
   tickMode = false; deepMonth = null;   // the month chunk in memory belongs to the previous symbol: never reuse it
-  if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; if ($('symbol')) $('symbol').textContent = INSTR.symbol; if ($('entryPrice')) $('entryPrice').step = String(TICK); }
+  if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; syncTickFormat(); if ($('symbol')) $('symbol').textContent = INSTR.symbol; if ($('entryPrice')) $('entryPrice').step = String(TICK); }
   deepSym = (ds && ds.chunks) || INSTR.symbol;   // which 15s chunk folder to read (micros share the big contract's)
   let idx;
   try { const r = await fetch(`data/chunks/${deepSym}/index.json?v=` + Date.now()); idx = r.ok ? await r.json() : []; } catch (e) { idx = []; }
@@ -2997,7 +3043,7 @@ async function enterTickMode(ds) {
   if (!days.length) { toast('Tick days are local-only (data/tick/) — not published, run scripts/fetch_tick_days.py locally'); if (!wired) { wire(); wired = true; } return false; }
   availTickDays = days;
   deepMode = false;
-  if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; if ($('symbol')) $('symbol').textContent = INSTR.symbol; if ($('entryPrice')) $('entryPrice').step = String(TICK); }
+  if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; syncTickFormat(); if ($('symbol')) $('symbol').textContent = INSTR.symbol; if ($('entryPrice')) $('entryPrice').step = String(TICK); }
   return loadTickDay(availTickDays[availTickDays.length - 1]);
 }
 async function loadTickDay(day) {
@@ -3010,7 +3056,7 @@ async function loadTickDay(day) {
   tickMode = true; curTickDay = day; tickSrcLoaded = useNt ? 'nt' : 'db'; _modeBadgeTxt = null; syncTickSrcUI(); setSpeedOptions(true);
   // Loading a tick day does NOT leave the NQ dataset — deepMode/deepIndex/deepAllDays stay put so the
   // calendar still lists every day and [ / ] can walk back onto a 15s-only one.
-  if (d.tick) { TICK = d.tick; INSTR = { ...INSTR, tickSize: d.tick }; }
+  if (d.tick) { TICK = d.tick; INSTR = { ...INSTR, tickSize: d.tick }; syncTickFormat(); }
   const n = d.p.length; baseBars = new Array(n); tickMs = new Array(n);
   // TBBO files carry bo/ao: the best bid and offer immediately BEFORE each trade, as a signed count
   // of ticks from that trade's price. Keeping them per-print lets a market order pay the real spread
@@ -3191,7 +3237,8 @@ function seekReplayTime(T, view, quietLate) {   // quietLate: T sits just before
   if (late && !quietLate) toast(`${INSTR.symbol} data that day starts at ${tHM(baseBars[0].time)}: the replay clock moved forward to it`);
   return true;
 }
-async function switchDataset(i, T, view) {   // load DATASETS[i] on the day of T; on failure put the previous one back (the loaders switch INSTR before they fetch)
+async function switchDataset(i, T, view) { _dsBusy++; try { return await switchDatasetImpl(i, T, view); } finally { _dsBusy--; } }
+async function switchDatasetImpl(i, T, view) {   // load DATASETS[i] on the day of T; on failure put the previous one back (the loaders switch INSTR before they fetch)
   const prev = dataIdx;
   if (await loadDataset(DATASETS[i], T)) { dataIdx = i; $('dataSelect').value = String(i); return true; }
   $('dataSelect').value = String(prev);
@@ -3413,6 +3460,7 @@ function openSettle() {   // settlement dashboard: this day's stats + running to
   const wins = rndRounds.filter(x => x.net > 0).length, wr = rndRounds.length ? Math.round(100 * wins / rndRounds.length) : 0;
   const best = Math.max(...rndRounds.map(x => x.net)), streak = rndStreak();
   const verdict = r.net > 0 ? 'win' : r.net < 0 ? 'loss' : 'flat', vlabel = r.net > 0 ? 'Win' : r.net < 0 ? 'Loss' : 'Flat';
+  disposeTradeCharts(el);   // re-opened while open: free the cards it replaces
   el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">Round ${rndRounds.length}, ${dayLbl(r.key)}</span></div>`
     + `<button class="dd-x" id="stClose" title="Close — stay on this day"><span aria-hidden="true" class="material-symbols-outlined">close</span></button></div>`
     + `<div class="st-over"><span class="st-badge ${verdict}">${vlabel}</span>`
@@ -3430,16 +3478,17 @@ function openSettle() {   // settlement dashboard: this day's stats + running to
     + `</div>`
     + (r.ts.length ? `<div class="dd-list">` + r.ts.map((t, i) => { const long = t.side === 'long';
         return `<div class="dd-trade"><div class="dd-tinfo"><div class="dd-trow"><span>#${i + 1}</span><span class="${long ? 'long-tag' : 'short-tag'}">${long ? 'Long' : 'Short'} ${t.qty}</span><b class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</b><span>${t.ticks >= 0 ? '+' : ''}${t.ticks} ticks</span><span>${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + ' R'}</span>${t.planRR != null ? `<span>Plan ${fmtPlanRR(t)}</span>` : ''}</div>`
-          + `<div class="dd-sub"><span>${tHM(t.entryTime)} → ${tHM(t.exitTime)}</span><span>${f2(t.entry)} → ${f2(t.exit)}</span><span>${atmLbl(t.atm)}</span><span>${EXIT_LBL[t.exitType] || t.exitType}</span></div></div>`
-          + `<canvas class="dd-chart" data-ti="${i}" title="Scroll to zoom, drag to pan, double-click to reset"></canvas></div>`; }).join('') + `</div>` : `<div class="st-run">No trades this round.</div>`)
+          + `<div class="dd-sub"><span>${sHM(t.entryTime)} → ${sHM(t.exitTime)}</span><span>${sF2(t.entry)} → ${sF2(t.exit)}</span><span>${atmLbl(t.atm)}</span><span>${EXIT_LBL[t.exitType] || t.exitType}</span></div></div>`
+          + `<div class="dd-chart" data-ti="${i}" title="Drag to pan, wheel to zoom, double-click to fit"></div></div>`; }).join('') + `</div>` : `<div class="st-run">No trades this round.</div>`)
     + `<div class="st-actions"><button id="stNext" class="primary"><span aria-hidden="true" class="material-symbols-outlined">shuffle</span>Next round</button><button id="stExit">End session</button></div></div>`;
   el.classList.add('open'); modalOpened(el);
-  requestAnimationFrame(() => el.querySelectorAll('.dd-chart').forEach(c => mountTradeChart(c, r.ts[+c.dataset.ti])));
+  const gen = el._gen = (el._gen || 0) + 1;   // re-opened before this frame: only the newest one mounts
+  requestAnimationFrame(() => { if (el._gen === gen) el.querySelectorAll('.dd-chart').forEach(c => mountTradeChart(c, r.ts[+c.dataset.ti])); });
   $('stNext').onclick = () => { closeSettle(); rndJump(); };
   $('stExit').onclick = () => { const n = rndRounds.length, t = rndRounds.reduce((s, x) => s + x.net, 0); exitRnd(); toast(`Session over, ${n} round${n === 1 ? '' : 's'}, ${usd(t)}`); };
   $('stClose').onclick = closeSettle;
 }
-function closeSettle() { const el = $('settleModal'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } modalClosed(); }
+function closeSettle() { const el = $('settleModal'); if (el) { disposeTradeCharts(el); el.classList.remove('open'); el.innerHTML = ''; } modalClosed(); }
 
 // ---------- QUIZ mode: replay YOUR real trades to the bar before entry, re-decide, then see what you actually did ----------
 const QUIZ_TF = 3;                 // questions are posed on 3-minute bars
@@ -3723,9 +3772,9 @@ function processSub(b, bi) {   // bi = index of this print, when the base IS pri
     const tgs = orders.filter(o => o.type === 'target').sort((x, y) => long ? x.price - y.price : y.price - x.price);
     for (const tg of tgs) {
       if (!position) break;
-      const tP = tg.price;
-      const hit = long ? (b.open >= tP || b.high >= tP) : (b.open <= tP || b.low <= tP);
-      if (hit) { const raw = long ? (b.open >= tP ? b.open : tP) : (b.open <= tP ? b.open : tP); orders = orders.filter(o => o !== tg); exitQty(tg.qty, raw, b.time, 'target'); }   // a target is a resting LIMIT: it fills at its own price (or the better gap open), never across the spread — crossing used the bid, which lags several ticks in a sweep (09/25 ES 13:01:21: target 7797.75 printed, bid still 7796.25 -> a +4t target booked as -2t)
+      const tP = tg.price, thru = rnd(long ? tP + TP_THROUGH * TICK : tP - TP_THROUGH * TICK);   // a resting limit is filled only when price trades THROUGH it (target 7740.25 -> a 7740.50 print); a mere touch is not a fill
+      const hit = long ? (b.open >= thru || b.high >= thru) : (b.open <= thru || b.low <= thru);
+      if (hit) { const raw = long ? (b.open >= thru ? b.open : tP) : (b.open <= thru ? b.open : tP); orders = orders.filter(o => o !== tg); exitQty(tg.qty, raw, b.time, 'target'); }   // a target is a resting LIMIT: it fills at its own price (or the better gap open), never across the spread — crossing used the bid, which lags several ticks in a sweep (09/25 ES 13:01:21: target 7797.75 printed, bid still 7796.25 -> a +4t target booked as -2t)
     }
   };
   if (stopFirst) { if (doStop()) return; doTargets(); }   // stop side reached first this sub-bar
@@ -3772,6 +3821,8 @@ function exitQty(q, px, t, type) {
   const pnl = netTicks * INSTR.tickValue * q;
   const risk = (position.slTicks || 0) * INSTR.tickValue * q;
   trades.push({ entryTime: position.entryTime, exitTime: t, side: position.side, qty: q, entry: position.entry, exit: px, ticks: netTicks, pnl, R: risk > 0 ? pnl / risk : null, atm: position.atm, exitType: type, tf: tfTicks ? 't' + tfTicks : (typeof tf === 'number' ? tf : BASE_TF), sym: INSTR.symbol, stop: position.stopPrice, stopTicks: position.slTicks, tps: (position.tps || []).map(p => ({ ticks: p.ticks, price: p.price })), planSl: position.planSl, planTp: position.planTp, planRR: position.planRR, chart: captureTradeChart(position.entryTime, t) });
+  { const tr = trades[trades.length - 1], ch = tr.chart && tr.chart.length ? tr.chart : null;   // the drawings as they were: the review chart redraws them
+    tr.drw = drawingsInWindow(drawings, ch ? ch[0].t : position.entryTime - 3600, ch ? ch[ch.length - 1].t + 3600 : t + 3600, ch ? Math.min(...ch.map(b => b.l)) : Math.min(tr.entry, tr.exit), ch ? Math.max(...ch.map(b => b.h)) : Math.max(tr.entry, tr.exit)); }
   addMarker(t, long ? 'aboveBar' : 'belowBar', pnl >= 0 ? '#127209' : '#D40605', long ? 'arrowDown' : 'arrowUp', usd(pnl));
   saveJSON('rt_trades', trades);
   position.qty -= q;
@@ -3828,7 +3879,7 @@ var REV_SRC = {   // var + guard: renderLive can call patsSync before this line 
   pats: { file: 'data/pats_reviews.json', btn: 'btnPats', who: "Mack's PATs review", none: 'No PATs review for this day' },
   wade: { file: 'data/wade_reviews.json', btn: 'btnWade', who: "Thomas Wade's video", none: 'No Thomas Wade video for this day' },
 };
-var patsIdx = null, patsDay = null, patsOpen = false, revIdx = {}, revSrc = 'pats';   // var: renderLive may run before this line during start-up
+var patsIdx = null, patsDay = null, patsOpen = false, patsMin = false, patsWasPlaying = false, revIdx = {}, revSrc = 'pats';   // var: renderLive may run before this line during start-up
 for (const [k, s] of Object.entries(REV_SRC)) fetch(s.file).then(r => r.ok ? r.json() : null).then(j => { revIdx[k] = (j && j.days) || null; if (k === 'pats') patsIdx = revIdx[k]; patsSync(); }).catch(() => {});
 function curDayKey() { return tickMode ? curTickDay : ((sessions[currentSessionIdx()] || {}).key || null); }
 function patsAllowed() { return !rndMode && !quizMode && /^M?ES$/.test(INSTR.symbol); }
@@ -3842,14 +3893,15 @@ function patsSync() {
     b.hidden = !ok || !revIdx[k];   // always visible on ES / MES so it can be found; dimmed on days without a video
     b.classList.toggle('none', !vids.length);
     b.title = vids.length ? `${s.who} of this day: ${vids[0].t}` : s.none;
-    const on = patsOpen && revSrc === k; b.classList.toggle('on', on && !!vids.length); b.setAttribute('aria-expanded', String(on));
+    const on = patsOpen && revSrc === k; b.classList.toggle('on', on && !patsMin && !!vids.length); b.classList.toggle('min', on && patsMin); b.setAttribute('aria-expanded', String(on && !patsMin));
+    if (on && patsMin) b.title = 'Show the video again (it waits where you left it)';
   }
   if (!ok) { if (patsOpen) patsClose(); return; }
   if (patsOpen && day !== patsDay) patsShow(day, revSrc);   // the replay moved to another day: follow it
 }
 function patsShow(day, src = revSrc) {
   revSrc = src; const vids = patsVids(day, src), pick = $('patsPick');
-  patsDay = day; patsOpen = true; $('patsPanel').hidden = false;
+  patsDay = day; patsOpen = true; $('patsPanel').hidden = false; { const p = $('patsPanel'), r = patsBox(p); patsFitTall(p, r, r.height); }   // (the window may have shrunk since it was closed)
   pick.innerHTML = vids.map((v, i) => `<option value="${i}">${escHtml(v.t)}</option>`).join('');
   pick.hidden = vids.length < 2;
   patsLoad(vids[0] || null);
@@ -3860,27 +3912,562 @@ function patsLoad(v) {
   $('patsTitle').textContent = v ? `${revSrc === 'wade' ? 'Wade' : 'PATs'}: ${v.t}` : s.none;
   $('patsEmpty').textContent = s.none;
   $('patsEmpty').hidden = !!v; $('patsFrame').hidden = !v;
-  const src = v ? `https://www.youtube-nocookie.com/embed/${v.id}?rel=0&modestbranding=1&vq=hd1080${v.at ? '&start=' + v.at : ''}` : 'about:blank';   // vq = quality hint only (YouTube picks by player size); at = where the matched chart appears
-  if ($('patsFrame').getAttribute('src') !== src) $('patsFrame').setAttribute('src', src);
+  const src = v ? `https://www.youtube-nocookie.com/embed/${v.id}?rel=0&modestbranding=1&vq=hd1080&enablejsapi=1&origin=${encodeURIComponent(location.origin)}${v.at ? '&start=' + v.at : ''}` : 'about:blank';   // vq = quality hint only (YouTube picks by player size); at = where the matched chart appears; enablejsapi: the clip bar reads the clock
+  const changed = !v || !patsCur || patsCur.id !== v.id;
+  patsCur = v ? { id: v.id, t: v.t, src: revSrc } : null;
+  if ($('patsFrame').getAttribute('src') !== src) {
+    const f0 = $('patsFrame');
+    if (f0._ytBound) { const f = f0.cloneNode(false); f.removeAttribute('src'); f0.replaceWith(f); ytPlayer = null; ytPlayerVid = ''; ytBinding = null; }   // an iframe the YouTube API already drives ignores a second YT.Player: the next video gets a fresh one (the clip editor needs its clock)
+    $('patsFrame').setAttribute('src', src);
+  }
+  $('clipToggle').disabled = !v; if (!v) cpToggle(false); else if (changed) cpReset();   // another video: the editor starts over on it (after the iframe shows it, so it binds to the new one)
   const a = $('patsOpen'); a.hidden = !v; if (v) a.href = `https://www.youtube.com/watch?v=${v.id}${v.at ? '&t=' + v.at + 's' : ''}`;
+}
+// ---------- clip editor: the yt-clip extension's way of working, docked under the review video ----------
+// Scissors in the player bar (Alt+C with the player focused) opens it: a storyboard timeline (wheel zooms, Shift+wheel pans, hover shows
+// the frame + time, click / drag seeks), clips as red boxes (drag the box to move it, its handles to trim), I / O set in / out at the
+// playhead, Shift+I / O jump there, Alt+I / O clear one end, Alt+X drops the clip, A adds a 60 s clip at the playhead, P previews the
+// clips in order, E (Cut) cuts them on this computer (yt-clip, once: data/clips is the cache). Cut clips wait as cards in the tray
+// under the editor; drag a card onto the chart (a click puts it next to the last bar). The video itself keeps playing as before.
+let patsCur = null;
+const fmtClipT = (v) => { v = Math.max(0, v); const h = Math.floor(v / 3600), m = Math.floor(v / 60) % 60, sec = Math.floor(v % 60); return (h ? h + ':' + pad(m) : m) + ':' + pad(sec); };
+const cpR1 = (t) => Math.round(t * 10) / 10;
+const fmtCT = (t) => { t = cpR1(t); const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = (t % 60).toFixed(1).padStart(4, '0'); return h ? `${h}:${pad(m)}:${s}` : `${m}:${s}`; };
+let ytApi = null, ytPlayer = null, ytPlayerVid = '', ytBinding = null;
+function ytLoad() {
+  return ytApi || (ytApi = new Promise((res, rej) => {
+    if (window.YT && window.YT.Player) return res(window.YT);
+    const prev = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => { try { if (prev) prev(); } catch (e) {} res(window.YT); };
+    const sc = document.createElement('script'); sc.src = 'https://www.youtube.com/iframe_api'; sc.onerror = () => { ytApi = null; rej(new Error('blocked')); }; document.head.appendChild(sc);
+  }));
+}
+const frameVid = () => { const m = /\/embed\/([\w-]{11})/.exec($('patsFrame').getAttribute('src') || ''); return m ? m[1] : ''; };
+function ytBind() {   // a YT.Player on the review iframe, re-bound whenever the iframe shows another video; resolves to the player or null
+  const vid = frameVid(); if (!vid) return Promise.resolve(null);
+  if (ytPlayer && ytPlayerVid === vid) return Promise.resolve(ytPlayer);
+  if (ytBinding && ytBinding.vid === vid) return ytBinding.p;
+  const p = ytLoad().then(YT => new Promise(res => {
+    let done = false; const fin = (pl) => { if (done) return; done = true; if (frameVid() === vid) { ytPlayer = pl; ytPlayerVid = vid; } res(pl); };
+    const f = $('patsFrame'); f._ytBound = true;
+    const pl = new YT.Player(f, { events: { onReady: () => fin(pl) } }); setTimeout(() => fin(pl), 4000);
+  })).catch(() => null);
+  ytBinding = { vid, p }; return p;
+}
+const ytp = () => (ytPlayer && ytPlayerVid && ytPlayerVid === frameVid() && typeof ytPlayer.getCurrentTime === 'function') ? ytPlayer : null;
+async function patsTime() { const pl = await ytBind(); const t = pl && pl.getCurrentTime ? pl.getCurrentTime() : null; return typeof t === 'number' && isFinite(t) ? t : null; }
+
+const CP_NEW = 60, CP_MIN_SPAN = 5, CP_PV_W = 240;
+const cp = { open: false, segs: [], act: -1, view: [0, 0], lastDur: 0, info: null, sb: null, sbBig: null, previewQ: null, previewI: 0, undo: null, err: '', msg: '', tray: [], trayFor: null, timer: null, dragging: false, tilesKey: '', seekAt: 0 };
+const cpDone = (s) => !!s && s.a != null && s.b != null && s.b > s.a;
+const cpMarked = (s) => !!s && (s.a != null || s.b != null);
+const cpReady = () => cp.segs.filter(cpDone).sort((x, y) => x.a - y.a);
+const cpLen = () => cp.view[1] - cp.view[0];
+const cpPct = (t) => `${((t - cp.view[0]) / (cpLen() || 1)) * 100}%`;
+const cpDur = () => { const pl = ytp(); const d = pl && pl.getDuration ? pl.getDuration() : 0; return d > 0 ? d : (cp.info && cp.info.duration) || 0; };
+const cpNow = () => { const pl = ytp(); const t = pl ? pl.getCurrentTime() : null; return typeof t === 'number' && isFinite(t) ? t : null; };
+const cpSeek = (t, force) => { const pl = ytp(); if (!pl || t == null || !pl.seekTo) return; const now = performance.now(); if (!force && now - cp.seekAt < 90) return; cp.seekAt = now; pl.seekTo(Math.max(0, t), true); };
+const cpSpan = (s) => `${s.a == null ? '-:--.-' : fmtCT(s.a)} – ${s.b == null ? '-:--.-' : fmtCT(s.b)}`;
+
+function cpReset() {   // another video in the player: its clips, timeline and storyboard no longer apply (cut clips stay cached on disk)
+  cp.segs = []; cp.act = -1; cp.view = [0, 0]; cp.lastDur = 0; cp.info = null; cp.sb = cp.sbBig = null; cp.previewQ = null; cp.undo = null; cp.err = ''; cp.msg = ''; cp.cut = null; cp.tray = []; cp.trayFor = null; cp.tilesKey = '';
+  if (cp.open) { cpLoadVideo(); cpRender(); cpDrawTiles(); }
+}
+async function cpLoadVideo() {   // storyboard + length (local server, cached there) and the clips already cut from this video
+  const v = patsCur; if (!v) return;
+  ytBind().then(() => { cpSync(); cpRender(); });
+  if (!cp.info || cp.info.vid !== v.id) {
+    try { const r = await fetch('api/ytinfo?vid=' + v.id); if (r.ok) { const j = await r.json(); if (patsCur && patsCur.id === v.id && !j.error) { cp.info = j; cpParseSb(j.spec); } } } catch (e) {}
+  }
+  if (cp.trayFor !== v.id) {
+    cp.trayFor = v.id;
+    try { const r = await fetch('api/clips?vid=' + v.id, { cache: 'no-store' }); if (r.ok) { const j = await r.json(); if (patsCur && patsCur.id === v.id) for (const c of (j.clips || [])) { clipState[clipKey({ vid: v.id, a: c.a, b: c.b })] = c.state === 'running' ? { state: 'running', pct: +c.pct || 0 } : { state: 'done', pct: 100, url: c.url }; cpTrayAdd({ vid: v.id, a: c.a, b: c.b, title: v.t, src: v.src }); if (c.state === 'running') clipPoll(); } } } catch (e) {}   // a cut started before the page was closed shows with its progress
+  }
+  cpSync(); cpRender(); cpDrawTiles();
+}
+function cpParseSb(spec) {   // YouTube storyboard spec: base|L0|L1|...; each level w#h#count#cols#rows#interval#name#sigh (same reading as the extension)
+  cp.sb = cp.sbBig = null; if (!spec) return;
+  const [base, ...levels] = String(spec).split('|'); if (!levels.length) return;
+  const level = (L) => { const [w, h, count, cols, rows, interval, name, sigh] = levels[L].split('#'); return { w: +w, h: +h, count: +count, cols: +cols, rows: +rows, interval: +interval, url: (n) => base.replace('$L', L).replace('$N', String(name).replace('$M', n)) + '&sigh=' + sigh }; };
+  cp.sb = level(Math.min(2, levels.length - 1)); cp.sbBig = level(levels.length - 1);
+}
+const cpFrame = (s, t, d) => Math.min(s.count - 1, Math.max(0, Math.floor(s.interval ? (t * 1000) / s.interval : (t / (d || 1)) * s.count)));
+function cpThumb(el, s, t, W, H) {
+  const per = s.cols * s.rows, i = cpFrame(s, t, cpDur()), k = i % per;
+  Object.assign(el.style, { width: W + 'px', height: H + 'px', backgroundImage: `url("${s.url(Math.floor(i / per))}")`, backgroundSize: `${s.cols * W}px ${s.rows * H}px`, backgroundPosition: `${-(k % s.cols) * W}px ${-Math.floor(k / s.cols) * H}px` });
+}
+// ---- timeline range: the whole video by default; wheel zooms around the pointer, Shift+wheel pans, the view follows the playhead ----
+function cpSetView(w0, len) {
+  const d = cpDur(); if (!d) return;
+  len = Math.min(Math.max(len, Math.min(CP_MIN_SPAN, d)), d); w0 = Math.min(Math.max(w0, 0), d - len);
+  if (Math.abs(w0 - cp.view[0]) < 0.01 && Math.abs(w0 + len - cp.view[1]) < 0.01) return;
+  cp.view = [w0, w0 + len]; cpRender(); cpDrawTiles();
+}
+function cpShowRange(a, b = a) { if (a == null) a = b; if (b == null) b = a; if (a == null || (a >= cp.view[0] && b <= cp.view[1])) return; const len = Math.max(cpLen(), (b - a) * 1.2); cpSetView((a + b) / 2 - len / 2, len); }
+function cpZoomAround(t, k) { const d = cpDur(); if (!d) return; const len = cpLen(), f = Math.min(Math.max((t - cp.view[0]) / (len || 1), 0), 1), nl = Math.min(Math.max(len * k, Math.min(CP_MIN_SPAN, d)), d); cpSetView(t - f * nl, nl); }
+function cpDrawTiles() {
+  const strip = $('cpStrip'), tiles = $('cpTiles'); if (!strip || !cp.open) return;
+  const d = cpDur(), H = strip.clientHeight, W = strip.clientWidth, len = cpLen(), s = cp.sb;
+  const key = `${W}x${H}:${cp.view[0].toFixed(2)}-${cp.view[1].toFixed(2)}:${!!s}`; if (key === cp.tilesKey) return; cp.tilesKey = key;
+  if (!s || !d || !W || !len) { tiles.replaceChildren(); return; }
+  const tw = H * s.w / s.h, n = Math.ceil(W / tw), per = s.cols * s.rows;
+  tiles.replaceChildren(...Array.from({ length: n }, (_, i) => {
+    const t = cp.view[0] + ((i + 0.5) / n) * len, ix = cpFrame(s, t, d), k = ix % per, el = document.createElement('div');
+    Object.assign(el.style, { width: `${W / n}px`, backgroundImage: `url("${s.url(Math.floor(ix / per))}")`, backgroundSize: `${s.cols * tw}px ${s.rows * H}px`, backgroundPosition: `${-(k % s.cols) * tw - (tw - W / n) / 2}px ${-Math.floor(k / s.cols) * H}px` });
+    return el;
+  }));
+}
+const cpTimeAt = (e) => { const r = $('cpStrip').getBoundingClientRect(); return cpR1(cp.view[0] + Math.min(Math.max((e.clientX - r.left) / (r.width || 1), 0), 1) * cpLen()); };
+function cpShowHover(e) {   // the frame under the pointer (the storyboard's largest level) + its time, above the timeline, over the video
+  const d = cpDur(), hv = $('cpHover'); if (!d || !cp.open) return cpHideHover();
+  const strip = $('cpStrip'), sr = strip.getBoundingClientRect(), pr = $('patsPanel').getBoundingClientRect(), t = cpTimeAt(e);
+  $('cpHvLine').hidden = false; $('cpHvLine').style.left = cpPct(t); $('cpHvTime').textContent = fmtCT(t);
+  const img = $('cpHvImg'), s = cp.sbBig, room = sr.top - pr.top - 34;
+  let W = s ? Math.min(CP_PV_W, pr.width - 16) : 0, H = s ? W * s.h / s.w : 0;
+  if (s && H > room) { H = Math.max(0, room); W = H * s.w / s.h; }
+  img.hidden = !s || W < 96; if (!img.hidden) cpThumb(img, s, t, Math.round(W), Math.round(H));
+  hv.hidden = false;
+  const hb = hv.getBoundingClientRect(), x = Math.min(Math.max(e.clientX - hb.width / 2, pr.left + 6), pr.right - hb.width - 6);
+  hv.style.left = (x - pr.left) + 'px'; hv.style.top = Math.max(2, sr.top - pr.top - hb.height - 6) + 'px';
+}
+function cpHideHover() { const hv = $('cpHover'); if (hv) hv.hidden = true; const l = $('cpHvLine'); if (l) l.hidden = true; }
+// ---- clips ----
+function cpMark(edge) {   // I / O: the playhead becomes the current clip's in / out
+  const t0 = cpNow(); if (t0 == null) return cpSay("The video isn't ready yet: start it once, then try again", true);
+  if (!cp.segs[cp.act]) { cp.segs.push({ a: null, b: null }); cp.act = cp.segs.length - 1; }
+  const s = cp.segs[cp.act], t = cpR1(t0); s[edge] = t;
+  if (edge === 'a' && s.b != null && s.b <= t) s.b = null;
+  if (edge === 'b' && s.a != null && s.a >= t) s.a = null;
+  cp.err = cp.msg = ''; cp.undo = null; cpShowRange(t); cpRender();
+}
+function cpAdd() {   // A: a 60 s clip from the playhead (moved back near the end of the video)
+  const d = cpDur(), t0 = cpNow(); if (!d || t0 == null) return cpSay("The video isn't ready yet: start it once, then try again", true);
+  let a = cpR1(t0), b = cpR1(Math.min(a + CP_NEW, d)); if (b - a < 1) a = cpR1(Math.max(0, b - CP_NEW));
+  cp.undo = null; cp.err = cp.msg = ''; cp.segs.push({ a, b }); cp.act = cp.segs.length - 1; cpShowRange(a, b); cpRender();
+}
+function cpSelect(i) { cp.act = i; cp.msg = cp.err = ''; const s = cp.segs[i]; if (s && s.a != null) cpSeek(s.a, true); if (s) cpShowRange(s.a, s.b); cpRender(); }
+function cpSnap(label) { cp.undo = { segs: cp.segs.map(s => ({ ...s })), act: cp.act, label }; }
+function cpRemove(i) { cp.msg = cp.err = ''; if (cpMarked(cp.segs[i])) cpSnap(`Clip ${i + 1} removed`); cp.segs.splice(i, 1); cp.act = Math.min(i, cp.segs.length - 1); cpRender(); }
+function cpClearMark(edge) { const s = cp.segs[cp.act]; if (!s || s[edge] == null) return; cpSnap(edge === 'a' ? 'In point cleared' : 'Out point cleared'); s[edge] = null; if (!cpMarked(s)) { cp.segs.splice(cp.act, 1); cp.act = Math.min(cp.act, cp.segs.length - 1); } cpRender(); }
+function cpRestore() { if (!cp.undo) return; cp.segs = cp.undo.segs; cp.act = cp.undo.act; cp.undo = null; cpRender(); }
+function cpPreview(q = cpReady()) {   // P: play the clips in order, each from its in to its out
+  const pl = ytp(); if (cp.previewQ) return cpStopPreview(true);
+  if (!pl || !q.length) return;
+  cp.previewQ = q; cp.previewI = 0; pl.seekTo(q[0].a, true); pl.playVideo(); cpRender();
+}
+function cpStopPreview(pause) { if (!cp.previewQ) return; if (pause) { const pl = ytp(); if (pl) pl.pauseVideo(); } cp.previewQ = null; cpRender(); }
+function cpCheckPreview(t) {
+  const pl = ytp(); if (!cp.previewQ || !pl) return;
+  if (pl.getPlayerState && pl.getPlayerState() === 2) return cpStopPreview();   // paused by the user
+  if (t == null || t < cp.previewQ[cp.previewI].b) return;
+  if (++cp.previewI < cp.previewQ.length) pl.seekTo(cp.previewQ[cp.previewI].a, true);
+  else { pl.pauseVideo(); pl.seekTo(cp.previewQ[cp.previewQ.length - 1].b, true); cpStopPreview(); }
+}
+function cpSay(m, err) { cp.msg = m; cp.err = err ? m : ''; cpRender(); }
+function cpTrayAdd(c) { if (!validClip(c)) return null; const key = clipKey(c); let it = cp.tray.find(x => x.key === key); if (!it) { it = { ...c, key }; cp.tray.push(it); cp.tray.sort((x, y) => x.a - y.a); } return it; }
+function cpCut() {   // E: every finished clip is cut once on this computer; the cards appear in the tray at once (drag them even while cutting)
+  const v = patsCur, all = cpReady(), done = all.filter(s => !clipTooLong(s.a, s.b)), skip = all.length - done.length; if (!v || !all.length) return;
+  if (!done.length) return cpSay('A clip can be up to 10 minutes: trim it first', true);
+  const keys = [];
+  for (const s of done) { const c = { vid: v.id, a: cpR1(s.a), b: cpR1(s.b), title: String(v.t || '').slice(0, 160), src: v.src }; cpTrayAdd(c); ensureClip(c, /^(error|embed)$/.test((clipState[clipKey(c)] || {}).state || '')); keys.push(clipKey(c)); }   // (a failed one is tried again)
+  cp.cut = { keys, skip };
+  cpSay((done.length > 1 ? `Cutting ${done.length} clips: they wait below, drag one onto the chart` : 'Cutting the clip: it waits below, drag it onto the chart')
+    + (skip ? `. ${skip} over 10 minutes left out: trim ${skip > 1 ? 'them' : 'it'} first` : ''));
+  cpRenderTray();
+}
+// ---- render ----
+function cpRender() {
+  const P = $('clipPanel'); if (!P || !cp.open) return;
+  const hadFocus = P.contains(document.activeElement);   // Undo / a row's delete button is rebuilt below: the keys must keep working
+  const d = cpDur(), cur = cp.segs[cp.act], ok = !!ytp();
+  $('cpL').textContent = d ? fmtClipT(cp.view[0]) : ''; $('cpR').textContent = d ? fmtClipT(cp.view[1]) : '';
+  $('cpFit').hidden = !d || cpLen() >= d - 0.05;
+  $('cpSegs').replaceChildren(...(d ? cp.segs.flatMap((s, i) => {
+    if (i === cp.act && cpDone(s)) return [];
+    if (cpDone(s)) { const b = document.createElement('div'); b.className = 'cp-seg'; b.title = `Select clip ${i + 1}`; b.style.left = cpPct(s.a); b.style.width = `${((s.b - s.a) / (cpLen() || 1)) * 100}%`; b.onpointerdown = (e) => { e.stopPropagation(); cpSelect(i); }; return [b]; }
+    return [s.a, s.b].filter(t => t != null).map(t => { const m = document.createElement('div'); m.className = 'cp-mark'; m.style.left = cpPct(t); return m; });
+  }) : []));
+  const show = !!d && cpDone(cur), act = $('cpActive'), ga = $('cpGA'), gb = $('cpGB');
+  act.hidden = ga.hidden = gb.hidden = !show;
+  if (show) {   // a narrow clip (under 24 px) gets its handles just outside, so the box itself can still be grabbed and pulled out
+    const W = $('cpStrip').clientWidth || 1, wpx = ((cur.b - cur.a) / (cpLen() || 1)) * W, narrow = wpx < 40, dw = Math.max(wpx, 6);   // (the drawn box is at least its 6 px of border)
+    const xa = ((cur.a - cp.view[0]) / (cpLen() || 1)) * W, roomL = narrow && xa >= 12, roomR = narrow && W - (xa + dw) >= 12;   // no room outside the strip (a clip at 0:00 / at the end): that handle sits inside the box
+    act.style.left = ga.style.left = cpPct(cur.a); act.style.width = `${((cur.b - cur.a) / (cpLen() || 1)) * 100}%`;
+    gb.style.left = cpPct(cur.b);
+    ga.classList.toggle('out', roomL); ga.classList.toggle('in', narrow && !roomL); gb.classList.toggle('out', roomR); gb.classList.toggle('in', narrow && !roomR);
+    const hw = Math.max(3, Math.min(12, Math.floor(dw / 3))), hwB = Math.max(1, Math.min(hw, Math.floor(Math.min(dw, W - xa) / 3)));   // an inside handle takes at most a third of the VISIBLE box (the strip clips a box at its end): the middle stays grabbable
+    ga.style.width = narrow && !roomL ? hw + 'px' : ''; gb.style.width = narrow && !roomR ? hwB + 'px' : ''; gb.style.marginLeft = narrow && !roomR ? -hwB + 'px' : '';
+    if (narrow) gb.style.left = Math.min(xa + dw, W) + 'px';   // a sub-6 px box at the very end: its out-handle stays inside the strip
+  }
+  $('cpIn').disabled = $('cpOut').disabled = $('cpAdd').disabled = !d || !ok;
+  $('cpGoIn').disabled = !(cur && cur.a != null); $('cpGoOut').disabled = !(cur && cur.b != null);
+  $('cpList').replaceChildren(...(cp.segs.length ? cp.segs.map((s, i) => {
+    const r = document.createElement('div'); r.className = 'cp-row' + (i === cp.act ? ' on' : ''); r.onclick = () => cpSelect(i);
+    r.innerHTML = `<span class="n">${i + 1}</span><span class="t">${cpSpan(s)}</span><span class="d">${cpDone(s) ? (s.b - s.a).toFixed(1) + ' s' : ''}</span>`
+      + `<button type="button" class="cp-ib cp-pv" title="Preview this clip" aria-label="Preview clip ${i + 1}" ${cpDone(s) ? '' : 'disabled'}><span aria-hidden="true" class="material-symbols-outlined">play_arrow</span></button>`
+      + `<button type="button" class="cp-ib cp-del" title="Remove this clip (Alt+X)" aria-label="Remove clip ${i + 1}"><span aria-hidden="true" class="material-symbols-outlined">delete</span></button>`;
+    r.querySelector('.cp-pv').onclick = (e) => { e.stopPropagation(); cpPreview([s]); };
+    r.querySelector('.cp-del').onclick = (e) => { e.stopPropagation(); cpRemove(i); };
+    return r;
+  }) : [Object.assign(document.createElement('div'), { className: 'cp-empty', textContent: 'I / O at the playhead or Add clip, then drag the red box onto the chart' })]));
+  const done = cpReady(), pa = $('cpPlayAll');
+  pa.hidden = !done.length; pa.querySelector('span').textContent = cp.previewQ ? 'pause' : 'play_arrow';
+  pa.title = pa.ariaLabel = cp.previewQ ? 'Stop the preview (P)' : done.length > 1 ? 'Preview the clips in order (P)' : 'Preview the clip (P)';
+  const nCut = done.filter(s => !clipTooLong(s.a, s.b)).length, cut = $('cpCut'); cut.disabled = !done.length; cut.lastChild.textContent = nCut > 1 ? `Cut ${nCut}` : 'Cut';   // (over-length clips are left out, and said so)
+  const msg = $('cpMsg'); msg.className = 'cp-msg' + (cp.err ? ' err' : '');
+  if (cp.undo) { msg.replaceChildren(Object.assign(document.createElement('span'), { textContent: cp.undo.label + ' ' }), Object.assign(document.createElement('button'), { type: 'button', className: 'cp-undo', textContent: 'Undo', onclick: cpRestore })); }
+  else msg.textContent = cp.msg || (ok ? '' : 'Connecting to the video…');
+  msg.title = msg.textContent;   // a long line is cut with an ellipsis: the whole of it on hover
+  cpRenderTray();
+  if (hadFocus && !P.contains(document.activeElement)) P.focus({ preventScroll: true });
+}
+function cpRenderTray() {   // cut (and cutting) clips of this video as draggable cards
+  const T = $('cpTray'); if (!T || !cp.open) return;
+  let busy = 0, sumPct = 0;
+  const sig = cp.tray.map(it => { const st = clipState[it.key] || {}; if (st.state === 'running') { busy++; sumPct += +st.pct || 0; } return it.key + ':' + (st.state || '') + ':' + Math.round(+st.pct || 0); }).join('|') + ':' + !!cp.sbBig;
+  const prog = $('cpProg'); prog.hidden = !busy; if (busy) prog.style.setProperty('--p', Math.max(0.03, sumPct / busy / 100));
+  if (cp.cut && !cp.cut.keys.some(k => (clipState[k] || {}).state === 'running')) {   // this cut is over: its "Cutting..." line goes, or says what went wrong (only its own clips count)
+    const bad = cp.cut.keys.filter(k => (clipState[k] || {}).state === 'error').length, sk = cp.cut.skip; cp.cut = null;
+    if (/^Cutting/.test(cp.msg || '')) {
+      cp.msg = cp.err = [bad ? `${bad} clip${bad > 1 ? 's' : ''} couldn't be cut: see the cards` : '', sk ? `${sk} over 10 minutes not cut: trim ${sk > 1 ? 'them' : 'it'} first` : ''].filter(Boolean).join('. ');
+      if (!cp.undo) { const m = $('cpMsg'); m.textContent = m.title = cp.msg; m.className = 'cp-msg' + (cp.err ? ' err' : ''); }
+    }
+  }
+  if (cp.dragging || sig === T._sig) return; T._sig = sig;   // never rebuilt under a card being dragged (it would lose the pointer)
+  T.replaceChildren(...cp.tray.map(it => {
+    const st = clipState[it.key] || {}, card = document.createElement('div');
+    card.className = 'cp-card'; card.dataset.key = it.key; card.title = 'Drag onto the chart (click: next to the last bar)';
+    const label = st.state === 'running' ? `${Math.round(+st.pct || 0)}%` : st.state === 'error' ? 'failed' : st.state === 'embed' ? 'YouTube' : `${(it.b - it.a).toFixed(0)} s`;
+    card.innerHTML = `<div class="th"></div><span class="lb">${fmtClipT(it.a)} – ${fmtClipT(it.b)}</span><small class="${st.state === 'running' ? 'run' : st.state === 'error' ? 'bad' : ''}">${escHtml(label)}</small>`;
+    if (cp.sbBig) cpThumb(card.querySelector('.th'), cp.sbBig, it.a + Math.min(1, (it.b - it.a) / 2), 48, 27);
+    return card;
+  }));
+}
+// ---- live sync while open: length, playhead, preview stop, cut progress ----
+function cpSync() {
+  if (cp.open && !ytp() && frameVid()) ytBind();   // not bound to the video now showing (it changed, or the API was slow): bind (idempotent per video)
+  const d = cpDur();
+  if (d && d !== cp.lastDur) {
+    const full = cp.view[0] <= 0.05 && Math.abs(cp.view[1] - cp.lastDur) <= 0.05;   // still the untouched whole-video view: follow the real length exactly
+    if (Math.abs(d - cp.lastDur) > 1.5) { cp.lastDur = d; cp.view = [0, 0]; cpSetView(0, d); }
+    else { cp.lastDur = d; if (full) cpSetView(0, d); }
+  }   // a new video (YouTube's reported length wobbles by a fraction of a second while it loads: never reset the zoom for that)
+  const t = cpNow();
+  if (t != null && cp.open) {
+    if (!cp.dragging && cpLen() && (t < cp.view[0] || t > cp.view[1])) cpSetView(t - cpLen() / 2, cpLen());
+    $('cpPlayhead').style.left = cpPct(t);
+  }
+  cpCheckPreview(t);
+}
+const patsBox = (p) => ({ left: p.offsetLeft, top: p.offsetTop, width: p.offsetWidth, height: p.offsetHeight });   // layout size, unaffected by the minimize animation's transform
+function patsFitTall(p, r, h) {   // the player (video + clip editor) always fits the window: too tall, the video gives up size (16:9 kept), never the editor's buttons
+  let w = r.width; const ex = cp.open ? (cp.panelH || 0) : 0;
+  const minW = cp.open ? 320 : 160;   // the editor's rows need ~320 px to keep every button reachable
+  if (w < minW) { w = minW; h = Math.round(w * 9 / 16) + ex; }
+  if (w > innerWidth - 8) { w = Math.max(minW, innerWidth - 8); h = Math.round(w * 9 / 16) + ex; }
+  if (h > innerHeight - 8) { w = Math.max(minW, Math.round(Math.max(90, innerHeight - 8 - ex) * 16 / 9)); h = Math.min(h, Math.round(w * 9 / 16) + ex); }
+  Object.assign(p.style, { width: w + 'px', height: h + 'px', top: Math.max(0, Math.min(r.top, innerHeight - h - 4)) + 'px', left: Math.max(0, Math.min(r.left, innerWidth - w)) + 'px', right: 'auto', bottom: 'auto' });
+}
+function cpToggle(open = !cp.open) {
+  const p = $('patsPanel'), P = $('clipPanel'); if (!P || (open && !patsCur)) return;
+  if (open === cp.open) return;
+  const r0 = patsBox(p); cp.open = open; P.hidden = !open; $('clipToggle').classList.toggle('on', open); $('clipToggle').setAttribute('aria-expanded', String(open));
+  const extra = P.offsetHeight || 0, h = r0.height + (open ? extra : -cp.panelH || 0);   // the player grows by the editor's height, the video keeps its size
+  if (open) cp.panelH = extra;
+  patsFitTall(p, r0, Math.max(160, h));
+  if (open) { cpLoadVideo(); clearInterval(cp.timer); cp.timer = setInterval(() => { cpSync(); cpRenderTray(); }, 150); cpRender(); P.focus({ preventScroll: true }); }
+  else { clearInterval(cp.timer); cp.timer = null; cpStopPreview(); cpHideHover(); }
+}
+function cpDrag(e, onMove, onEnd) {   // timeline = seek; red box = move; handles = trim (the video follows, throttled)
+  if (!cpDur() || e.button !== 0) return;
+  e.preventDefault(); e.stopPropagation(); cpStopPreview(); cp.dragging = true;
+  const target = e.currentTarget; let t = onMove(e); cpSeek(t, true);
+  target.setPointerCapture(e.pointerId);
+  target.onpointermove = (ev) => { t = onMove(ev); cpSeek(t); cpShowHover(ev); };
+  target.onpointerup = target.onpointercancel = () => { target.onpointermove = target.onpointerup = target.onpointercancel = null; cp.dragging = false; cpHideHover(); cpSeek(t, true); if (onEnd) onEnd(); };
+}
+function cpGhost(a, b) {   // the clip following the pointer on its way to the chart
+  const g = document.createElement('div'); g.className = 'clip-ghost'; g.innerHTML = `<span aria-hidden="true" class="material-symbols-outlined">movie</span>${fmtClipT(a)} – ${fmtClipT(b)}`;
+  document.body.appendChild(g); $('patsFrame').style.pointerEvents = 'none'; return g;
+}
+function cpOverChart(ev) {   // chart-pane pixels under the pointer, or null: over the floating player, an axis or anything else on top
+  const c = $('chart'), r = c.getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top;
+  if (x < 0 || y < 0 || x > chart.timeScale().width() || y > paneHeight()) return null;
+  const el = document.elementFromPoint(ev.clientX, ev.clientY); return el && c.contains(el) ? { x, y } : null;
+}
+function cpGhostMove(g, ev) { Object.assign(g.style, { left: ev.clientX + 'px', top: ev.clientY + 'px' }); g.classList.toggle('over', !!cpOverChart(ev)); }
+function cpGhostEnd(g) { g.remove(); $('patsFrame').style.pointerEvents = ''; }
+function cpDropClip(ev, c) {   // dropped on the chart pane: a clip box centred there; it is cut now if it isn't yet (the box shows the progress) and joins the tray
+  const at = cpOverChart(ev); if (!at) return false;
+  if (clipTooLong(c.a, c.b)) { cpSay('A clip can be up to 10 minutes: trim it first', true); return false; }
+  const it = cpTrayAdd(c); placeClip(at.x, at.y, it || c); cpRenderTray(); return true;
+}
+function cpWire() {
+  const P = $('clipPanel'), strip = $('cpStrip'); if (!P) return;
+  $('clipToggle').onclick = () => cpToggle();
+  new ResizeObserver(() => {   // the editor grows (clips listed, cards cut): the player grows with it, the video keeps its size, the box stays on screen
+    if (!cp.open) return; const nh = P.offsetHeight, dh = nh - (cp.panelH || 0); if (!dh) return; cp.panelH = nh;
+    const p = $('patsPanel'), r = patsBox(p); if (patsMin) { p.style.height = (r.height + dh) + 'px'; return; }   // parked: grow / shrink now, fit on restore
+    patsFitTall(p, r, r.height + dh);
+  }).observe(P);
+  new ResizeObserver(() => { if (cp.open) { cpRender(); cpDrawTiles(); } }).observe(strip);   // the player resized: the handles' narrow / outside layout is redone
+  strip.onpointerdown = (e) => { P.focus({ preventScroll: true }); cpDrag(e, cpTimeAt); };
+  strip.addEventListener('pointermove', (e) => { if (!cp.dragging) cpShowHover(e); });
+  strip.addEventListener('pointerleave', () => { if (!cp.dragging) cpHideHover(); });
+  strip.addEventListener('wheel', (e) => {
+    if (!cpDur()) return; e.preventDefault();
+    const r = strip.getBoundingClientRect(), len = cpLen();
+    if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) { const dx = e.shiftKey ? e.deltaY : e.deltaX; return cpSetView(cp.view[0] + (dx / r.width) * len, len); }
+    cpZoomAround(cp.view[0] + Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1) * len, Math.exp(e.deltaY * 0.0015)); cpShowHover(e);
+  }, { passive: false });
+  const press = (mode) => (e) => {   // the red box: any drag takes the clip out -> drop it on the chart; the handles: sideways trims one end (the video follows), pulled up / down out of the timeline takes the clip out
+    const s = cp.segs[cp.act]; if (!cpDone(s) || e.button !== 0 || !cpDur()) return;
+    e.preventDefault(); e.stopPropagation(); cpStopPreview(); cp.dragging = true; P.focus({ preventScroll: true });
+    const el = e.currentTarget, a0 = s.a, b0 = s.b, x0 = e.clientX, y0 = e.clientY, sr = $('cpStrip').getBoundingClientRect();
+    const grab = mode === 'move' ? 0 : cpTimeAt(e) - (mode === 'a' ? s.a : s.b);   // where on the handle it was pressed: the edge moves by the drag, it never jumps to the pointer
+    let tear = null; if (mode === 'move') el.classList.add('moving'); el.setPointerCapture(e.pointerId); cpSeek(mode === 'b' ? s.b : s.a, true);
+    el.onpointermove = (ev) => {
+      const out = mode === 'move' ? Math.hypot(ev.clientX - x0, ev.clientY - y0) > 4 : ev.clientY < sr.top - 10 || ev.clientY > sr.bottom + 10;
+      if (!tear && out) {
+        s.a = a0; s.b = b0; cpRender(); cpHideHover(); tear = cpGhost(s.a, s.b);   // pulled out of the timeline: a take-out, not an edit, so the range stays as it was
+      }
+      if (tear) return cpGhostMove(tear, ev);
+      if (mode === 'move') return;   // (below 4 px: still a click)
+      const t = Math.min(Math.max(cpTimeAt(ev) - grab, 0), cpDur());
+      if (mode === 'a') s.a = Math.min(cpR1(t), cpR1(s.b - 0.1)); else s.b = Math.max(cpR1(t), cpR1(s.a + 0.1));
+      cpRender(); cpSeek(mode === 'b' ? s.b : s.a); cpShowHover(ev);
+    };
+    const end = (ev, ok) => {   // ok: released; otherwise cancelled (Esc, pointercancel): the clip goes back to how it was before the press
+      el.onpointermove = el.onpointerup = el.onpointercancel = null; cp.cancelDrag = null; el.classList.remove('moving'); cp.dragging = false; cpHideHover();
+      try { el.releasePointerCapture(e.pointerId); } catch (x) {}
+      if (!ok) { s.a = a0; s.b = b0; cpRender(); }
+      if (tear) { cpGhostEnd(tear); if (ok && patsCur && cpDropClip(ev, { vid: patsCur.id, a: cpR1(s.a), b: cpR1(s.b), title: String(patsCur.t || '').slice(0, 160), src: patsCur.src })) { cp.msg = cp.err = ''; cpRender(); } return; }
+      if (ok && mode !== 'move') { cp.msg = cp.err = ''; cpRender(); }   // a trim done: an old message no longer applies
+      cpSeek(mode === 'b' ? s.b : s.a, true);
+    };
+    el.onpointerup = (ev) => end(ev, true); el.onpointercancel = () => end(null, false); cp.cancelDrag = () => end(null, false);
+  };
+  $('cpActive').onpointerdown = press('move'); $('cpGA').onpointerdown = press('a'); $('cpGB').onpointerdown = press('b');
+  $('cpIn').onclick = () => cpMark('a'); $('cpOut').onclick = () => cpMark('b');
+  $('cpGoIn').onclick = () => { const s = cp.segs[cp.act]; if (s && s.a != null) cpSeek(s.a, true); };
+  $('cpGoOut').onclick = () => { const s = cp.segs[cp.act]; if (s && s.b != null) cpSeek(s.b, true); };
+  $('cpAdd').onclick = cpAdd; $('cpFit').onclick = () => { cp.msg = cp.err = ''; cpSetView(0, cpDur()); cpRender(); P.focus({ preventScroll: true }); };   // (Fit hides itself: keep the keys working)
+  $('cpPlayAll').onclick = () => cpPreview(); $('cpCut').onclick = cpCut;
+  P.addEventListener('pointerdown', (e) => { if (!e.target.closest('button')) P.focus({ preventScroll: true }); });
+  // tray cards: drag onto the chart (a ghost follows the pointer); a click places the clip next to the last bar
+  const T = $('cpTray'); let dg = null;
+  T.addEventListener('pointerdown', (e) => {
+    const card = e.target.closest('.cp-card'); if (!card || e.button !== 0) return;
+    const it = cp.tray.find(x => x.key === card.dataset.key); if (!it) return;
+    dg = { it, x: e.clientX, y: e.clientY, ghost: null, card }; card.setPointerCapture(e.pointerId); e.preventDefault(); cp.dragging = true;   // (the tray is not rebuilt under a dragged card)
+    cp.cancelDrag = () => { const g = dg; dg = null; card.onpointermove = card.onpointerup = card.onpointercancel = null; cp.cancelDrag = null; cp.dragging = false; try { card.releasePointerCapture(e.pointerId); } catch (x) {} if (g && g.ghost) cpGhostEnd(g.ghost); cpRenderTray(); };
+    card.onpointermove = (ev) => {
+      if (!dg) return;
+      if (!dg.ghost && Math.hypot(ev.clientX - dg.x, ev.clientY - dg.y) > 4) dg.ghost = cpGhost(dg.it.a, dg.it.b);
+      if (dg.ghost) cpGhostMove(dg.ghost, ev);
+    };
+    card.onpointerup = card.onpointercancel = (ev) => {
+      const g = dg; dg = null; card.onpointermove = card.onpointerup = card.onpointercancel = null; cp.cancelDrag = null; cp.dragging = false;
+      if (!g) return; if (g.ghost) cpGhostEnd(g.ghost);
+      if (ev.type === 'pointercancel') return cpRenderTray();
+      if (!g.ghost) { const pw = chart.timeScale().width(), lx = drawX(bars[Math.min(idx, bars.length - 1)].time), w = 320, h = clipBoxH(w); placeClip(Math.max(w / 2 + 8, (lx == null ? pw : lx) - w / 2 - 24), h / 2 + 12, g.it); cp.msg = cp.err = ''; cpRender(); return; }   // a click: next to the last bar
+      if (cpDropClip(ev, g.it)) { cp.msg = cp.err = ''; cpRender(); } else cpRenderTray();
+    };
+  });
+  // keys (focus inside the player, not in the video itself): the editor's shortcuts, Premiere / Resolve style
+  $('patsPanel').addEventListener('keydown', (e) => {
+    if (cp.cancelDrag) { e.preventDefault(); e.stopPropagation(); if (e.code === 'Escape') cp.cancelDrag(); return; }   // mid-drag: Esc cancels it, every other key waits
+    if (e.ctrlKey || e.metaKey || /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+    const { code, shiftKey: sh, altKey: alt } = e, plain = !alt && !sh;
+    const f = code === 'KeyC' && alt && !sh ? () => cpToggle()
+      : !cp.open ? null
+      : code === 'Escape' ? () => (cp.cancelDrag ? cp.cancelDrag() : cpToggle(false))   // Esc mid-drag cancels the drag, not the editor
+      : code === 'KeyI' && alt && !sh ? () => cpClearMark('a')
+      : code === 'KeyO' && alt && !sh ? () => cpClearMark('b')
+      : code === 'KeyI' && !alt ? () => (sh ? $('cpGoIn').click() : cpMark('a'))
+      : code === 'KeyO' && !alt ? () => (sh ? $('cpGoOut').click() : cpMark('b'))
+      : code === 'KeyA' && plain ? cpAdd
+      : code === 'KeyP' && plain ? () => cpPreview()
+      : code === 'KeyE' && plain ? cpCut
+      : code === 'KeyX' && alt && !sh ? () => cp.act >= 0 && cpRemove(cp.act)
+      : (code === 'Equal' || code === 'NumpadAdd') && !alt ? () => cpZoomAround(cpNow() ?? cp.view[0], 0.7)
+      : (code === 'Minus' || code === 'NumpadSubtract') && !alt ? () => cpZoomAround(cpNow() ?? cp.view[0], 1 / 0.7) : null;
+    if (!f) return; e.preventDefault(); e.stopPropagation(); f();
+  });
+}
+// ---------- clips on the chart ----------
+// A clip is a drawing {type:'clip', p1:{t,p} = the box's CENTRE, clip:{vid,a,b,title,src}, size:{w}} (sessions / undo carry it) shown as a
+// DOM box over the chart. The local server cuts it once with yt-clip into data/clips/<vid>_<a>_<b>.mp4 (that name is the cache); without
+// the server (GitHub Pages) the box plays that range straight from YouTube. Videos start paused.
+const CLIP_MAX = 600;   // seconds per clip (serve.py MAX_LEN)
+const clipTooLong = (a, b) => b - a > CLIP_MAX + 1e-6;   // (tenths of a second subtract with float noise: 600.0 s must pass)
+const validClip = (c) => !!c && typeof c.vid === 'string' && /^[\w-]{11}$/.test(c.vid) && isFinite(c.a) && isFinite(c.b) && +c.b > +c.a;
+const clipKey = (c) => `${c.vid}_${(+c.a).toFixed(1)}_${(+c.b).toFixed(1)}`;
+function placeClip(x, y, c) {   // x, y: chart pixels of the box's CENTRE (its anchor); c: {vid, a, b, title, src}
+  if (hideFlags.drawings) return toast('Drawings are hidden: show them to place a clip');
+  if (!validClip(c)) return;
+  { const w = 320, h = clipBoxH(w), W = chart.timeScale().width(), H = paneHeight();   // fully inside the pane, so its grip can be reached
+    x = Math.min(Math.max(x, w / 2), Math.max(w / 2, W - w / 2)); y = Math.min(Math.max(y, h / 2), Math.max(h / 2, H - h / 2)); }
+  const t = xToFreeTime(x), pr = candle.coordinateToPrice(y); if (t == null || pr == null) return;
+  const cc = { vid: c.vid, a: +c.a, b: +c.b, title: String(c.title || '').slice(0, 160), src: c.src === 'wade' ? 'wade' : 'pats' };
+  snapshot(); const d = newDrawing({ type: 'clip', p1: { t, p: pr }, clip: cc, size: { w: 320 }, color: '#000000' }); drawings.push(d);
+  saveJSON('rt_drawings', drawings); ensureClip(cc); repaintOverlays();
+}
+// ---- cutting (local server) / cache state, per clip key ----
+const clipState = {};   // key -> {state: running|done|error|embed, pct, url, err}
+let _clipPoll = null;
+async function ensureClip(c, retry) {
+  if (!validClip(c)) return; const key = clipKey(c), st = clipState[key];
+  if (st && !retry && st.state !== 'none') return;
+  clipState[key] = { state: 'running', pct: 0 };
+  try {
+    const r = await fetch('api/clip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vid: c.vid, a: +c.a, b: +c.b }) });
+    if (r.status === 400 || r.status === 403) {   // the clip service is there but refuses this clip: say why (only no service at all falls back to YouTube)
+      const j = await r.json().catch(() => ({}));
+      clipState[key] = { state: 'error', pct: 0, err: j.error === 'too long' ? 'A clip can be up to 10 minutes' : `The clip service refused it (${j.error || r.status})` };
+      syncClipBoxes(); cpRenderTray(); return;
+    }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    clipState[key] = await r.json();
+  } catch (e) { clipState[key] = { state: 'embed' }; }   // no local clip service (GitHub Pages): play that range straight from YouTube
+  if (clipState[key].state === 'running') clipPoll();
+  syncClipBoxes();
+}
+function clipPoll() {
+  if (_clipPoll) return;
+  _clipPoll = setInterval(async () => {
+    const run = Object.keys(clipState).filter(k => clipState[k].state === 'running');
+    if (!run.length) { clearInterval(_clipPoll); _clipPoll = null; return; }
+    for (const k of run) { try { const r = await fetch('api/clip?key=' + encodeURIComponent(k), { cache: 'no-store' }); if (r.ok) clipState[k] = await r.json(); } catch (e) {} }
+    syncClipBoxes();
+  }, 1000);
+}
+// ---- the boxes ----
+const clipBoxes = new Map();   // drawing id -> box element (kept across undo, which swaps the drawing objects)
+let _clipLayer = null;
+function clipLayer() {
+  if (_clipLayer) return _clipLayer;
+  const L = _clipLayer = document.createElement('div'); L.id = 'clipLayer'; $('chart').appendChild(L);
+  ['pointerdown', 'click', 'dblclick', 'contextmenu', 'wheel'].forEach(ev => L.addEventListener(ev, (e) => e.stopPropagation()));   // the chart's own handlers (pan, select, tools) never see a press on a box
+  return L;
+}
+const clipW = (d) => Math.max(200, Math.min(960, +(d.size && d.size.w) || 320));
+const clipBoxH = (w) => Math.round((w - 2) * 9 / 16) + 25;   // borders + 22 px header + 16:9 body
+function clipHead(c) { return `${c.src === 'wade' ? 'Wade' : 'PATs'} ${fmtClipT(c.a)} – ${fmtClipT(c.b)}`; }
+function syncClipBoxes(W, H) {
+  const layer = clipLayer();
+  if (W != null) { layer.style.width = W + 'px'; layer.style.height = H + 'px'; }
+  const live = new Set();
+  if (!hideFlags.drawings) for (const d of drawings) {
+    if (d.type !== 'clip' || !drawingVisible(d) || !validClip(d.clip)) continue;
+    live.add(d.id);
+    let el = clipBoxes.get(d.id); if (!el) { el = makeClipBox(); clipBoxes.set(d.id, el); layer.appendChild(el); }
+    el._d = d;
+    const x = drawX(d.p1.t), y = drawY(d.p1.p);
+    if (x == null || y == null) { el.style.display = 'none'; continue; }
+    const w = clipW(d); el.style.display = ''; el.style.left = Math.round(x - w / 2) + 'px'; el.style.top = Math.round(y - clipBoxH(w) / 2) + 'px'; el.style.width = w + 'px';   // anchored at its centre
+    clipBody(el, d.clip);
+  }
+  for (const [id, el] of clipBoxes) if (!live.has(id)) { const v = el.querySelector('video'); if (v) v.pause(); el.remove(); clipBoxes.delete(id); }
+}
+function clipBody(el, c) {   // placeholder -> video (or the YouTube range, or an error with Retry); rebuilt only when the state changes
+  const key = clipKey(c), st = clipState[key];
+  if (!st) { ensureClip(c); return; }
+  const mode = st.state === 'done' ? 'v:' + st.url : st.state === 'embed' ? 'e:' + key : st.state === 'error' ? 'x:' + key : 'w';
+  el.querySelector('.clip-title').textContent = clipHead(c); el.title = c.title || '';
+  const body = el.querySelector('.clip-body');
+  if (mode === 'w') {
+    if (el._mode !== 'w') { body.innerHTML = '<div class="clip-wait"><span>Cutting the clip…</span><div class="clip-bar"><i></i></div></div>'; el._mode = 'w'; }
+    body.querySelector('.clip-bar i').style.width = Math.max(3, +st.pct || 0) + '%'; body.querySelector('.clip-wait span').textContent = `Cutting the clip… ${Math.round(+st.pct || 0)}%`;
+    return;
+  }
+  if (el._mode === mode) return; el._mode = mode;
+  if (mode[0] === 'v') body.innerHTML = `<video src="${escHtml(st.url)}" preload="metadata" controls playsinline></video>`;   // paused until you press play
+  else if (mode[0] === 'e') body.innerHTML = `<iframe src="https://www.youtube-nocookie.com/embed/${c.vid}?start=${Math.floor(c.a)}&end=${Math.ceil(c.b)}&rel=0&modestbranding=1" title="Clip" allow="encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
+  else { body.innerHTML = `<div class="clip-wait"><span>Couldn't cut the clip</span><small>${escHtml(st.err || '')}</small><span class="clip-acts"><button type="button" class="clip-retry">Retry</button><button type="button" class="clip-yt">Play from YouTube</button></span></div>`;
+    body.querySelector('.clip-retry').onclick = () => { el._mode = null; ensureClip(c, true); };
+    body.querySelector('.clip-yt').onclick = () => { clipState[key] = { state: 'embed' }; syncClipBoxes(); }; }
+}
+function makeClipBox() {
+  const el = document.createElement('div'); el.className = 'clip-box';
+  el.innerHTML = `<div class="clip-head" title="Drag to move the clip"><span aria-hidden="true" class="material-symbols-outlined">movie</span><span class="clip-title"></span>`
+    + `<button type="button" class="clip-x" title="Remove the clip (Ctrl+Z brings it back)" aria-label="Remove the clip"><span aria-hidden="true" class="material-symbols-outlined">close</span></button></div>`
+    + `<div class="clip-body"></div><div class="clip-grip" title="Drag to resize" aria-hidden="true"></div>`;
+  const head = el.querySelector('.clip-head'), grip = el.querySelector('.clip-grip');
+  let mv = null;   // move by the header: the anchor follows the pointer in chart pixels (free time / price, like a drawing body drag)
+  head.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || e.target.closest('button') || drawingsLocked || (el._d && el._d.locked)) return;
+    const d = el._d, x0 = drawX(d.p1.t), y0 = drawY(d.p1.p); if (x0 == null || y0 == null) return;
+    mv = { cx: e.clientX, cy: e.clientY, x0, y0, moved: false }; head.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  head.addEventListener('pointermove', (e) => {
+    if (!mv) return; const dx = e.clientX - mv.cx, dy = e.clientY - mv.cy;
+    if (!mv.moved && Math.hypot(dx, dy) <= 3) return;
+    if (!mv.moved) { mv.moved = true; snapshot(); }
+    const d = el._d, t = xToFreeTime(mv.x0 + dx), pr = candle.coordinateToPrice(mv.y0 + dy);
+    if (t != null && pr != null) { d.p1 = { t, p: pr }; repaintOverlays(); }
+  });
+  const mvEnd = () => { if (!mv) return; const m = mv; mv = null; if (m.moved) saveJSON('rt_drawings', drawings); };
+  head.addEventListener('pointerup', mvEnd); head.addEventListener('pointercancel', mvEnd);
+  let rs = null;   // corner grip: width only, the video keeps 16:9; the top-left corner stays put (the anchor is the centre, so it moves by half the change)
+  grip.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || drawingsLocked || (el._d && el._d.locked)) return;
+    const d = el._d, w = clipW(d), x0 = drawX(d.p1.t), y0 = drawY(d.p1.p); if (x0 == null || y0 == null) return;
+    rs = { cx: e.clientX, w, left: x0 - w / 2, top: y0 - clipBoxH(w) / 2, moved: false }; grip.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  grip.addEventListener('pointermove', (e) => {
+    if (!rs) return; const dx = e.clientX - rs.cx; if (!rs.moved && Math.abs(dx) <= 2) return;
+    if (!rs.moved) { rs.moved = true; snapshot(); }
+    const d = el._d, w = Math.max(200, Math.min(960, Math.round(rs.w + dx))), t = xToFreeTime(rs.left + w / 2), pr = candle.coordinateToPrice(rs.top + clipBoxH(w) / 2);
+    d.size = { w }; if (t != null && pr != null) d.p1 = { t, p: pr }; repaintOverlays();
+  });
+  const rsEnd = () => { if (!rs) return; const m = rs; rs = null; if (m.moved) saveJSON('rt_drawings', drawings); };
+  grip.addEventListener('pointerup', rsEnd); grip.addEventListener('pointercancel', rsEnd);
+  el.querySelector('.clip-x').onclick = () => { const d = el._d, i = drawings.indexOf(d); if (i < 0) return; snapshot(); drawings.splice(i, 1); saveJSON('rt_drawings', drawings); repaintOverlays(); syncClipBoxes(); toast('Clip removed (Ctrl+Z brings it back)'); };
+  return el;
 }
 function patsClose() {
   const hadFocus = $('patsPanel').contains(document.activeElement);
-  patsOpen = false; patsDay = null; $('patsPanel').hidden = true; $('patsFrame').setAttribute('src', 'about:blank');
+  cpToggle(false); patsOpen = false; patsMin = false; $('patsPanel').classList.remove('min'); patsDay = null; $('patsPanel').hidden = true; $('patsFrame').setAttribute('src', 'about:blank');
   patsSync();
   const b = $(REV_SRC[revSrc].btn); if (hadFocus && b && !b.hidden) b.focus();   // keyboard users land back on the button, not at the top of the page
+}
+function patsMinimize(on, instant) {   // park the player in its toolbar button and bring it back: the same iframe, so the video stays where it was (paused while parked, playing again if it was)
+  const p = $('patsPanel'); if (!patsOpen || !!on === patsMin) return;
+  const b = $(REV_SRC[revSrc].btn), br = b && !b.hidden ? b.getBoundingClientRect() : null, pr = p.getBoundingClientRect();
+  patsMin = !!on;
+  if (on) {
+    cpStopPreview(); if (p.contains(document.activeElement) && b) b.focus();
+    const park = (y) => { if (!y || !patsMin) return; patsWasPlaying = typeof y.getPlayerState === 'function' && y.getPlayerState() === 1; if (typeof y.pauseVideo === 'function') y.pauseVideo(); };
+    if (ytp()) park(ytp()); else { patsWasPlaying = false; if (frameVid()) ytBind().then(() => park(ytp())); }
+  }
+  const to = br ? `translate(${Math.round(br.left + br.width / 2 - pr.left - pr.width / 2)}px, ${Math.round(br.top + br.height / 2 - pr.top - pr.height / 2)}px) scale(${Math.max(0.04, br.width / pr.width).toFixed(3)})` : 'scale(0.2)';
+  const frames = [{ transform: 'none', opacity: 1 }, { transform: to, opacity: 0 }];
+  const ms = instant || matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 220;
+  if (on) {   // held at the button until hidden; a timer too, since a background tab may never finish the animation
+    const a = p.animate(frames, { duration: ms, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' }), done = () => { if (patsMin) p.classList.add('min'); a.cancel(); };
+    a.onfinish = done; setTimeout(done, ms + 60);
+  }
+  else {
+    p.classList.remove('min'); { const r = patsBox(p); patsFitTall(p, r, r.height); }   // the window may have shrunk while it was parked
+    p.animate(frames.reverse(), { duration: ms, easing: 'cubic-bezier(.2,0,0,1)' });
+    if (patsWasPlaying) { const y = ytp(); if (y && typeof y.playVideo === 'function') y.playVideo(); } patsWasPlaying = false;
+  }
+  patsSync();
 }
 function patsPlace() {   // restore the last position / size, clamped to this window
   const b = loadJSON('rt_pats_box', null), p = $('patsPanel'); if (!b) return;
   const w = Math.min(b.w, innerWidth - 16), h = Math.min(b.h, innerHeight - 16);
   Object.assign(p.style, { width: w + 'px', height: h + 'px', left: Math.max(0, Math.min(b.x, innerWidth - w)) + 'px', top: Math.max(0, Math.min(b.y, innerHeight - h)) + 'px', right: 'auto', bottom: 'auto' });
 }
-function patsSave() { const p = $('patsPanel'); if (p.hidden) return; const r = p.getBoundingClientRect(); saveJSON('rt_pats_box', { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }); }
+function patsSave() { const p = $('patsPanel'); if (p.hidden || patsMin) return; const r = p.getBoundingClientRect(); saveJSON('rt_pats_box', { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height - (cp.open ? (cp.panelH || 0) : 0)) }); }   // the video's box (the editor opens closed)
 (function patsWire() {
   const p = $('patsPanel'), head = $('patsHead'); if (!p) return;
   patsPlace();
-  for (const [k, sr] of Object.entries(REV_SRC)) { const btn = $(sr.btn); if (btn) btn.onclick = () => { if (patsOpen && revSrc === k) patsClose(); else patsShow(curDayKey(), k); }; }
-  $('patsClose').onclick = patsClose;
+  for (const [k, sr] of Object.entries(REV_SRC)) { const btn = $(sr.btn); if (btn) btn.onclick = () => { if (patsOpen && revSrc === k) { if (patsMin) patsMinimize(false); else patsClose(); } else { patsMinimize(false, true); patsShow(curDayKey(), k); } }; }   // the parked player's button brings it back
+  $('patsClose').onclick = patsClose; $('patsMin').onclick = () => patsMinimize(true);
+  addEventListener('resize', () => { if (!patsOpen || patsMin || p.hidden) return; const r = patsBox(p); patsFitTall(p, r, r.height); });   // a smaller window: the player (and the editor's buttons) stays on screen
+  cpWire();
   $('patsPick').onchange = (e) => { patsLoad(patsVids(patsDay)[+e.target.value] || null); e.target.blur(); };
   let drag = null;
   head.addEventListener('pointerdown', (e) => {
@@ -3904,12 +4491,10 @@ function patsSave() { const p = $('patsPanel'); if (p.hidden) return; const r = 
   });
   let t = null; new ResizeObserver(() => { clearTimeout(t); t = setTimeout(patsSave, 300); }).observe(p);
   const size = (w) => {   // 16:9 (the bar floats over the video), clamped to the window, top-left corner kept
-    const r = p.getBoundingClientRect(); w = Math.max(240, Math.min(w, innerWidth - 8)); let h = Math.round(w * 9 / 16);
-    if (h > innerHeight - 8) { h = innerHeight - 8; w = Math.round(h * 16 / 9); }
+    const r = p.getBoundingClientRect(), ex = cp.open ? (cp.panelH || 0) : 0; w = Math.max(240, Math.min(w, innerWidth - 8)); let h = Math.round(w * 9 / 16) + ex;   // + the clip editor when it is open
+    if (h > innerHeight - 8) { h = innerHeight - 8; w = Math.round((h - ex) * 16 / 9); }   // the editor's height is not video
     Object.assign(p.style, { width: w + 'px', height: h + 'px', left: Math.max(0, Math.min(r.left, innerWidth - w)) + 'px', top: Math.max(0, Math.min(r.top, innerHeight - h)) + 'px', right: 'auto', bottom: 'auto' });
   };
-  $('patsSmaller').onclick = () => { size(p.getBoundingClientRect().width / 1.25); patsSave(); };
-  $('patsBigger').onclick = () => { size(p.getBoundingClientRect().width * 1.25); patsSave(); };
   const grip = $('patsGrip'); let rs = null;   // corner grip (the native CSS resize corner sat under the iframe and could not be grabbed)
   grip.addEventListener('pointerdown', (e) => { if (e.button !== 0) return; const r = p.getBoundingClientRect(); rs = { x: e.clientX, w: r.width }; grip.setPointerCapture(e.pointerId); p.classList.add('resizing'); e.preventDefault(); });
   grip.addEventListener('pointermove', (e) => { if (rs) size(rs.w + e.clientX - rs.x); });
@@ -3924,7 +4509,7 @@ function syncPickers() {   // the toolbar pickers always name what is actually l
   if (ts && ts.value !== tv && [...ts.options].some(o => o.value === tv)) ts.value = tv;
 }
 function renderLive() {
-  patsSync();
+  patsSync(); saveLastPos();
   { const ck = $('clock'), full = baseBars.length ? tFmt(curBaseT()) : '', tOnly = full.replace(/^\d\d\/\d\d\s*/, '');   // blind modes: time only, date hidden; <=1799 the CSS hides .ck-d too
     ck.innerHTML = !full ? '--:--' : blindDate() ? tOnly : `<span class="ck-d">${full.slice(0, 6)}</span>${tOnly}`; ck.title = blindDate() ? '' : full; }
   $('clockPrice').textContent = baseBars.length ? f2(curPx()) : '--';
@@ -4068,139 +4653,117 @@ function synthBars(t) {   // minimal entry→exit path when no candle snapshot e
   const o = t.entry, c = t.exit, hi = Math.max(o, c), lo = Math.min(o, c), mt = (t.entryTime + t.exitTime) / 2;
   return [{ t: t.entryTime, o, h: o, l: o, c: o }, { t: mt, o, h: hi, l: lo, c: (o + c) / 2 }, { t: t.exitTime, o: c, h: c, l: c, c }];
 }
-function tradeMarker(ctx, x, y, up, col) { const s = 7, yy = y + (up ? 13 : -13); ctx.fillStyle = col; ctx.strokeStyle = '#0b0e16'; ctx.lineWidth = 1.5; ctx.beginPath(); if (up) { ctx.moveTo(x, yy - s); ctx.lineTo(x - s, yy + s); ctx.lineTo(x + s, yy + s); } else { ctx.moveTo(x, yy + s); ctx.lineTo(x - s, yy - s); ctx.lineTo(x + s, yy - s); } ctx.closePath(); ctx.fill(); ctx.stroke(); }
-function priceTag(ctx, xRight, y, text, col) {   // price label pinned to the right gutter on its level line
-  ctx.font = '700 11px ui-monospace,monospace'; const w = ctx.measureText(text).width + 12, h = 16, x = xRight - w, yt = Math.max(1, Math.min(y - h / 2, 242));
-  rrect(ctx, x, yt, w, h, 3); ctx.fillStyle = col; ctx.fill(); ctx.fillStyle = '#fff'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.fillText(text, x + 6, yt + h / 2);
+function drawingsInWindow(list, lo, hi, pLo, pHi) {   // copies of the drawings that can show between lo and hi (epoch s) near pLo..pHi (drawings are global: other days' lines must not ride along)
+  const fin = (v) => typeof v === 'number' && isFinite(v), band = fin(pLo) && fin(pHi) ? Math.max(pHi - pLo, 1) : Infinity, bLo = pLo - band, bHi = pHi + band;
+  return JSON.parse(JSON.stringify((list || []).filter(d => {
+    if (!d || !d.p1 || d.type === 'clip') return false;   // video boxes belong to the live chart
+    const pts = [d.p1, d.p2, d.p3].filter(Boolean);
+    const lvls = d.type === 'channel' && d.p2 && d.p3 && fin(d.p1.t) && fin(d.p2.t) && fin(d.p3.t) && fin(d.p1.p) && fin(d.p2.p) && fin(d.p3.p) ? [100].concat(Array.isArray(d.levels) ? d.levels.filter(fin) : []) : [];
+    for (const f of lvls) { const dt = (d.p3.t - d.p1.t) * f / 100, dp = (d.p3.p - d.p1.p) * f / 100; pts.push({ t: d.p1.t + dt, p: d.p1.p + dp }, { t: d.p2.t + dt, p: d.p2.p + dp }); }   // the second rail (100%) and every level line: both ends
+    const ts = pts.map(q => q.t).filter(fin), ps = pts.map(q => q.p).filter(fin);
+    if (d.type === 'rr') ps.push(d.stop, d.target);
+    const isLine = d.type === 'tl' || d.type === 'ray' || d.type === 'channel', ex = d.extend || 'none';   // lines extend along their slope (tlSeg); a box / fib extends flat
+    const fwd = !d.p2 || !fin(d.p2.t) || !fin(d.p1.t) || d.p2.t >= d.p1.t;   // a ray runs from p1 through p2: leftward when p2 is earlier
+    const runsRight = d.type === 'hray' || !!d.extendRight || (isLine && (ex === 'both' || ex === 'right' || (d.type === 'ray' && fwd)));
+    const runsLeft = !!d.extendLeft || (isLine && (ex === 'both' || ex === 'left' || (d.type === 'ray' && !fwd)));
+    const mn = ts.length ? Math.min(...ts) : NaN, mx = ts.length ? Math.max(...ts) : NaN;
+    const vert = isLine && d.p2 && fin(d.p1.t) && d.p2.t === d.p1.t;   // a vertical line (extended or a ray) is drawn only at its own time
+    const inTime = d.type === 'hl' || (vert ? ts.some(v => v >= lo && v <= hi) : ts.length > 0 && ((mn <= hi && mx >= lo) || (runsRight && mn <= hi) || (runsLeft && mx >= lo)));
+    if (isLine && (runsRight || runsLeft) && d.p2 && fin(d.p1.t) && fin(d.p2.t) && fin(d.p1.p) && fin(d.p2.p)) {   // an extended line: its price where it crosses the card, not at its far-off anchors
+      if (d.p2.t === d.p1.t) ps.length = 0;   // vertical: it spans every price
+      else {
+        const at = (tt) => d.p1.p + (d.p2.p - d.p1.p) * (tt - d.p1.t) / (d.p2.t - d.p1.t), a = Math.max(lo, runsLeft ? lo : mn), b = Math.min(hi, runsRight ? hi : mx);
+        const off = lvls.length ? d.p3.p - at(d.p3.t) : 0, offs = [0].concat(lvls.map(f => off * f / 100));   // a channel's second rail and level lines run parallel, shifted by f% of it
+        if (a <= b) ps.splice(0, ps.length, ...offs.flatMap(o => [at(a) + o, at(b) + o]));
+      }
+    }
+    const inPrice = d.type === 'vline' || band === Infinity || !ps.length || (Math.max(...ps.filter(fin)) >= bLo && Math.min(...ps.filter(fin)) <= bHi);
+    return d.type === 'cross' ? (inTime || inPrice) : inTime && inPrice;   // a cross: either arm can run through the card
+  }).slice(-200)));
 }
-function swingPivots(bars, k) {   // local swing highs/lows: bar i is a pivot if its high/low is the extreme within ±k bars
-  const out = [];
-  for (let i = k; i < bars.length - k; i++) {
-    let isH = true, isL = true;
-    for (let j = i - k; j <= i + k && (isH || isL); j++) { if (j === i) continue; if (bars[j].h >= bars[i].h) isH = false; if (bars[j].l <= bars[i].l) isL = false; }
-    if (isH) out.push({ i, price: bars[i].h, type: 'H' });
-    if (isL) out.push({ i, price: bars[i].l, type: 'L' });
-  }
-  return out;
+// ---- trade review chart: the same chart engine as the main chart (drag to pan, wheel to zoom, crosshair, double-click to fit), the trade's
+// candles at its own timeframe, entry / exit levels + arrows, and the drawings that were on the chart when it closed (older trades: today's)
+const _tradeCharts = new Set();
+function disposeTradeCharts(root) { for (const c of [..._tradeCharts]) if (!root || root.contains(c.host) || !document.body.contains(c.host)) { try { c.chart.remove(); } catch (e) {} _tradeCharts.delete(c); } }
+function mountTradeChart(host, t) {   // one bad record must never blank the other cards: each card is guarded on its own
+  try { mountTradeChartImpl(host, t); }
+  catch (e) { for (const c of [..._tradeCharts]) if (c.host === host) { try { c.chart.remove(); } catch (_) {} _tradeCharts.delete(c); } host.innerHTML = '<div class="dd-note">No chart for this trade (its stored bars are damaged)</div>'; }
 }
-// pan-drag state shared across review canvases (document-level so a drag can continue off-canvas; added once)
-let _ddDrag = null;
-document.addEventListener('pointermove', (e) => {
-  if (!_ddDrag) return; const c = _ddDrag.c; if (!c || !c._view || !c._n) return;
-  const L = 6, RG = 70, plotW = Math.max(10, (c.clientWidth || 680) - L - RG);
-  const v = _ddDrag.view, width = v.to - v.from;
-  let from = v.from - (e.clientX - _ddDrag.startX) * (width / plotW);
-  from = Math.max(0, Math.min(c._n - width, from));
-  c._view = { from, to: from + width }; drawTradeChart(c, c._t);
-});
-document.addEventListener('pointerup', () => { if (_ddDrag) { if (_ddDrag.c) _ddDrag.c.style.cursor = 'grab'; _ddDrag = null; } });
-function mountTradeChart(c, t) {   // wire zoom (wheel) + pan (drag) + reset (dbl-click) on a trade-review canvas, then draw
-  c._t = t; c._view = null;        // fresh full view each open
-  if (!c._wired) {
-    c._wired = true; c.style.cursor = 'grab';
-    c.addEventListener('wheel', (e) => {
-      e.preventDefault(); if (!c._view || !c._n) return;
-      const L = 6, RG = 70, plotW = Math.max(10, (c.clientWidth || 680) - L - RG);
-      const frac = Math.max(0, Math.min(1, (e.clientX - c.getBoundingClientRect().left - L) / plotW));
-      const v = c._view, cur = v.from + frac * (v.to - v.from);
-      let w = Math.max(4, Math.min(c._n, (v.to - v.from) * (e.deltaY > 0 ? 1.2 : 1 / 1.2)));
-      let from = Math.max(0, Math.min(c._n - w, cur - frac * w));
-      c._view = { from, to: from + w }; drawTradeChart(c, c._t);
-    }, { passive: false });
-    c.addEventListener('pointerdown', (e) => { if (e.button !== 0) return; _ddDrag = { c, startX: e.clientX, view: { ...c._view } }; c.style.cursor = 'grabbing'; e.preventDefault(); });
-    c.addEventListener('dblclick', () => { c._view = { from: 0, to: c._n }; drawTradeChart(c, c._t); });
-  }
-  drawTradeChart(c, t);
-}
-function drawTradeChart(c, t) {
-  const dpr = Math.max(1, window.devicePixelRatio || 1);
-  const cssW = (c.clientWidth && c.clientWidth > 40) ? c.clientWidth : 680, cssH = 260;   // match the element so candles never squish
-  c.width = Math.round(cssW * dpr); c.height = Math.round(cssH * dpr);
-  const ctx = c.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const W = cssW, H = cssH; ctx.clearRect(0, 0, W, H);
-  let bars = (t.chart && t.chart.length) ? t.chart : liveTradeBars(t), synth = false;
-  if (!bars || !bars.length) { bars = synthBars(t); synth = true; }
-  const n = bars.length; c._n = n;
-  if (!c._view) c._view = { from: 0, to: n };          // view = [from,to) in bar-index space (fractional for smooth zoom)
-  let from = Math.max(0, c._view.from), to = Math.min(n, c._view.to);
-  if (to - from < 2) { to = Math.min(n, from + 2); from = Math.max(0, to - 2); }
-  c._view = { from, to };
-  const L = 6, RG = 70, TH = 22, BH = 16, padY = 8, top = TH, bot = H - BH, plotW = W - L - RG;
-  const x = i => L + (i + 0.5 - from) / (to - from) * plotW, slot = plotW / (to - from), bw = Math.max(1.2, slot * 0.62);
-  const idxAt = ts => { const i = bars.findIndex(b => b.t >= ts); return i < 0 ? n - 1 : i; };
-  const eIdx = idxAt(t.entryTime), xIdx = idxAt(t.exitTime), eX = x(eIdx), xX = x(xIdx), inPlot = px => px >= L - 1 && px <= W - RG + 1;
-  const i0 = Math.max(0, Math.floor(from)), i1 = Math.min(n - 1, Math.ceil(to) - 1), vis = bars.slice(i0, i1 + 1);
-  let lo = Math.min(...vis.map(b => b.l)), hi = Math.max(...vis.map(b => b.h));
-  if (inPlot(eX)) { lo = Math.min(lo, t.entry); hi = Math.max(hi, t.entry); }
-  if (inPlot(xX)) { lo = Math.min(lo, t.exit); hi = Math.max(hi, t.exit); }
-  const rng = (hi - lo) || 1, y = p => top + padY + (hi - p) / rng * (bot - top - 2 * padY);
-  const long = t.side === 'long', eY = y(t.entry), xY = y(t.exit);
-  // header band — symbol · timeframe · side (left), P&L · ticks · R (right)
-  const head = `${t.sym || INSTR.symbol} ${tfLab(t.tf)}`;
-  ctx.fillStyle = '#E6E7E8'; ctx.fillRect(0, 0, W, TH);
-  ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.font = '700 12px sans-serif'; ctx.fillStyle = '#000000'; ctx.fillText(head, L + 2, TH / 2);
-  ctx.fillStyle = long ? '#127209' : '#D40605'; ctx.fillText(`   ${long ? 'Long' : 'Short'} ${t.qty}`, L + 2 + ctx.measureText(head).width, TH / 2);
-  if (W > 360) {
-    ctx.textAlign = 'right'; ctx.fillStyle = t.pnl >= 0 ? '#127209' : '#D40605'; ctx.font = '700 12px ui-monospace,monospace';
-    ctx.fillText(`${usd(t.pnl)}   ${t.ticks >= 0 ? '+' : ''}${t.ticks} ticks   ${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + ' R'}`, W - 6, TH / 2);
-    ctx.textAlign = 'left';
-  }
-  ctx.save(); ctx.beginPath(); ctx.rect(L, top, plotW, bot - top); ctx.clip();   // everything that scrolls is clipped to the plot
-  // trade-span shading
-  const sx = Math.min(eX, xX), sw = Math.max(2, Math.abs(xX - eX));
-  ctx.fillStyle = t.pnl >= 0 ? 'rgba(50,205,50,.09)' : 'rgba(255,0,0,.09)'; ctx.fillRect(sx, top, sw, bot - top);
-  // recent high / low of the visible window: reference lines + price levels (左側標 H/L 點位)
-  const vHi = Math.max(...vis.map(b => b.h)), vLo = Math.min(...vis.map(b => b.l));
-  ctx.setLineDash([2, 3]); ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(88,89,91,.45)';
-  [vHi, vLo].forEach(p => { const yy = y(p); ctx.beginPath(); ctx.moveTo(L, yy); ctx.lineTo(W - RG, yy); ctx.stroke(); });
-  ctx.setLineDash([]); ctx.font = '700 10px ui-monospace,monospace'; ctx.fillStyle = '#58595B'; ctx.textAlign = 'left';
-  ctx.textBaseline = 'top'; ctx.fillText('H ' + f2(vHi), L + 3, y(vHi) + 2);
-  ctx.textBaseline = 'bottom'; ctx.fillText('L ' + f2(vLo), L + 3, y(vLo) - 2);
-  // candles (visible range only)
-  for (let i = i0; i <= i1; i++) { const b = bars[i], up = b.c >= b.o; ctx.strokeStyle = ctx.fillStyle = up ? '#1E8A1E' : '#B30000'; const cx = x(i);
-    ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(cx, y(b.h)); ctx.lineTo(cx, y(b.l)); ctx.stroke();
-    const yo = y(b.o), yc = y(b.c); ctx.fillRect(cx - bw / 2, Math.min(yo, yc), bw, Math.max(1, Math.abs(yo - yc))); }
-  // recent swing pivots: small dots + thinned price labels (近期高低點 以及點位)
-  const piv = swingPivots(bars, 3); let lastHx = -99, lastLx = -99; ctx.textAlign = 'center';
-  piv.forEach(p => { if (p.i < i0 || p.i > i1) return; const up = p.type === 'H', px = x(p.i), py = y(p.price);
-    ctx.fillStyle = up ? '#1E8A1E' : '#B30000'; ctx.beginPath(); ctx.arc(px, py + (up ? -3 : 3), 2, 0, 6.2832); ctx.fill();
-    const last = up ? lastHx : lastLx; if (Math.abs(px - last) > 30) { ctx.font = '9px ui-monospace,monospace'; ctx.fillStyle = up ? '#1E8A1E' : '#B30000'; ctx.textBaseline = up ? 'bottom' : 'top'; ctx.fillText(f2(p.price), px, up ? py - 7 : py + 7); if (up) lastHx = px; else lastLx = px; } });
-  // entry / exit level lines + markers
-  ctx.setLineDash([4, 3]); ctx.lineWidth = 1.2;
-  ctx.strokeStyle = '#0B5FA5'; ctx.beginPath(); ctx.moveTo(L, eY); ctx.lineTo(W - RG, eY); ctx.stroke();
-  ctx.strokeStyle = t.pnl >= 0 ? '#1E8A1E' : '#B30000'; ctx.beginPath(); ctx.moveTo(L, xY); ctx.lineTo(W - RG, xY); ctx.stroke();
-  ctx.setLineDash([]);
-  if (inPlot(eX)) tradeMarker(ctx, eX, eY, long, '#0B5FA5');
-  if (inPlot(xX)) tradeMarker(ctx, xX, xY, !long, t.pnl >= 0 ? '#1E8A1E' : '#B30000');
-  ctx.restore();
-  // gutter price tags (entry/exit) — outside the clip
-  priceTag(ctx, W - 3, eY, f2(t.entry), '#0B5FA5');
-  priceTag(ctx, W - 3, xY, f2(t.exit), t.pnl >= 0 ? '#1E8A1E' : '#B30000');
-  if (W > 300) {
-    const tmShort = ts => tFmt(ts).replace(/^\d\d\/\d\d\s*/, '');
-    ctx.font = '10px ui-monospace,monospace'; ctx.fillStyle = '#58595B'; ctx.textBaseline = 'bottom';
-    ctx.textAlign = 'left'; ctx.fillText('In ' + tmShort(t.entryTime), L + 2, H - 2);
-    ctx.textAlign = 'right'; ctx.fillText('Out ' + tmShort(t.exitTime), W - RG - 2, H - 2); ctx.textAlign = 'left';
-  }
-  if (synth) { ctx.font = '10px sans-serif'; ctx.fillStyle = '#58595B'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('no bar snapshot — entry/exit only', W / 2, TH + 12); ctx.textAlign = 'left'; }
+function mountTradeChartImpl(host, t) {
+  const fin = (v) => typeof v === 'number' && isFinite(v);
+  const okBars = (a) => Array.isArray(a) ? a.filter(b => b && fin(b.t) && b.t > 1e9 && b.t < 4e9 && fin(b.o) && fin(b.h) && fin(b.l) && fin(b.c)) : [];   // (a time the date formatter can't show would throw on every paint)
+  let raw = okBars(t.chart), synth = false;
+  if (!raw.length) raw = okBars(liveTradeBars(t));
+  if (!raw.length) { raw = okBars(synthBars(t)); synth = true; }
+  if (!raw.length) throw new Error('no bars');
+  const data = []; let last = -Infinity;
+  for (const b of raw) { const tm = Math.max(Math.round(b.t), last + 1); last = tm; data.push({ time: tm, open: b.o, high: b.h, low: b.l, close: b.c }); }   // strictly increasing (tick bars can share a second)
+  const tfMin = typeof t.tf === 'number' ? t.tf : null, secs = tfMin == null || tfMin < 1;   // tick-bar / seconds trades keep seconds in every label, whatever the main chart shows now
+  const hm = (o) => secs ? `${o.hour}:${o.minute}:${o.second}` : `${o.hour}:${o.minute}`;
+  const xFmt = (ts) => { const o = etP(ts); return blindDate() ? `${hm(o)} ET` : `${o.month}/${o.day} ${hm(o)} ET`; };
+  const tickFmt = (ts, type) => { const o = etP(ts); if (type === _TM.Year || type === _TM.Month || type === _TM.DayOfMonth) return blindDate() ? '·' : `${o.month}/${o.day}`; return type === _TM.TimeWithSeconds || secs ? `${o.hour}:${o.minute}:${o.second}` : `${o.hour}:${o.minute}`; };
+  const ch = LightweightCharts.createChart(host, {
+    autoSize: true,
+    layout: { background: { color: '#FFFFFF' }, textColor: '#000000', fontSize: 11, attributionLogo: false },
+    grid: { vertLines: { color: '#EDEDED' }, horzLines: { color: '#EDEDED' } },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal, vertLine: { color: '#58595B', labelBackgroundColor: '#D3D3D3' }, horzLine: { color: '#58595B', labelBackgroundColor: '#D3D3D3' } },
+    rightPriceScale: { borderColor: '#BCBDBF', scaleMargins: { top: 0.12, bottom: 0.12 } },
+    localization: { timeFormatter: xFmt },
+    timeScale: { borderColor: '#BCBDBF', timeVisible: true, secondsVisible: secs, rightOffset: 3, tickMarkFormatter: tickFmt },
+  });
+  _tradeCharts.add({ host, chart: ch });   // registered before anything can throw, so a failed card is still disposed
+  const sr = ch.addCandlestickSeries({ priceFormat: { type: 'price', minMove: TICK, precision: 2 }, upColor: '#32CD32', downColor: '#FF0000', borderVisible: true, borderUpColor: '#1E8A1E', borderDownColor: '#B30000', wickUpColor: '#1E8A1E', wickDownColor: '#B30000', priceLineVisible: false, lastValueVisible: false, priceFormat: { type: 'price', precision: 2, minMove: TICK || 0.25 } });   // no 'last price' line: only In / Out levels
+  sr.setData(data);
+  const long = t.side === 'long', xc = t.pnl >= 0 ? '#1E8A1E' : '#B30000';
+  sr.createPriceLine({ price: t.entry, color: '#0B5FA5', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'In' });
+  sr.createPriceLine({ price: t.exit, color: xc, lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'Out' });
+  const barAt = (ts) => { let lo = 0, hi = data.length - 1, k = 0; while (lo <= hi) { const m = (lo + hi) >> 1; if (data[m].time <= ts) { k = m; lo = m + 1; } else hi = m - 1; } return data[k].time; };
+  sr.setMarkers([
+    { time: barAt(t.entryTime), position: long ? 'belowBar' : 'aboveBar', color: '#0B5FA5', shape: long ? 'arrowUp' : 'arrowDown', text: 'In' },
+    { time: barAt(t.exitTime), position: long ? 'aboveBar' : 'belowBar', color: xc, shape: long ? 'arrowDown' : 'arrowUp', text: 'Out' },
+  ].sort((p, q) => p.time - q.time));
+  // drawings: time -> fractional bar position on THIS chart (between bars, before the first, past the last), price -> this series
+  const times = data.map(d => d.time), tsc = ch.timeScale();
+  const lgOf = (tt) => {   // time -> fractional bar index of THIS chart (between bars, before the first, past the last)
+    if (tt == null || !times.length) return null;
+    let lo = 0, hi = times.length - 1, k = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (times[m] <= tt) { k = m; lo = m + 1; } else hi = m - 1; }
+    const avg = typeof t.tf === 'number' ? tfSecOf(t.tf) : times.length > 1 ? Math.max(1, (times[times.length - 1] - times[0]) / (times.length - 1)) : 60;   // off the card's bars: time bars step by the timeframe (a gap inside the card must not stretch it); tick bars by their average spacing
+    return k < 0 ? (tt - times[0]) / avg : k >= times.length - 1 ? k + (tt - times[k]) / avg : k + (tt - times[k]) / (times[k + 1] - times[k]);
+  };
+  const X = (tt) => logicalToX(tsc, lgOf(tt));   // LWC returns 0 for a fractional logical: interpolate (the main chart's helper)
+  const Y = (pr) => pr == null ? null : sr.priceToCoordinate(pr);
+  const pLo = Math.min(...data.map(b => b.low)), pHi = Math.max(...data.map(b => b.high));
+  const recorded = Array.isArray(t.drw), src = recorded ? t.drw : drawingsInWindow(drawings, times[0] - 3600, times[times.length - 1] + 3600, pLo, pHi);
+  const ins = (DATASETS.find(x => x.instr && x.instr.symbol === t.sym) || {}).instr || INSTR;
+  const env = { logical: lgOf, px: data[data.length - 1].close, qty: t.qty, tv: ins.tickValue, tsz: ins.tickSize };   // measure / R:R read this trade (its contract's $), not the live chart
+  const list = src.filter(d => d && d.p1 && !d.hidden && (!Array.isArray(d.visibleTFs) || (tfMin != null && d.visibleTFs.some(v => Math.abs(v - tfMin) < 1e-6))));   // as on that timeframe
+  sr.attachPrimitive({ updateAllViews() {}, paneViews: () => [{ zOrder: () => 'top', renderer: () => ({ draw: (target) => target.useMediaCoordinateSpace((sc) => {
+    const ctx = sc.context, W = sc.mediaSize.width, H = sc.mediaSize.height, dbg = {};
+    for (const d of list) { try { applyStyle(ctx, d); paintDrawing(ctx, d, X, Y, W, H, false, dbg, env); } catch (e) {} }   // a malformed record never blanks the chart
+  }) }) }] });
+  tsc.fitContent();
+  host.addEventListener('dblclick', () => tsc.fitContent());
+  if (synth || (!recorded && list.length)) { const n = document.createElement('div'); n.className = 'dd-note'; n.textContent = synth ? 'no bar snapshot: entry and exit only' : 'drawings: the current ones (not recorded for this older trade)'; host.appendChild(n); }
 }
 function openDayDetail(key) {
   const el = $('dayDetail'); if (!el) return;
   const ts = trades.filter(t => tradingDayKey(t.entryTime) === key).sort((a, b) => a.entryTime - b.entryTime);
   const net = ts.reduce((s, t) => s + t.pnl, 0), w = ts.filter(t => t.pnl > 0).length, l = ts.filter(t => t.pnl < 0).length;
+  disposeTradeCharts(el);   // re-opened while open: free the cards it replaces
   el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">${dayLbl(key)}</span><span class="dd-meta"><b class="${net >= 0 ? 'pos' : 'neg'}">${usd(net)}</b><span>${ts.length} trade${ts.length === 1 ? '' : 's'}, ${w} won, ${l} lost</span></span></div>`
     + `<button class="dd-x" id="ddClose" aria-label="Close"><span aria-hidden="true" class="material-symbols-outlined">close</span></button></div><div class="dd-list">`
     + ts.map((t, i) => { const long = t.side === 'long';
       return `<div class="dd-trade"><div class="dd-tinfo"><div class="dd-trow"><button class="dd-go" data-ti="${i}" title="Replay this trade: jump to just before the entry" aria-label="Replay trade ${i + 1}"><span aria-hidden="true" class="material-symbols-outlined">history</span>Replay</button><span>#${i + 1}</span><span class="${long ? 'long-tag' : 'short-tag'}">${long ? 'Long' : 'Short'} ${t.qty}</span><b class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</b><span>${t.ticks >= 0 ? '+' : ''}${t.ticks} ticks</span><span>${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + ' R'}</span>${t.planRR != null ? `<span>Plan ${fmtPlanRR(t)}</span>` : ''}</div>`
-        + `<div class="dd-sub"><span>${tHM(t.entryTime)} → ${tHM(t.exitTime)}</span><span>${f2(t.entry)} → ${f2(t.exit)}</span><span>${atmLbl(t.atm)}</span><span>${EXIT_LBL[t.exitType] || t.exitType}</span></div></div>`
-        + `<canvas class="dd-chart" data-ti="${i}" title="Scroll to zoom, drag to pan, double-click to reset"></canvas></div>`; }).join('')
+        + `<div class="dd-sub"><span>${sHM(t.entryTime)} → ${sHM(t.exitTime)}</span><span>${sF2(t.entry)} → ${sF2(t.exit)}</span><span>${atmLbl(t.atm)}</span><span>${EXIT_LBL[t.exitType] || t.exitType}</span></div></div>`
+        + `<div class="dd-chart" data-ti="${i}" title="Drag to pan, wheel to zoom, double-click to fit"></div></div>`; }).join('')
     + `</div></div>`;
   el.classList.add('open'); modalOpened(el);
-  requestAnimationFrame(() => el.querySelectorAll('.dd-chart').forEach(c => mountTradeChart(c, ts[+c.dataset.ti])));   // draw after layout so canvas clientWidth is real
+  const gen = el._gen = (el._gen || 0) + 1;   // re-opened before this frame: only the newest one mounts
+  requestAnimationFrame(() => { if (el._gen === gen) el.querySelectorAll('.dd-chart').forEach(c => mountTradeChart(c, ts[+c.dataset.ti])); });   // draw after layout so canvas clientWidth is real
   $('ddClose').onclick = closeDayDetail;
   el.querySelectorAll('.dd-go').forEach(b => { b.onclick = async () => { const t = ts[+b.dataset.ti]; closeDayDetail(); await rewindToTrade(t); }; });
 }
-function closeDayDetail() { const el = $('dayDetail'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } modalClosed(); }
+function closeDayDetail() { const el = $('dayDetail'); if (el) { disposeTradeCharts(el); el.classList.remove('open'); el.innerHTML = ''; } modalClosed(); }
 // ---------- Tradervue-style session overview ----------
 function sessionStats() {   // per trading-day breakdown, most-recent first
   const byDay = {};
@@ -4408,7 +4971,8 @@ function delAtm() { const name = $('atmName').value.trim(); if (atm[name] && Obj
 // ---------- misc ----------
 // WIG: modal focus management — remember what had focus, land focus inside the dialog, restore it on close
 let _modalRet = null;
-function modalOpened(el) { _modalRet = document.activeElement; const f = el.querySelector('button, [href], input, select, textarea'); (f || el).focus(); }
+function modalOpened(el) {   // (re-opened while open: focus had dropped to BODY with the old content, so the real opener is kept)
+  const a = document.activeElement; if (!(a === document.body && _modalRet && _modalRet.isConnected)) _modalRet = a; const f = el.querySelector('button, [href], input, select, textarea'); (f || el).focus(); }
 function modalClosed() { if (_modalRet && _modalRet.focus) _modalRet.focus(); _modalRet = null; }
 document.addEventListener('keydown', e => {   // Tab trap: every modal here shares the .day-detail class, so this covers all six
   if (e.key !== 'Tab') return; const m = document.querySelector('.day-detail.open'); if (!m) return;
@@ -4450,7 +5014,7 @@ function tradeLevels(t) {   // planned stop + take-profit price/distance — sto
   }
   return {
     stopPrice: stopPrice != null ? f2(stopPrice) : '', stopTicks: stopTicks != null ? stopTicks : '',
-    tpPrice: tps && tps.length ? tps.map(p => f2(p.price)).join('|') : '', tpTicks: tps && tps.length ? tps.map(p => p.ticks).join('|') : ''
+    tpPrice: tps && tps.length ? tps.map(p => (p && typeof p.price === 'number' && isFinite(p.price) ? f2(p.price) : '')).join('|') : '', tpTicks: tps && tps.length ? tps.map(p => p.ticks).join('|') : ''
   };
 }
 function dlCsv(name, text) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = name; a.click(); }
@@ -4506,7 +5070,7 @@ function deleteTrade(i) {   // remove a single trade record AND its entry/exit a
 // ---------- saved sessions: trades + drawings (text too) + placed / trade arrows + where the replay stood (symbol, moment, timeframe) ----------
 // v2 entries carry the whole workspace; the older trades-only logs (no .v) still load their trades. Stored in rt_trade_logs (one list).
 const clone = (x) => JSON.parse(JSON.stringify(x == null ? null : x));
-function saveLogs() { try { saveJSON('rt_trade_logs', tradeLogs); return true; } catch (e) { toast('Browser storage is full: export and delete old sessions'); return false; } }
+function saveLogs() { return saveJSON('rt_trade_logs', tradeLogs); }
 function sessionLbl(l) { return l.v >= 2 && num(l.t) && l.t > 0 ? `${l.sym || ''} ${dayLbl(tradingDayKey(l.t))} ${tHM(l.t)}` : ''; }
 function saveTradeLog() {
   endTextEdit();
@@ -4535,8 +5099,8 @@ async function loadTradeLog(id) {
     drawings = migrateDrawings(clone(log.drawings || [])); annotations = clone(log.annotations || []); markers = clone(log.markers || []);
     clearSelection(); hoverDrawing = null; undoStack.length = 0; redoStack.length = 0;   // a loaded session starts a fresh history
   }
-  trades = clone(log.trades);
-  let stored = true; try { saveJSON('rt_trades', trades); if (full) { saveJSON('rt_drawings', drawings); saveJSON('rt_annotations', annotations); } } catch (e) { stored = false; }
+  trades = tradesSane(clone(log.trades));
+  let stored = saveJSON('rt_trades', trades); if (full) { stored = saveJSON('rt_drawings', drawings) && stored; stored = saveJSON('rt_annotations', annotations) && stored; }
   if (full) { repaintOverlays(); refreshMarkers(true); }
   pnlCalY = 0; renderAll(); switchTab(true);
   toast(stored ? `Loaded "${log.name}"` : `Loaded "${log.name}", but browser storage is full: it will not survive a reload (export and delete old sessions)`);
@@ -4550,18 +5114,31 @@ const num = (v) => typeof v === 'number' && isFinite(v);
 function cleanSession(o, fname) {   // an imported file is untrusted: rebuild it from well-formed parts only (a bad record must never break boot, the list or Load)
   if (!o || typeof o !== 'object' || !Array.isArray(o.trades)) return null;
   const objs = (v) => Array.isArray(v) ? v.filter(x => x && typeof x === 'object' && !Array.isArray(x)) : [];
-  const trades = objs(o.trades).filter(t => num(t.pnl) && num(t.entryTime) && num(t.exitTime) && num(t.entry) && num(t.exit));
+  const trades = objs(o.trades).filter(tradeOk).map(t => fixTrade({ ...t }));
   const out = { id: 'log' + Date.now() + Math.random().toString(36).slice(2, 6), name: String(o.name || fname).slice(0, 120), ts: num(o.ts) ? o.ts : Math.floor(Date.now() / 1000),
     n: trades.length, net: trades.reduce((a, t) => a + t.pnl, 0), trades };
   if (o.v >= 2) Object.assign(out, { v: 2, drawings: objs(o.drawings).filter(d => typeof d.type === 'string' && d.p1 && typeof d.p1 === 'object'), annotations: objs(o.annotations), markers: objs(o.markers),
     sym: typeof o.sym === 'string' ? o.sym.slice(0, 8) : '', t: num(o.t) && o.t > 0 ? o.t : null, tf: num(o.tf) || /^t\d+$/.test(o.tf) ? o.tf : null });
   return out;
 }
-function importSessions(files) {
-  [...files].forEach(f => { const r = new FileReader(); r.onload = () => {
-    let o; try { o = JSON.parse(r.result); } catch (e) { return toast(`${f.name}: not a session file`); }
-    const c = cleanSession(o, f.name); if (!c) return toast(`${f.name}: not a session file`);
-    tradeLogs.push(c); if (!saveLogs()) { tradeLogs.pop(); return; } renderLogList(); toast(`Imported "${c.name}"`);
+function importSessions(files) {   // every file read, then ONE summary (a toast per file would overwrite the one before)
+  const list = [...files], done = [], bad = []; let left = list.length, lost = 0, full = false;
+  const finish = () => {
+    if (--left) return;
+    if (done.length) renderLogList();
+    const parts = [];
+    if (done.length) parts.push(done.length === 1 ? `Imported "${done[0]}"` : `Imported ${done.length} sessions`);
+    if (lost) parts.push(`${lost} damaged item${lost > 1 ? 's' : ''} left out`);
+    if (bad.length) parts.push(`not a session file: ${bad.join(', ')}`);
+    if (!full && parts.length) toast(parts.join('; '));
+  };
+  list.forEach(f => { const r = new FileReader(); r.onerror = () => { bad.push(f.name); finish(); }; r.onload = () => {
+    let o; try { o = JSON.parse(r.result); } catch (e) { bad.push(f.name); return finish(); }
+    const c = cleanSession(o, f.name); if (!c) { bad.push(f.name); return finish(); }
+    const cnt = (v) => (Array.isArray(v) ? v.length : 0);   // damaged records are left out: say how many
+    lost += cnt(o.trades) - c.trades.length + (c.v === 2 ? cnt(o.drawings) - c.drawings.length + cnt(o.annotations) - c.annotations.length + cnt(o.markers) - c.markers.length : 0);
+    tradeLogs.push(c); if (!saveLogs()) { tradeLogs.pop(); full = true; } else done.push(c.name);
+    finish();
   }; r.readAsText(f); });
 }
 function deleteTradeLog(id) {
@@ -4761,6 +5338,8 @@ function wire() {
   document.addEventListener('keydown', (e) => {
     const t = e.target, tag = t.tagName, ctl = /^(checkbox|radio|range|button|color)$/.test(t.type);
     if (t.isContentEditable || tag === 'TEXTAREA' || (tag === 'INPUT' && !ctl)) return;   // typing into a field
+    const quiet = t.closest && (t.closest('.clip-box') || (cp.open && t.closest('#patsPanel')));
+    if (quiet && (e.code === 'Space' || (!e.ctrlKey && !e.metaKey && !e.altKey && !/^(Escape|F\d+)$/.test(e.key)))) return;   // the review player / clip editor has its own keys: B / S / Space / Delete / arrows must not trade, step or change the day from there
     if ((tag === 'SELECT' || tag === 'INPUT') && !e.altKey && !e.ctrlKey && !e.metaKey && !/^F\d+$/.test(e.key)) return;   // a focused dropdown / checkbox / slider keeps its own plain keys; F-keys and Alt/Ctrl combos still reach the chart
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;   // letter shortcuts stay live with caps lock / shift
     if (e.code === 'Space') { e.preventDefault(); pause(); stepAny(); return; }
@@ -4810,6 +5389,7 @@ const HELP_KEYS = [
   ['Orders', [['B', 'Buy market'], ['S', 'Sell market'], ['F', 'Buy stop above the bar'], ['J', 'Sell stop below the bar'], ['X', 'Flatten']]],
   ['Drawings', [['Esc', 'Drop tool / deselect'], ['Del|Middle-click', 'Delete selected drawing'], ['Shift+Del', 'Clear all drawings'], ['Ctrl+Z|Ctrl+Y', 'Undo / redo'], ['Ctrl+C|Ctrl+V', 'Copy / paste selection'], ['Arrows', 'Nudge selection: bar / tick'], ['Ctrl+Alt+H', 'Hide / show all drawings'], ['Right-click (placing)', 'Cancel the drawing']]],
   ['Drawing tools', [['Alt+T|F2', 'Trend line'], ['Ctrl+2|Alt+2', 'Trend channel (3 clicks)'], ['Alt+H', 'Horizontal line'], ['Alt+J', 'Horizontal ray'], ['Alt+V', 'Vertical line'], ['Alt+C', 'Cross line'], ['Alt+F', 'Fib retracement'], ['Shift+Alt+R', 'Rectangle']]],
+  ['Clips (review player)', [['Alt+C', 'Open the clip editor'], ['I|O', 'In / out at the playhead (Shift: jump, Alt: clear)'], ['A|P|E', 'Add 60 s clip / preview / cut'], ['Drag a card', 'Put a cut clip on the chart']]],
   ['Text', [['Double-click', 'Edit a text in place'], ['Enter', 'New line'], ['Esc|Ctrl+Enter', 'Finish typing (or click outside)']]],
   ['Editing', [['Drag an arrow', 'Move it to another bar (click deletes it)'], ['Ctrl+Click', 'Multi-select'], ['Ctrl+Drag', 'Clone a drawing'], ['Shift+Drag', 'Move along one axis only'], ['Shift+Click', '2nd point: 45° line / square box'], ['Ctrl+Click (tool)', 'Invert magnet while placing']]],
 ];
