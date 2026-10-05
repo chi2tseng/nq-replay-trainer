@@ -57,7 +57,7 @@ const dragChart = async (x1, y1, x2, y2, mods = []) => { const r = await chartRe
 const hoverChart = async (x, y) => { const r = await chartRect(); await page.mouse.move(r.left + x, r.top + y); await page.waitForTimeout(150); };
 const paint = () => page.evaluate(() => new Promise(res => { repaintOverlays(); requestAnimationFrame(() => requestAnimationFrame(() => res(window.__drwDbg))); }));
 const seed = (list) => page.evaluate((list) => { drawings.length = 0; for (const d of list) drawings.push(newDrawing(d)); clearSelection(); saveJSON('rt_drawings', drawings); repaintOverlays(); }, list);
-const clear = async () => page.evaluate(() => { drawings.length = 0; clearSelection(); hoverDrawing = null; pendingPt = null; previewXY = null; saveJSON('rt_drawings', drawings); if (tool) setTool(''); drawingsLocked = false; lockBtnUI(); undoStack.length = 0; redoStack.length = 0; if ($('drawSettings').classList.contains('open')) closeDrawSettings(); repaintOverlays(); });
+const clear = async () => page.evaluate(() => { drawings.length = 0; clearSelection(); hoverDrawing = null; pendingPt = null; previewXY = null; saveJSON('rt_drawings', drawings); if (tool) setTool(''); drawingsLocked = false; lockBtnUI(); undoStack.length = 0; redoStack.length = 0; if ($('drawSettings').classList.contains('open')) closeDrawSettings(); if (typeof dropTextEditor === 'function') dropTextEditor(); repaintOverlays(); });
 const geomOf = (i) => page.evaluate((i) => { const d = drawings[i]; if (!d) return null; return { type: d.type, t1: d.p1.t, p1: d.p1.p, t2: d.p2 && d.p2.t, p2: d.p2 && d.p2.p, x1: drawX(d.p1.t), y1: drawY(d.p1.p), x2: d.p2 ? drawX(d.p2.t) : null, y2: d.p2 ? drawY(d.p2.p) : null, stop: d.stop, target: d.target, color: d.style && d.style.color }; }, i);
 const drawTL = async (x1, y1, x2, y2, mods2 = [], tool = 'drwTL') => { await clickTool('#' + tool); await clickChart(x1, y1); await clickChart(x2, y2, mods2); };
 const n = () => page.evaluate(() => drawings.length);
@@ -1036,6 +1036,98 @@ try {
     await page.evaluate(() => Object.assign(LINE_DEFAULT, { color: '#000000', width: 1.5, dash: 0, opacity: 1 }));
   }
 
+  // ================= TXT1..TXT7 Text tool (TV "Text"): click to place, type in place, canvas paints the glyphs, edit / move / style like any drawing =================
+  // Project decisions (TV documents none of these): Enter = new line; Esc / Ctrl+Enter / click outside finish; empty text is dropped with no history entry.
+  const txtSeed = (x, y, text, style = {}) => page.evaluate(([x, y, text, style]) => { drawings.length = 0; drawings.push(newDrawing({ type: 'text', p1: { t: xToFreeTime(x), p: candle.coordinateToPrice(y) }, text, style: { ...TEXT_DEFAULT, ...style } })); clearSelection(); saveJSON('rt_drawings', drawings); repaintOverlays(); }, [x, y, text, style]);
+  const txtBox = () => page.evaluate(() => window.__rt.textRect(0));
+  const txtShot = async (r) => { const c = await chartRect(); return (await page.screenshot({ clip: { x: c.left + r.x - 3, y: c.top + r.y - 3, width: r.w + 6, height: r.h + 6 } })).toString('base64'); };
+  const magentaIn = (r) => page.evaluate((r) => { let n = 0; for (let x = r.x + 1; x < r.x + r.w - 1; x += 1) for (let y = r.y + 1; y < r.y + r.h - 1; y += 2) if (window.__colorNear('chart', x, y, 'r > 180 && g < 110 && b > 180', 0)) n++; return n; }, r);
+  await clear();
+  {   // TXT1: place by mouse, typing never reaches the app hotkeys, Esc saves one undo step and hands the keyboard back
+    const s0 = await st(), u0 = await page.evaluate(() => undoStack.length);
+    await clickTool('#drwText'); await clickChart(geo.W * 0.4, geo.H * 0.35);
+    const ed = await page.evaluate(() => window.__rt.textEditing());
+    await page.keyboard.type('Hi bs'); await page.keyboard.press('Delete'); await page.keyboard.press('ArrowLeft'); await page.keyboard.press('Space'); await page.keyboard.press('Enter'); await page.keyboard.insertText('世界');
+    const mid = await st();
+    await key('Escape');
+    const out = await page.evaluate(() => ({ list: window.__rt.drawingsList().map(d => d.text), saved: JSON.parse(localStorage.getItem('rt_drawings')).map(d => d.text), undo: undoStack.length, ed: window.__rt.textEditing(), focus: document.activeElement.tagName, tool }));
+    const ok = ed && ed.focused && ed.isNew && !mid.entry && !mid.pos && mid.idx === s0.idx && out.list.length === 1 && out.list[0] === 'Hi b \n世界s' && out.saved[0] === out.list[0] && out.undo === u0 + 1 && !out.ed && out.focus !== 'TEXTAREA' && out.tool === '';
+    report('TXT1', ok, `editor focused(${ed && ed.focused}) after one click; typed 'Hi bs'+Del+Left+Space+Enter+'世界' -> text ${JSON.stringify(out.list[0])}; order(${!!mid.entry}) pos(${mid.pos}) idx ${s0.idx}->${mid.idx}; Esc: saved(${out.saved[0] === out.list[0]}) undo +${out.undo - u0} focus(${out.focus}) tool('${out.tool}')`);
+  }
+  await clear();
+  {   // TXT2: the canvas paints the glyphs (also while typing, so nothing moves when editing starts / ends); Hide all hides them
+    await txtSeed(geo.W * 0.4, geo.H * 0.3, 'Hgy 世界', { color: '#FF00FF', fontSize: 20 }); await paint();
+    const r = await txtBox(), inkA = await magentaIn(r), shotA = await txtShot(r);
+    await page.evaluate(() => { const st = document.createElement('style'); st.id = 'txtNoCaret'; st.textContent = '#txtEditor{caret-color:transparent!important}'; document.head.appendChild(st); beginTextEdit(drawings[0], false); clearSelection(); }); await paint();   // the blinking caret is the only DOM ink
+    const shotB = await txtShot(r), edRect = await page.evaluate(() => window.__rt.textEditing().rect);
+    await page.evaluate(() => { endTextEdit(); $('txtNoCaret').remove(); });
+    await page.evaluate(() => { hideFlags.drawings = true; repaintOverlays(); }); await paint(); const inkH = await magentaIn(r);
+    await page.evaluate(() => { hideFlags.drawings = false; repaintOverlays(); }); await paint();
+    const c = await chartRect(), same = shotA === shotB, at = Math.abs(edRect.left - (c.left + r.x)) < 1 && Math.abs(edRect.top - (c.top + r.y)) < 1;
+    report('TXT2', inkA > 20 && same && at && inkH === 0, `magenta glyph px in box(${inkA}); box pixels identical finished vs editing(${same}); editor over the box(${at}); hidden -> ${inkH} px`);
+  }
+  await clear();
+  {   // TXT3: the whole box is the hit area and drags with the grab offset; Delete removes it
+    await txtSeed(geo.W * 0.4, geo.H * 0.4, 'Drag me'); await paint();
+    const r = await txtBox(), cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+    const hitIn = await page.evaluate(([x, y]) => window.__rt.drawingAtXY(x, y), [cx, cy]), hitOut = await page.evaluate(([x, y]) => window.__rt.drawingAtXY(x, y), [r.x + r.w + 12, cy]);
+    await dragChart(cx, cy, cx + 60, cy + 40); await paint();
+    const r2 = await txtBox();
+    await clickChart(r2.x + r2.w / 2, r2.y + r2.h / 2); const sel = await page.evaluate(() => window.__rt.selType()); await key('Delete');
+    const left = await n();
+    const ok = hitIn === 'text' && hitOut === null && Math.abs(r2.x - r.x - 60) <= 1 && Math.abs(r2.y - r.y - 40) <= 1 && sel === 'text' && left === 0;
+    report('TXT3', ok, `hit centre(${hitIn}) 12px right of box(${hitOut}); drag +60/+40 -> box moved ${r2.x - r.x}/${r2.y - r.y}; click selects(${sel}); Delete -> ${left} left`);
+  }
+  await clear();
+  {   // TXT4: an empty text leaves nothing behind (no drawing, no undo entry, redo kept)
+    await txtSeed(geo.W * 0.3, geo.H * 0.3, 'keep'); await page.evaluate(() => { snapshot(); drawings[0].text = 'keep2'; undo(); });   // leaves one redo entry
+    const h0 = await page.evaluate(() => ({ n: drawings.length, u: undoStack.length, r: redoStack.length }));
+    await clickTool('#drwText'); await clickChart(geo.W * 0.5, geo.H * 0.5); await page.keyboard.type('   '); await key('Escape');
+    await clickTool('#drwText'); await clickChart(geo.W * 0.5, geo.H * 0.6); await clickChart(geo.W * 0.7, geo.H * 0.8);
+    const h1 = await page.evaluate(() => ({ n: drawings.length, u: undoStack.length, r: redoStack.length, ed: !!window.__rt.textEditing() }));
+    report('TXT4', h1.n === h0.n && h1.u === h0.u && h1.r === h0.r && !h1.ed, `blank + Esc, then empty + click outside: drawings ${h0.n}->${h1.n}, undo ${h0.u}->${h1.u}, redo ${h0.r}->${h1.r}, editor open(${h1.ed})`);
+  }
+  await clear();
+  {   // TXT5: double-click edits in place (caret at the end); no change = no history; a change = one undo step
+    await txtSeed(geo.W * 0.4, geo.H * 0.4, 'Note'); await page.evaluate(() => { snapshot(); drawings[0].style.bold = true; undo(); }); await paint();   // one redo entry pending
+    const r = await txtBox(), c = await chartRect();
+    await page.mouse.dblclick(c.left + r.x + r.w / 2, c.top + r.y + r.h / 2); await page.waitForTimeout(300);
+    const ed = await page.evaluate(() => { const el = $('txtEditor'); return { ...window.__rt.textEditing(), caret: el.selectionStart, len: el.value.length }; });
+    await key('Escape'); const u1 = await page.evaluate(() => undoStack.length), r1 = await page.evaluate(() => redoStack.length);
+    await page.waitForTimeout(400);
+    await page.mouse.dblclick(c.left + r.x + r.w / 2, c.top + r.y + r.h / 2); await page.waitForTimeout(300); await page.keyboard.type('!'); await key('Escape');
+    const t2 = await page.evaluate(() => drawings[0].text), u2 = await page.evaluate(() => undoStack.length);
+    await key('Control+z'); const t3 = await page.evaluate(() => drawings[0] && drawings[0].text);
+    const ok = ed.isNew === false && ed.focused && ed.caret === ed.len && u1 === 0 && r1 === 1 && t2 === 'Note!' && u2 === 1 && t3 === 'Note';
+    report('TXT5', ok, `dblclick -> editor(${ed.focused}) caret ${ed.caret}/${ed.len}; Esc unchanged -> undo ${u1} redo kept(${r1}); typed '!' -> ${JSON.stringify(t2)} undo ${u2}; Ctrl+Z -> ${JSON.stringify(t3)}`);
+  }
+  await clear();
+  {   // TXT6: the floating toolbar hides while typing (focus never leaves the box) and styles the text afterwards: colour + font size, no width / dash
+    await clickTool('#drwText'); await clickChart(geo.W * 0.45, geo.H * 0.45);
+    const typing = await page.evaluate(() => !$('drawToolbar').hidden);
+    await page.keyboard.type('Big'); await key('Escape'); await paint();
+    const tb = await page.evaluate(() => ({ shown: !$('drawToolbar').hidden, font: !$('dtFont').hidden, width: !$('dtWidth').hidden, dash: !$('dtDash').hidden }));
+    await page.selectOption('#dtFont', '24'); await page.waitForTimeout(200);
+    const d = await page.evaluate(() => ({ text: drawings[0] && drawings[0].text, fs: drawings[0] && drawings[0].style.fontSize, u: undoStack.length, box: window.__rt.textRect(0) }));
+    const ok = !typing && tb.shown && tb.font && !tb.width && !tb.dash && d.text === 'Big' && d.fs === 24 && d.u === 2 && d.box.h > 30;
+    report('TXT6', ok, `toolbar while typing(${typing}); after Esc shown(${tb.shown}) font(${tb.font}) width(${tb.width}) dash(${tb.dash}); size 24 -> ${JSON.stringify(d.text)} ${d.fs}px box h ${d.box.h}, undo ${d.u} (place + size)`);
+  }
+  await clear();
+  {   // TXT7: the editor is clipped to the pane (never covers the left toolbar) and Save as default carries the style but never the text
+    await txtSeed(-30, geo.H * 0.5, 'Edge text that runs off the left'); await paint();
+    await page.evaluate(() => beginTextEdit(drawings[0], false)); await paint();
+    const clip = await page.evaluate(() => { const el = $('txtEditor'), er = el.getBoundingClientRect(), lb = document.getElementById('leftbar').getBoundingClientRect(), hit = document.elementFromPoint(lb.left + lb.width / 2, er.top + er.height / 2); return { cp: el.style.clipPath, hitEd: hit === el, l: Math.round(er.left) }; });
+    await page.evaluate(() => endTextEdit());
+    await page.evaluate(() => { drawings[0].style.bold = true; drawings[0].style.fontSize = 20; selectDrawing(drawings[0], false); repaintOverlays(); openDrawSettings(drawings[0], 'style'); });   // the dialog closes itself when nothing is selected
+    await page.click('#dsSaveDef'); await page.evaluate(() => closeDrawSettings());
+    await clickTool('#drwText'); await clickChart(geo.W * 0.5, geo.H * 0.3);
+    const nw = await page.evaluate(() => { const d = drawings[drawings.length - 1]; return { text: d.text, bold: d.style.bold, fs: d.style.fontSize, stored: JSON.parse(localStorage.getItem('rt_drw_defaults')).text }; });
+    await key('Escape'); await page.evaluate(() => { delete drwDefaults.text; saveJSON('rt_drw_defaults', drwDefaults); });
+    const leftInset = +((/inset\(\S+ \S+ \S+ (\d+)px\)/.exec(clip.cp) || [])[1] || 0);
+    const ok = leftInset >= 28 && leftInset <= 32 && !clip.hitEd && nw.text === '' && nw.bold === true && nw.fs === 20 && !('text' in nw.stored) && nw.stored.style && !('text' in nw.stored.style);
+    report('TXT7', ok, `box 30px left of the pane: clip ${clip.cp}, left toolbar under it reachable(${!clip.hitEd}); saved default -> new text bold(${nw.bold}) ${nw.fs}px, starts empty(${nw.text === ''}), default holds no text(${!('text' in nw.stored)})`);
+  }
+
   // ================= REG5 a target is a resting limit: it fills at its own price even when the quoted bid lags in a sweep =================
   {
     const r5 = await page.evaluate(() => {
@@ -1118,7 +1210,7 @@ try {
   await browser.close();
 }
 
-const order = ['G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G15B', 'G16', 'G17', 'G18', 'G19', 'G20', 'G21', 'G22', 'G23', 'G24', 'G25', 'G26', 'G27', 'G28', 'G29', 'G30', 'G31', 'G32', 'G33', 'G34', 'G35', 'G36', 'G37', 'G38', 'G39', 'G40', 'G41', 'G42', 'G43', 'G44', 'G45', 'G46', 'G47', 'G48', 'NT1', 'NT2', 'NT3', 'NT4', 'NT5', 'NT6', 'NT7', 'NT8', 'NT9', 'NT10', 'NT11', 'NT12', 'NT13', 'NT14', 'NT15', 'NT16', 'NT17', 'NT18', 'NT19', 'NT20', 'REG1-no-render-err', 'REG2-trading-hotkeys', 'REG3-hide-trades-unchanged', 'REG4-no-drift-on-rewindow', 'REG5-target-fills-at-limit', 'CLK1', 'CLK2', 'DEF1', 'STY1'];
+const order = ['G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G15B', 'G16', 'G17', 'G18', 'G19', 'G20', 'G21', 'G22', 'G23', 'G24', 'G25', 'G26', 'G27', 'G28', 'G29', 'G30', 'G31', 'G32', 'G33', 'G34', 'G35', 'G36', 'G37', 'G38', 'G39', 'G40', 'G41', 'G42', 'G43', 'G44', 'G45', 'G46', 'G47', 'G48', 'NT1', 'NT2', 'NT3', 'NT4', 'NT5', 'NT6', 'NT7', 'NT8', 'NT9', 'NT10', 'NT11', 'NT12', 'NT13', 'NT14', 'NT15', 'NT16', 'NT17', 'NT18', 'NT19', 'NT20', 'REG1-no-render-err', 'REG2-trading-hotkeys', 'REG3-hide-trades-unchanged', 'REG4-no-drift-on-rewindow', 'REG5-target-fills-at-limit', 'CLK1', 'CLK2', 'DEF1', 'STY1', 'TXT1', 'TXT2', 'TXT3', 'TXT4', 'TXT5', 'TXT6', 'TXT7'];
 const byId = Object.fromEntries(results.map(r => [r.id, r.status]));
 const pass = order.filter(id => byId[id] === 'PASS').length, fail = order.filter(id => byId[id] === 'FAIL').length, sk = order.filter(id => byId[id] === 'SKIP').length, missing = order.filter(id => !(id in byId));
 console.log(`\n${pass} PASS / ${fail} FAIL / ${sk} SKIP out of ${order.length}${missing.length ? ` (missing: ${missing.join(',')})` : ''}`);

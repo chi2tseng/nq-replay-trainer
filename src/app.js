@@ -130,7 +130,7 @@ function fixTargetFills(list) {   // 2026-08-25..10-04 target exits crossed the 
   saveJSON('rt_tgtfix_done', true);
 })();
 let showTrades = loadJSON('rt_show_trades', true);   // show entry/exit trade arrows on the chart
-let tradeLogs = loadJSON('rt_trade_logs', []);   // named saved trade logs: [{id,name,ts,trades:[...]}]
+let tradeLogs = (loadJSON('rt_trade_logs', []) || []).filter(l => l && typeof l === 'object' && Array.isArray(l.trades)).map(l => ({ ...l, trades: l.trades.filter(t => t && typeof t === 'object') }));   // saved sessions / trade logs: [{id,name,ts,trades:[...], v2: drawings, markers, sym, t, tf}]
 // Trades taken before 2026-09-13 have no planned-R:R fields, but they DO carry the stop ticks and the
 // initial target list from entry — enough to reconstruct the plan (mean of the targets ÷ stop).
 function backfillPlanRR(list) {
@@ -466,10 +466,12 @@ function showCtx(clientX, clientY, drw) {   // drw: a drawing under the cursor -
   if (!ctxEl) { ctxEl = document.createElement('div'); ctxEl.id = 'ctxMenu'; ctxEl.setAttribute('role', 'menu'); document.body.appendChild(ctxEl); }
   const p = f2(rnd(price)), it = [];
   if (drw) {
-    it.push({ h: ({ tl: 'Trend line', ray: 'Ray', hl: 'Horizontal line', hray: 'Horizontal ray', vline: 'Vertical line', cross: 'Cross line', box: 'Rectangle', fib: 'Fib retracement', measure: 'Measure', rr: 'Risk/reward', channel: 'Trend channel' })[drw.type] || drw.type });
-    it.push({ l: 'Properties…', f: () => openDrawSettings(drw) });
-    it.push({ l: 'Remove', f: () => { selectDrawing(drw, false); deleteSelectedDrawing(); } });
-    it.push({ l: drw.locked ? 'Unlock' : 'Lock', f: () => { snapshot(); drw.locked = !drw.locked; saveJSON('rt_drawings', drawings); syncDrawToolbar(); repaintOverlays(); toast(drw.locked ? 'Drawing locked' : 'Drawing unlocked'); } });
+    it.push({ h: ({ tl: 'Trend line', ray: 'Ray', hl: 'Horizontal line', hray: 'Horizontal ray', vline: 'Vertical line', cross: 'Cross line', box: 'Rectangle', fib: 'Fib retracement', measure: 'Measure', rr: 'Risk/reward', channel: 'Trend channel', text: 'Text' })[drw.type] || drw.type });
+    const live = () => drawings.includes(drw) && !hideFlags.drawings;   // the menu can outlive an undo / a Hide
+    if (drw.type === 'text') it.push({ l: 'Edit text', f: () => { if (!live()) return; selectDrawing(drw, false); beginTextEdit(drw, false); } });
+    it.push({ l: 'Properties…', f: () => { if (live()) openDrawSettings(drw); } });
+    it.push({ l: 'Remove', f: () => { if (!live()) return; selectDrawing(drw, false); deleteSelectedDrawing(); } });
+    it.push({ l: drw.locked ? 'Unlock' : 'Lock', f: () => { if (!live()) return; snapshot(); drw.locked = !drw.locked; saveJSON('rt_drawings', drawings); syncDrawToolbar(); repaintOverlays(); toast(drw.locked ? 'Drawing locked' : 'Drawing unlocked'); } });
   } else if (position) {
     it.push({ h: `${position.side === 'long' ? 'Long' : 'Short'} ${position.qty} @ ${f2(position.entry)}` });
     it.push({ l: `Move stop here @ ${p}`, f: () => moveStopTo(price) });
@@ -530,7 +532,8 @@ window.addEventListener('keydown', (e) => {   // WIG: ArrowUp/Down moves focus b
 });
 
 // ---------- chart legend overlay (OHLCV readout, follows crosshair) ----------
-function legendTfLabel() { return tf < 1 ? Math.round(tf * 60) + 's' : tf + 'm'; }
+function legendTfLabel() { return tfTicks ? tfTicks + 't' : tf < 1 ? Math.round(tf * 60) + 's' : tf + 'm'; }   // tick bars first: tf keeps the last minute pick underneath
+function legendTfTitle() { return tfTicks ? `one bar every ${tfTicks.toLocaleString()} trades` : tf < 1 ? `${Math.round(tf * 60)}-second bars` : tf >= 60 ? `${tf / 60}-hour bars` : `${tf}-minute bars`; }
 function fmtVol(v) { if (v == null || !isFinite(v)) return '–'; const n = Math.abs(v); if (n >= 1e6) return (v / 1e6).toFixed(2) + 'M'; if (n >= 1e3) return (v / 1e3).toFixed(1) + 'K'; return String(Math.round(v)); }
 function legendBarFor(param) {
   let i = -1;
@@ -548,7 +551,7 @@ function renderLegend(param) {
   const b = got.bar, pc = got.prevClose, chg = b.close - pc, pct = pc ? (chg / pc) * 100 : 0;
   const chgCls = chg > 0 ? 'up' : (chg < 0 ? 'down' : ''), sign = chg > 0 ? '+' : '', volCls = b.close >= b.open ? 'up' : 'down';
   const cell = (l, v, ref) => `<span class="ll-lbl">${l}</span><span class="ll-val mono ${legendCmpClass(v, ref)}">${f2(v)}</span>`;
-  el.innerHTML = `<span class="ll-sym">${INSTR.symbol}</span><span class="ll-tf">${legendTfLabel()}</span>` +
+  el.innerHTML = `<span class="ll-sym">${INSTR.symbol}</span><span class="ll-tf" title="Timeframe: ${legendTfTitle()}">${legendTfLabel()}</span>` +
     cell('O', b.open, pc) + cell('H', b.high, pc) + cell('L', b.low, pc) + cell('C', b.close, pc) +
     `<span class="ll-chg mono ${chgCls}">${sign}${f2(chg)} (${sign}${pct.toFixed(2)}%)</span>` +
     `<span class="ll-lbl">Vol</span><span class="ll-val mono ${volCls}">${fmtVol(b.volume)}</span>`;
@@ -1347,7 +1350,9 @@ const drawingsPrimitive = {
             if (d.type === 'fib') { drawFib(ctx, d, X, Y, W); continue; }
             if (d.type === 'measure') { drawMeasure(ctx, d, X, Y, sel, H); continue; }
             if (d.type === 'rr') { drawRR(ctx, d, X, Y, W, sel); continue; }
+            if (d.type === 'text') { drawText(ctx, d); continue; }
             if (d.type === 'channel') { const g = chanGeom(d, X, Y, W, H); if (!g) continue; dbg.lastX = g.x1; ctx.beginPath(); for (const s of [g.a, g.b, ...g.lv]) { ctx.moveTo(s.ax, s.ay); ctx.lineTo(s.bx, s.by); } ctx.stroke(); continue; }   // no fill, no midline unless a Level is set (NT)
+            if (!d.p2) continue;   // an unknown one-point type must not throw here (the catch below would stop every drawing painting)
             const x1 = X(d.p1.t), y1 = Y(d.p1.p), x2 = X(d.p2.t), y2 = Y(d.p2.p);
             if (x1 == null || y1 == null || x2 == null || y2 == null) continue;
             dbg.lastX = x1;
@@ -1370,11 +1375,14 @@ const drawingsPrimitive = {
             if (d.type === 'box' && d.p2) out.push({ x: X(d.p2.t), y: Y(d.p1.p) }, { x: X(d.p1.t), y: Y(d.p2.p) });
             return out;
           };
-          if (hoverDrawing && !isSelected(hoverDrawing) && drawings.includes(hoverDrawing) && drawingVisible(hoverDrawing) && hoverDrawing.type !== 'measure' && hoverDrawing.type !== 'rr') {
+          const textBox = (d, color) => { const r = textRect(d); if (!r) return; ctx.save(); ctx.lineWidth = 1; ctx.strokeStyle = color; ctx.setLineDash([3, 2]); ctx.strokeRect(Math.round(r.x) - 1.5, Math.round(r.y) - 1.5, Math.round(r.w) + 3, Math.round(r.h) + 3); ctx.restore(); };   // text: an outline instead of anchor dots
+          if (hoverDrawing && hoverDrawing.type === 'text' && !isSelected(hoverDrawing) && drawings.includes(hoverDrawing) && drawingVisible(hoverDrawing)) textBox(hoverDrawing, 'rgba(100,149,237,0.6)');
+          else if (hoverDrawing && !isSelected(hoverDrawing) && drawings.includes(hoverDrawing) && drawingVisible(hoverDrawing) && hoverDrawing.type !== 'measure' && hoverDrawing.type !== 'rr') {
             for (const pt of hpts(hoverDrawing)) { if (pt.x == null || pt.y == null) continue; ctx.beginPath(); ctx.arc(pt.x, pt.y, 3.5, 0, 7); ctx.fillStyle = '#FFFFFF'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = (hoverDrawing.style && hoverDrawing.style.color) || hoverDrawing.color || '#000000'; ctx.stroke(); dbg.handles++; }
           }
           for (const d of drawings) {
             if (!isSelected(d) || !drawingVisible(d)) continue;
+            if (d.type === 'text') { const r = textRect(d); if (!r) { bb.bad = true; continue; } bbAdd(r.x, r.y); bbAdd(r.x + r.w, r.y + r.h); textBox(d, '#6495ED'); continue; }   // the floating toolbar sits above the whole box
             const pts = hpts(d); if (!pts.length) bb.bad = true;
             for (const pt of pts) {
               bbAdd(pt.x, pt.y); if (pt.x == null || pt.y == null) continue;
@@ -1409,6 +1417,7 @@ const drawingsPrimitive = {
             }
           }
           dbg.toolbar = placeDrawToolbar(bb, W, H);   // G13: floating toolbar follows the selection bbox on every paint (pan / zoom / replay), hidden when off-screen or a coordinate is null
+          if (txtEd) placeTextEditor(W, H);   // the typing box rides along with its anchor (clipped to this pane)
           window.__drwDbg = dbg;
         });
         window.__drw = { n: ((window.__drw || {}).n || 0) + 1, ok: true };
@@ -1459,6 +1468,96 @@ function applyDrwDefault(d) {   // a freshly placed drawing takes its tool's sav
   return d;
 }
 function toolStyle(t) { return (drwDefaults[t] && drwDefaults[t].style) || ((t === 'tl' || t === 'channel') ? LINE_DEFAULT : null); }   // what the rubber-band preview should look like
+// ---- Text tool (TV "Text"): one click places the box's top-left corner at {t,p}, then you type in place. Content = d.text; every format
+// option lives in d.style so Save as default / copy / undo carry it. Font px are fixed (do not scale with zoom, TV fixedSize).
+const TEXT_DEFAULT = { color: '#0288D1', opacity: 1, fontSize: 14, bold: false, italic: false, bg: false, bgColor: '#FFFFFF', bgOpacity: 0.85, border: false, borderColor: '#0288D1' };
+const TEXT_SIZES = [10, 11, 12, 14, 16, 20, 24, 28, 32, 40];
+const TEXT_FONT = '"Segoe UI",-apple-system,BlinkMacSystemFont,Roboto,"Noto Sans TC",sans-serif';   // = the app's UI font
+const TEXT_HINT = 'Text';   // placeholder while a new text is still empty (the box is sized to it so there is something to see and click)
+let _txtCtx = null;
+function textLayout(d, str) {   // one box model for the canvas, the hit-test and the inline editor (they must agree to the pixel)
+  const s = d.style || {}, fs = +s.fontSize || TEXT_DEFAULT.fontSize, font = `${s.italic ? 'italic ' : ''}${s.bold ? 700 : 400} ${fs}px ${TEXT_FONT}`;
+  const lines = String(str != null ? str : d.text || '').split('\n'), lh = Math.round(fs * 1.3), padX = Math.round(fs * 0.3) + 1, padY = Math.round(fs * 0.15) + 1;
+  if (!_txtCtx) _txtCtx = document.createElement('canvas').getContext('2d');
+  _txtCtx.font = font; let w = 0; for (const l of lines) w = Math.max(w, _txtCtx.measureText(l).width);
+  const m = _txtCtx.measureText('Mg'), asc = m.fontBoundingBoxAscent, desc = m.fontBoundingBoxDescent;
+  const base = Math.round(asc != null && desc != null ? (lh - asc - desc) / 2 + asc : lh * 0.78);   // baseline inside a line box, centred the way CSS does it (keeps the caret on the glyphs)
+  return { font, lines, lh, padX, padY, base, w: Math.ceil(w) + 2 * padX, h: lines.length * lh + 2 * padY };
+}
+function textRect(d) {   // whole-px box: the fill, the border, the glyphs and the editor then snap identically
+  const x = drawX(d.p1.t), y = drawY(d.p1.p); if (x == null || y == null) return null;
+  const L = textLayout(d, d.text || (txtEd && txtEd.id === d.id ? TEXT_HINT : ''));
+  return { x: Math.round(x), y: Math.round(y), w: L.w, h: L.h, L };
+}
+function drawText(ctx, d) {   // the canvas always paints the glyphs, also while typing (the textarea above is see-through): no jump on edit / finish at any DPR
+  const r = textRect(d); if (!r) return; const s = d.style || {}, L = r.L;
+  ctx.save(); ctx.setLineDash([]);
+  if (s.bg) { ctx.fillStyle = hexA(s.bgColor || TEXT_DEFAULT.bgColor, s.bgOpacity == null ? 1 : +s.bgOpacity); ctx.fillRect(r.x, r.y, r.w, r.h); }
+  if (s.border) { ctx.strokeStyle = s.borderColor || TEXT_DEFAULT.borderColor; ctx.lineWidth = 1; ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1); }
+  if (d.text) { ctx.font = L.font; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'; ctx.fillStyle = styleColor(d, TEXT_DEFAULT.color); d.text.split('\n').forEach((l, i) => ctx.fillText(l, r.x + L.padX, r.y + L.padY + i * L.lh + L.base)); }
+  ctx.restore();
+}
+function cleanText(s) { return String(s).replace(/\r\n?/g, '\n').replace(/\t/g, '    '); }   // a pasted tab is 8 columns in a textarea but 1 space on the canvas
+// inline editor: a see-through body-level <textarea> over the box that only supplies the caret, selection and IME (the global keydown bails
+// on TEXTAREA, so typing never fires hotkeys). Enter = new line (safe with Chinese IME); Esc, Ctrl+Enter, Tab, a click outside or focus
+// moving anywhere else finishes. The floating toolbar hides while typing (style it before or after). Empty text removes the drawing.
+// Clipped to the chart pane. Invariant: while txtEd is set, the textarea has the focus (or the whole window lost it).
+let txtEd = null;   // {id, isNew}
+function txtDrawing() { return txtEd ? drawings.find(x => x.id === txtEd.id) || null : null; }
+function txtOutside(e) { if (e.target !== $('txtEditor')) endTextEdit(); }   // explicit: chart pointerdown handlers preventDefault, so focus alone would not leave the box
+function txtEndLater() { const id = txtEd && txtEd.id; setTimeout(() => { if (txtEd && txtEd.id === id) endTextEdit(); }, 0); }   // from inside a paint; never ends a newer edit
+function beginTextEdit(d, isNew) {
+  if (!d || !drawings.includes(d) || d.type !== 'text' || hideFlags.drawings) return;   // e.g. a context menu that outlived an undo
+  endTextEdit();
+  let el = $('txtEditor');
+  if (!el) {
+    el = document.createElement('textarea'); el.id = 'txtEditor'; el.className = 'txt-ed'; el.hidden = true; el.rows = 1; el.wrap = 'off'; el.spellcheck = false; el.placeholder = TEXT_HINT; el.setAttribute('aria-label', 'Drawing text');
+    el.addEventListener('input', () => {
+      const t = txtDrawing(); if (!t) return;
+      if (/[\t\r]/.test(el.value)) { const pre = cleanText(el.value.slice(0, el.selectionEnd)).length; el.value = cleanText(el.value); el.selectionStart = el.selectionEnd = pre; }
+      t.text = el.value; placeTextEditor(); repaintOverlays();
+    });
+    el.addEventListener('keydown', (e) => { e.stopPropagation(); if (!e.isComposing && (e.key === 'Escape' || e.key === 'Tab' || (e.key === 'Enter' && (e.ctrlKey || e.metaKey)))) { e.preventDefault(); endTextEdit(); } });
+    el.addEventListener('blur', () => setTimeout(() => { if (txtEd && document.activeElement !== el && document.hasFocus()) endTextEdit(); }, 0));   // alt-tab keeps the edit (focus comes back to the box)
+    document.addEventListener('focusin', (e) => { if (txtEd && e.target !== el) endTextEdit(); });
+    window.addEventListener('focus', () => setTimeout(() => { if (txtEd && document.activeElement !== el) endTextEdit(); }, 0));   // back in the window but not in the box
+    el.addEventListener('pointerdown', (e) => e.stopPropagation());
+    el.addEventListener('click', (e) => e.stopPropagation());
+    el.addEventListener('wheel', (e) => e.preventDefault(), { passive: false });
+    document.body.appendChild(el);
+    window.addEventListener('pagehide', () => endTextEdit());   // reload / close keeps what was typed
+  }
+  if (!isNew) snapshot();   // an edit is one undo step, dropped if nothing changed; a new text's snapshot was taken at placement
+  txtEd = { id: d.id, isNew: !!isNew }; el.value = cleanText(d.text || ''); el.hidden = false; placeTextEditor();
+  el.focus(); el.setSelectionRange(el.value.length, el.value.length);   // caret at the end: a stray key never wipes the whole text
+  requestAnimationFrame(() => { if (txtEd && txtEd.id === d.id && document.activeElement !== el) el.focus(); });   // the chart can grab focus on the same mouseup
+  document.addEventListener('pointerdown', txtOutside, true);
+  repaintOverlays();
+}
+function placeTextEditor(W, H) {   // also called on every paint with the pane size: replay steps, pan and zoom move the anchor
+  const el = $('txtEditor'), d = txtDrawing(); if (!el || !txtEd) return;
+  if (!d) { txtEndLater(); return; }   // its drawing is gone (deleted / undone)
+  let pw = W, ph = H; if (pw == null) { try { pw = chart.timeScale().width(); } catch (e) { pw = $('chart').clientWidth; } ph = paneHeight(); }   // live: the pane can grow / shrink between paints
+  const r = textRect(d);
+  if (!r || r.x >= pw || r.y >= ph || r.x + r.w <= 0 || r.y + r.h <= 0) { el.style.clipPath = 'inset(50%)'; return; }   // out of the pane: keep typing into it (focus stays, so no hotkey fires); it shows again when it scrolls back
+  const cr = $('chart').getBoundingClientRect(), w = r.w + 4;   // +4: room for the caret after the last glyph (the textarea is invisible, so the extra px never shows)
+  const clip = `inset(${Math.max(0, -r.y)}px ${Math.max(0, r.x + w - pw)}px ${Math.max(0, r.y + r.h - ph)}px ${Math.max(0, -r.x)}px)`;   // never over the axes, toolbars or side panel
+  Object.assign(el.style, { left: (cr.left + r.x) + 'px', top: (cr.top + r.y) + 'px', width: w + 'px', height: r.h + 'px', font: r.L.font, lineHeight: r.L.lh + 'px', padding: `${r.L.padY}px ${r.L.padX}px`, caretColor: styleColor(d, TEXT_DEFAULT.color), clipPath: clip });
+  el.style.setProperty('--txt-c', (d.style && d.style.color) || TEXT_DEFAULT.color);
+  el.scrollTop = 0; el.scrollLeft = 0;
+}
+function endTextEdit() {   // commit: trim trailing blanks, drop an empty text, one undo step (none if nothing changed)
+  if (!txtEd) return; const ed = txtEd, el = $('txtEditor'); txtEd = null;
+  document.removeEventListener('pointerdown', txtOutside, true);
+  const d = drawings.find(x => x.id === ed.id);
+  if (d) {
+    d.text = cleanText(el ? el.value : d.text || '').replace(/\s+$/, '');
+    if (!d.text.trim()) { drawings.splice(drawings.indexOf(d), 1); selSet.delete(d); if (selDrawing === d) selDrawing = null; if (hoverDrawing === d) hoverDrawing = null; }
+  }
+  if (el) { if (document.activeElement === el) el.blur(); el.hidden = true; }
+  dropNoopSnapshot(); saveJSON('rt_drawings', drawings); repaintOverlays();   // nothing changed: the history is exactly as before
+}
+function dropTextEditor() { if (!txtEd) return; txtEd = null; document.removeEventListener('pointerdown', txtOutside, true); const el = $('txtEditor'); if (el) { if (document.activeElement === el) el.blur(); el.hidden = true; } }   // the drawings are being replaced wholesale (undo / wipe): just close
 function hexA(hex, a) { const m = /^#([0-9a-f]{6})$/i.exec(hex || ''); if (!m || a == null || a >= 1) return hex; const n = parseInt(m[1], 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; }   // style.color stays plain hex (the colour pickers need it); opacity is applied here
 function styleColor(d, fallback) { return hexA((d.style && d.style.color) || d.color || fallback || '#000000', d.style && d.style.opacity); }
 function applyStyle(ctx, d) { const s = d.style || {}; ctx.strokeStyle = ctx.fillStyle = styleColor(d); ctx.lineWidth = s.width || 1.5; ctx.setLineDash(dashArr(s.dash)); }
@@ -1578,6 +1677,11 @@ function handleDrawClick(t, time, price, y, ev) {   // time = free epoch seconds
     snapshot(); drawings.push(applyDrwDefault(newDrawing({ type: 'channel', p1: pendingPt, p2: pendingPt2, p3: { t: time, p: price }, levels: [], color: LINE_DEFAULT.color, style: { ...LINE_DEFAULT } })));
     pendingPt = null; pendingPt2 = null; previewXY = null; selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return;
   }
+  if (t === 'text') {   // one click: box top-left here, then type in place (saved when typing ends; an empty text is dropped with its undo step)
+    if (hideFlags.drawings) { toast('Drawings are hidden: show them to add text'); resetToolAfterDraw(); return; }   // the canvas paints the glyphs, so typing would be blind
+    snapshot(); const d = applyDrwDefault(newDrawing({ type: 'text', p1: { t: time, p: price }, text: '', color: TEXT_DEFAULT.color, style: { ...TEXT_DEFAULT } }));
+    drawings.push(d); selectDrawing(d, false); resetToolAfterDraw(); beginTextEdit(d, true); return;
+  }
   if (pendingPt || t === 'hl' || t === 'vline' || t === 'hray' || t === 'cross' || t === 'rr') snapshot();   // G21: every branch below that pushes a drawing (the first click of a 2-point tool only arms pendingPt)
   if (t === 'hl') { drawings.push(applyDrwDefault(newDrawing({ type: 'hl', p1: { t: time, p: price }, color: '#000000' }))); selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return; }
   if (t === 'vline') { drawings.push(applyDrwDefault(newDrawing({ type: 'vline', p1: { t: time }, color: '#000000' }))); selectDrawing(drawings[drawings.length - 1], false); saveJSON('rt_drawings', drawings); repaintOverlays(); resetToolAfterDraw(); return; }   // G37: time only
@@ -1601,7 +1705,7 @@ function clearDrawings() {   // wipe everything drawn with the toolbar: lines / 
   wipeDrawings(); toast(`Cleared ${n} drawing${n === 1 ? '' : 's'}`);
 }
 function wipeDrawings() {   // no confirm: shared by Remove Drawings / Remove Drawings & Indicators (G46); undo-able (G21)
-  snapshot(); drawings = []; pendingPt = null; pendingPt2 = null; clearSelection(); hoverDrawing = null; annotations = [];
+  endTextEdit(); if (drawings.length || annotations.length) snapshot(); drawings = []; pendingPt = null; pendingPt2 = null; clearSelection(); hoverDrawing = null; annotations = [];
   saveJSON('rt_drawings', drawings); saveJSON('rt_annotations', annotations);
   if ($('drawSettings').classList.contains('open')) closeDrawSettings(); repaintOverlays(); refreshMarkers(true);
 }
@@ -1797,14 +1901,17 @@ let alwaysRemoveLocked = loadJSON('rt_alwaysrmlocked', false);   // G44: skip th
 let hideFlags = Object.assign({ drawings: false, indicators: false, positions: false }, loadJSON('rt_hide', null) || {});   // G45 Hide menu: temporary masks, never touch the indicator settings themselves
 // ---- undo / redo (G21 / G22): snapshots of {drawings, annotations} taken BEFORE every mutation (incl. pointerdown of a drag) ----
 const undoStack = [], redoStack = [], UNDO_MAX = 100;
-function snapshot() { const key = JSON.stringify(drawings); undoStack.push({ key, drawings: JSON.parse(key), annotations: JSON.parse(JSON.stringify(annotations)) }); if (undoStack.length > UNDO_MAX) undoStack.shift(); redoStack.length = 0; }
-function dropNoopSnapshot() { const top = undoStack[undoStack.length - 1]; if (top && top.key === JSON.stringify(drawings)) undoStack.pop(); }   // a drag that never moved (plain click) leaves no history entry
-function restoreSnapshot(s) {
-  drawings = migrateDrawings(s.drawings); annotations = s.annotations; clearSelection(); hoverDrawing = null; dragBody = null; dragH = null; ctrlPress = null;
+function snapshot() { const prev = undoStack[undoStack.length - 1]; if (prev) { delete prev.redo; delete prev.evicted; } const key = JSON.stringify(drawings), e = { key, drawings: JSON.parse(key), annotations: JSON.parse(JSON.stringify(annotations)), redo: redoStack.slice() }; undoStack.push(e); if (undoStack.length > UNDO_MAX) e.evicted = undoStack.shift(); redoStack.length = 0; }
+function dropNoopSnapshot() {   // a drag that never moved (plain click), an unchanged edit or setting leaves the history exactly as it was (redo + the entry the cap evicted come back)
+  const top = undoStack[undoStack.length - 1]; if (!top || top.key !== JSON.stringify(drawings)) return;
+  undoStack.pop(); if (top.evicted) undoStack.unshift(top.evicted); if (top.redo) redoStack.push(...top.redo);
+}
+function restoreSnapshot(s) {   // hideCtx: a context menu opened before the undo would act on detached drawings
+  dropTextEditor(); hideCtx(); drawings = migrateDrawings(s.drawings); annotations = s.annotations; clearSelection(); hoverDrawing = null; dragBody = null; dragH = null; ctrlPress = null;
   saveJSON('rt_drawings', drawings); saveJSON('rt_annotations', annotations); if ($('drawSettings').classList.contains('open')) closeDrawSettings(); repaintOverlays(); refreshMarkers(true);
 }
-function undo() { if (!undoStack.length) return toast('Nothing to undo'); const cur = { key: JSON.stringify(drawings), drawings: JSON.parse(JSON.stringify(drawings)), annotations: JSON.parse(JSON.stringify(annotations)) }; redoStack.push(cur); restoreSnapshot(undoStack.pop()); toast('Undo'); }
-function redo() { if (!redoStack.length) return toast('Nothing to redo'); const cur = { key: JSON.stringify(drawings), drawings: JSON.parse(JSON.stringify(drawings)), annotations: JSON.parse(JSON.stringify(annotations)) }; undoStack.push(cur); restoreSnapshot(redoStack.pop()); toast('Redo'); }
+function undo() { endTextEdit(); if (!undoStack.length) return toast('Nothing to undo'); const cur = { key: JSON.stringify(drawings), drawings: JSON.parse(JSON.stringify(drawings)), annotations: JSON.parse(JSON.stringify(annotations)) }; redoStack.push(cur); restoreSnapshot(undoStack.pop()); toast('Undo'); }
+function redo() { endTextEdit(); if (!redoStack.length) return toast('Nothing to redo'); const cur = { key: JSON.stringify(drawings), drawings: JSON.parse(JSON.stringify(drawings)), annotations: JSON.parse(JSON.stringify(annotations)) }; undoStack.push(cur); restoreSnapshot(redoStack.pop()); toast('Redo'); }
 // ---- copy / paste (G24): a pasted copy keeps every TIME anchor and moves down in price only (NT8: "a slight offset"), so it stays
 // parallel on every timeframe, day and tick tape — a bar shift is a different time shift per anchor on tick bars and bends the copy
 // elsewhere. Repeated Ctrl+V steps further down. A vertical line has no price: it moves 5 bars instead (never past the last revealed bar).
@@ -1844,8 +1951,9 @@ let drawings = loadJSON('rt_drawings', []);         // {type:'hl'|'tl'|'ray'|'bo
 // rt_drawings v0 -> v1 (TV_DRAWING_GAP §1.3): add style/locked/hidden/z/visibleTFs/id; keep color + p1/p2/stop/target untouched so older builds still read the file
 let _drwSeq = 0;
 function newDrawing(d) { const n = _drwSeq++; d.style = d.style || { color: d.color != null ? d.color : '#000000', width: 1.5, dash: 0 }; if (d.locked == null) d.locked = false; if (d.hidden == null) d.hidden = false; if (d.z == null) d.z = n; if (d.visibleTFs === undefined) d.visibleTFs = null; if (!d.id) d.id = 'd' + Date.now().toString(36) + '_' + n; return d; }
-function migrateDrawings(arr) { for (const d of arr) { if (!d.style) newDrawing(d); else _drwSeq = Math.max(_drwSeq, (d.z | 0) + 1); } return arr; }
-if (Array.isArray(drawings)) { migrateDrawings(drawings); if (loadJSON('rt_drawings_v', 0) < 1) { saveJSON('rt_drawings', drawings); saveJSON('rt_drawings_v', 1); } } else drawings = [];
+function migrateDrawings(arr) { arr = arr.filter(d => d.type !== 'text' || (d.text && String(d.text).trim())); for (const d of arr) { if (d.type === 'text') d.text = cleanText(d.text);   // an empty text is never kept
+  if (!d.style) newDrawing(d); else _drwSeq = Math.max(_drwSeq, (d.z | 0) + 1); } return arr; }
+if (Array.isArray(drawings)) { drawings = migrateDrawings(drawings); if (loadJSON('rt_drawings_v', 0) < 1) { saveJSON('rt_drawings', drawings); saveJSON('rt_drawings_v', 1); } } else drawings = [];
 let pendingPt = null;                                // first click of a 2-point drawing
 let pendingPt2 = null;                               // 2nd click of the 3-point Trend Channel (NT8 Ctrl+2)
 const ANN = {
@@ -1854,9 +1962,10 @@ const ANN = {
   long:  { position: 'belowBar', color: '#127209', shape: 'arrowUp',   text: 'LONG' },
   short: { position: 'aboveBar', color: '#D40605', shape: 'arrowDown', text: 'SHORT' },
 };
-const TOOLBTN = { start: 'btnPickStart', au: 'annUp', ad: 'annDown', long: 'annLong', short: 'annShort', hl: 'drwHL', tl: 'drwTL', ray: 'drwRay', box: 'drwBox', fib: 'drwFib', measure: 'drwMeasure', rr: 'drwRR', hray: 'drwHRay', vline: 'drwVLine', cross: 'drwCross', channel: 'drwChannel' };
+const TOOLBTN = { start: 'btnPickStart', au: 'annUp', ad: 'annDown', long: 'annLong', short: 'annShort', hl: 'drwHL', tl: 'drwTL', ray: 'drwRay', box: 'drwBox', fib: 'drwFib', measure: 'drwMeasure', rr: 'drwRR', hray: 'drwHRay', vline: 'drwVLine', cross: 'drwCross', channel: 'drwChannel', text: 'drwText' };
 function placeAnnotation(t, baseTime) { const a = ANN[t]; if (!a) return; snapshot(); annotations.push({ baseTime, ...a }); saveJSON('rt_annotations', annotations); refreshMarkers(); }
-function clearAnnotations() { snapshot(); annotations = []; markers = []; saveJSON('rt_annotations', annotations); refreshMarkers(); toast('Markers cleared'); }   // clears placed arrows AND in-session trade entry/exit arrows
+function clearAnnotations() { if (!annotations.length && !markers.length) return toast('No markers to clear'); if (annotations.length) snapshot();   // trade arrows are not in the undo history: clearing only those is not an undo step
+  annotations = []; markers = []; saveJSON('rt_annotations', annotations); refreshMarkers(); toast('Markers cleared'); }   // clears placed arrows AND in-session trade entry/exit arrows
 // click directly on a placed arrow (annotation OR trade marker) to delete just that one — TradingView-style
 function markerXY(m) {
   const t = mBucket(m.baseTime), x = chart.timeScale().timeToCoordinate(t); if (x == null) return null;
@@ -1880,7 +1989,7 @@ function syncLinesGroup() {   // TV: the group button shows the last-used line t
   const g = $('drwLines'); if (!g) return; const [icon, title] = LINE_TOOLS[lastLineTool]; g.querySelector('span').textContent = icon; g.title = title; g.setAttribute('aria-label', title); g.classList.toggle('active', !!LINE_TOOLS[tool]);
 }
 function updateToolUI() { Object.values(TOOLBTN).forEach(id => { const b = $(id); if (b) b.classList.remove('active'); }); const b = $(TOOLBTN[tool]); if (b) b.classList.add('active'); const cur = $('toolCursor'); if (cur) cur.classList.toggle('active', !tool); $('chart').style.cursor = tool ? 'crosshair' : ''; if (LINE_TOOLS[tool]) { lastLineTool = tool; saveJSON('rt_lastline', tool); } syncLinesGroup(); }
-function setTool(t) { tool = (tool === t) ? '' : t; pendingPt = null; pendingPt2 = null; previewXY = null; repaintOverlays(); updateToolUI(); }
+function setTool(t) { endTextEdit(); tool = (tool === t) ? '' : t; pendingPt = null; pendingPt2 = null; previewXY = null; repaintOverlays(); updateToolUI(); }
 function ctrl2Hint() {   // Ctrl+2 never reaches a page in a normal Chromium tab (browser tab-switch accelerator); tell the user once
   if (loadJSON('rt_hint_ctrl2', false) || matchMedia('(display-mode: standalone)').matches) return;
   saveJSON('rt_hint_ctrl2', true); toast('Trend channel: Ctrl+2 works in an app window (browser menu › Cast, save and share › Install page as app / Open as window). In a tab use Alt+2.');
@@ -1896,13 +2005,14 @@ function drawingHandles() {
   for (const d of drawings) {
     if (!drawingVisible(d)) continue;
     if (d.type === 'hl') { const y = Y(d.p1.p); if (y != null) out.push({ d, horiz: true, hy: y, apply: (t, p) => { d.p1.p = p; } }); continue; }
+    if (d.type === 'text') continue;   // no anchor dot: the whole box drags (keeps the grab offset, no magnet jump)
     if (d.type === 'vline') { const x = X(d.p1.t); if (x != null) out.push({ d, vert: true, hx: x, apply: (t, p) => { if (t != null) d.p1.t = t; } }); continue; }   // G37: time only (mirror of hl's horiz)
     if (d.type === 'rr') {   // entry handle shifts all 3 levels; stop/target move individually; grabbable at both box edges
       const { xa, xb } = rrRange(d, X), eY = Y(d.p1.p), sY = Y(d.stop), tY = Y(d.target);
       [xa, xb].forEach(hx => {
-        if (eY != null) out.push({ d, hx, hy: eY, apply: (t, p) => { const dp = p - d.p1.p; d.p1.p = p; d.stop += dp; d.target += dp; } });
-        if (sY != null) out.push({ d, hx, hy: sY, apply: (t, p) => { d.stop = p; } });
-        if (tY != null) out.push({ d, hx, hy: tY, apply: (t, p) => { d.target = p; } });
+        if (eY != null) out.push({ d, hx, hy: eY, apply: (t, p) => { const np = rnd(p), dp = np - d.p1.p; d.p1.p = np; d.stop = rnd(d.stop + dp); d.target = rnd(d.target + dp); } });
+        if (sY != null) out.push({ d, hx, hy: sY, apply: (t, p) => { d.stop = rnd(p); } });
+        if (tY != null) out.push({ d, hx, hy: tY, apply: (t, p) => { d.target = rnd(p); } });
       });
       continue;
     }
@@ -1934,6 +2044,7 @@ function drawingAt(x, y) {
     if (!drawingVisible(d)) continue;
     if (d.type === 'hl') { const yy = Y(d.p1.p); if (yy != null && Math.abs(yy - y) < TH) return d; continue; }
     if (d.type === 'vline') { const xx = X(d.p1.t); if (xx != null && Math.abs(xx - x) < TH) return d; continue; }
+    if (d.type === 'text') { const r = textRect(d); if (r && x >= r.x - 3 && x <= r.x + r.w + 3 && y >= r.y - 3 && y <= r.y + r.h + 3) return d; continue; }   // anywhere on the box
     const x1 = X(d.p1.t), y1 = Y(d.p1.p);
     if (d.type === 'hray') { if (x1 != null && y1 != null && x >= x1 - TH && Math.abs(y1 - y) < TH) return d; continue; }
     if (d.type === 'cross') { if (x1 != null && y1 != null && (Math.abs(y1 - y) < TH || Math.abs(x1 - x) < TH)) return d; continue; }
@@ -2119,6 +2230,7 @@ $('chart').addEventListener('pointermove', e => {
 let _dtbKey = '', _dtbSel = null;
 function placeDrawToolbar(bb, W, H) {   // called from the drawings primitive on every paint; returns the state for __drwDbg. bb = selection bbox in chart pixels (null / .bad = hide)
   const el = $('drawToolbar'); if (!el) return 'none';
+  if (txtEd) { if (_dtbKey !== 'hide') { _dtbKey = 'hide'; el.hidden = true; } return 'editing'; }   // typing: style it before or after (keeps the focus in the box)
   const sel = selDrawing && drawings.includes(selDrawing) ? selDrawing : null;
   const show = !!(sel && bb && bb.n > 0 && !bb.bad && bb.x1 >= 0 && bb.x0 <= W && bb.y1 >= 0 && bb.y0 <= H);   // any null coordinate or a bbox fully off the pane -> hidden
   if (!show) { if (_dtbKey !== 'hide') { _dtbKey = 'hide'; el.hidden = true; } if (!sel && $('drawSettings').classList.contains('open')) closeDrawSettings(); return 'hidden'; }
@@ -2137,6 +2249,8 @@ function syncDrawToolbar() {   // reflect the primary selection's style in the t
   const d = selDrawing; if (!d) return;
   const s = d.style || {}; $('dtColor').value = /^#[0-9a-f]{6}$/i.test(s.color || '') ? s.color : '#000000';
   $('dtWidth').value = String(s.width || 1.5); $('dtDash').value = String(s.dash | 0);
+  const isText = d.type === 'text'; $('dtWidth').hidden = $('dtDash').hidden = isText; $('dtFont').hidden = !isText; $('dtColor').ariaLabel = isText ? 'Text color' : 'Line color';
+  if (isText) $('dtFont').value = String(+s.fontSize || TEXT_DEFAULT.fontSize);
   $('dtLock').classList.toggle('on', !!d.locked); $('dtLock').querySelector('span').textContent = d.locked ? 'lock' : 'lock_open'; $('dtLock').title = $('dtLock').ariaLabel = d.locked ? 'Unlock' : 'Lock';
 }
 function setDrawingStyle(patch) {   // batch style change over the whole selection (G20); writes style.* and mirrors color into d.color for older builds
@@ -2149,10 +2263,11 @@ function initDrawToolbar() {
   $('dtColor').oninput = (e) => setDrawingStyle({ color: e.target.value });
   $('dtWidth').onchange = (e) => setDrawingStyle({ width: +e.target.value });
   $('dtDash').onchange = (e) => setDrawingStyle({ dash: +e.target.value });
+  $('dtFont').onchange = (e) => setDrawingStyle({ fontSize: +e.target.value });
   $('dtLock').onclick = () => { const on = !(selDrawing && selDrawing.locked); snapshot(); for (const d of selectedList()) d.locked = on; saveJSON('rt_drawings', drawings); syncDrawToolbar(); repaintOverlays(); toast(on ? 'Drawing locked' : 'Drawing unlocked'); };
   $('dtDelete').onclick = () => deleteSelectedDrawing();
   $('dtSettings').onclick = () => openDrawSettings(selDrawing);
-  $('chart').addEventListener('dblclick', (e) => { if (overPriceAxis(e.clientX) || tool) return; const r = $('chart').getBoundingClientRect(), d = drawingAt(e.clientX - r.left, e.clientY - r.top); if (d) { selectDrawing(d, false); repaintOverlays(); openDrawSettings(d); } });   // G17
+  $('chart').addEventListener('dblclick', (e) => { if (overPriceAxis(e.clientX) || tool) return; const r = $('chart').getBoundingClientRect(), d = drawingAt(e.clientX - r.left, e.clientY - r.top); if (d) { selectDrawing(d, false); repaintOverlays(); if (d.type === 'text') beginTextEdit(d, false); else openDrawSettings(d); } });   // G17; a text edits in place (TV)
   $('drawSettings').onclick = (e) => { if (e.target === e.currentTarget) closeDrawSettings(); };
   $('btnLockDrw').onclick = () => { drawingsLocked = !drawingsLocked; saveJSON('rt_lockdrw', drawingsLocked); lockBtnUI(); toast(drawingsLocked ? 'All drawings locked' : 'Drawings unlocked'); };
   lockBtnUI();
@@ -2166,7 +2281,7 @@ function toggleHide(which) {
   toast(which === 'all' ? (hideFlags.drawings ? 'Everything hidden' : 'Everything shown') : `${which === 'positions' ? 'Positions & orders' : which[0].toUpperCase() + which.slice(1)} ${hideFlags[which] ? 'hidden' : 'shown'}`);
 }
 function applyHide() {
-  if (hideFlags.drawings) { clearSelection(); hoverDrawing = null; pendingPt = null; pendingPt2 = null; previewXY = null; if ($('drawSettings').classList.contains('open')) closeDrawSettings(); }
+  if (hideFlags.drawings) { endTextEdit(); clearSelection(); hoverDrawing = null; pendingPt = null; pendingPt2 = null; previewXY = null; if ($('drawSettings').classList.contains('open')) closeDrawSettings(); }
   applyVolVisible(); applyOscHidden(); repaintOverlays(); refreshMarkers(true); hideBtnUI();
 }
 function hideBtnUI() {
@@ -2204,15 +2319,24 @@ function openDrawSettings(d, tab) {
   const num = (k, label, v, step) => `<label class="ds-row ds-num"><span>${label}</span><input type="number" data-k="${k}" value="${v}" step="${step}"></label>`;
   const pt = (n, obj, hasT, hasP) => `<div class="ds-grp"><div class="ds-gh">${n}</div>${hasT ? num('t:' + obj, 'Bar #', abs(d[obj].t), 1) : ''}${hasP ? num('p:' + obj, 'Price', +(+d[obj].p).toFixed(2), TICK) : ''}</div>`;
   let style = `<label class="ds-row ds-num"><span>Color</span><input type="color" data-k="s:color" value="${/^#[0-9a-f]{6}$/i.test(s.color || '') ? s.color : '#000000'}"></label>` +
-    `<label class="ds-row ds-num"><span>Width</span><select data-k="s:width">${[0.5, 1, 1.5, 2, 3, 4].map(w => `<option value="${w}" ${s.width == w ? 'selected' : ''}>${w}px</option>`).join('')}</select></label>` +
+    (d.type === 'text' ? '' : `<label class="ds-row ds-num"><span>Width</span><select data-k="s:width">${[0.5, 1, 1.5, 2, 3, 4].map(w => `<option value="${w}" ${s.width == w ? 'selected' : ''}>${w}px</option>`).join('')}</select></label>`) +
     `<label class="ds-row ds-num"><span>Opacity</span><select data-k="s:opacity">${[1, 0.75, 0.5, 0.25].map(o => `<option value="${o}" ${(s.opacity == null ? 1 : s.opacity) == o ? 'selected' : ''}>${o * 100}%</option>`).join('')}</select></label>` +
-    `<label class="ds-row ds-num"><span>Line</span><select data-k="s:dash">${['Solid', 'Dashed', 'Dotted'].map((n, i) => `<option value="${i}" ${(s.dash | 0) === i ? 'selected' : ''}>${n}</option>`).join('')}</select></label>`;
+    (d.type === 'text' ? '' : `<label class="ds-row ds-num"><span>Line</span><select data-k="s:dash">${['Solid', 'Dashed', 'Dotted'].map((n, i) => `<option value="${i}" ${(s.dash | 0) === i ? 'selected' : ''}>${n}</option>`).join('')}</select></label>`);
+  if (d.type === 'text') {   // TV Text dialog: content, size, B / I, background, border
+    const col = (k, v, label) => `<input type="color" data-k="${k}" value="${/^#[0-9a-f]{6}$/i.test(v || '') ? v : '#000000'}" aria-label="${label}">`, ts = { ...TEXT_DEFAULT, ...s };
+    style += `<label class="ds-row ds-col"><span>Text</span><textarea data-k="tx:text" rows="3" spellcheck="false">
+${escHtml(d.text || '')}</textarea></label>` +
+      `<label class="ds-row ds-num"><span>Font size</span><select data-k="ts:fontSize">${TEXT_SIZES.map(z => `<option value="${z}" ${+ts.fontSize === z ? 'selected' : ''}>${z}px</option>`).join('')}</select></label>` +
+      `<div class="ds-row ds-inline">${chk('ts:bold', 'Bold', ts.bold)}${chk('ts:italic', 'Italic', ts.italic)}</div>` +
+      `<div class="ds-row ds-pair">${chk('ts:bg', 'Background', ts.bg)}<span class="ds-ctl">${col('ts:bgColor', ts.bgColor, 'Background color')}<select data-k="ts:bgOpacity" aria-label="Background opacity">${[1, 0.85, 0.5, 0.25].map(o => `<option value="${o}" ${+ts.bgOpacity === o ? 'selected' : ''}>${o * 100}%</option>`).join('')}</select></span></div>` +
+      `<div class="ds-row ds-pair">${chk('ts:border', 'Border', ts.border)}<span class="ds-ctl">${col('ts:borderColor', ts.borderColor, 'Border color')}</span></div>`;
+  }
   if (d.type === 'tl' || d.type === 'ray') style += `<label class="ds-row ds-num"><span>Extend</span><select data-k="d:extend">${['none', 'left', 'right', 'both'].map(v => `<option value="${v}" ${(d.extend || 'none') === v ? 'selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}</select></label>` + chk('d:arrowStart', 'Arrow at start', d.arrowStart) + chk('d:arrowEnd', 'Arrow at end', d.arrowEnd);
   if (d.type === 'box') style += chk('d:extendLeft', 'Extend left', d.extendLeft) + chk('d:extendRight', 'Extend right', d.extendRight) + chk('d:middleLine', 'Middle line', d.middleLine);
   if (d.type === 'fib') { const lv = Array.isArray(d.fibLevels) ? d.fibLevels : FIB_DEFAULT; style += `<div class="ds-gh">Levels</div><div class="ds-levels">${FIB_LEVELS.map(f => chk('fib:' + f.lv, f.lv, lv.some(v => Math.abs(v - f.lv) < 1e-6))).join('')}</div>` + chk('d:reverse', 'Reverse', d.reverse) + chk('d:extendLeft', 'Extend left', d.extendLeft) + chk('d:extendRight', 'Extend right', d.extendRight); }
   if (d.type === 'channel') style += `<label class="ds-row ds-num"><span>Extend</span><select data-k="d:extend">${['none', 'left', 'right', 'both'].map(v => `<option value="${v}" ${(d.extend || 'none') === v ? 'selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}</select></label>` +
     `<label class="ds-row ds-num"><span>Levels %</span><input type="text" data-k="lv:levels" value="${(d.levels || []).join(', ')}" placeholder="50"></label>`;   // NT: no arrows on a channel
-  const TOOL_NAME = { tl: 'trend lines', ray: 'rays', hl: 'horizontal lines', hray: 'horizontal rays', vline: 'vertical lines', cross: 'cross lines', box: 'rectangles', fib: 'fib retracements', measure: 'measures', rr: 'risk/reward', channel: 'trend channels' }[d.type] || d.type;
+  const TOOL_NAME = { tl: 'trend lines', ray: 'rays', hl: 'horizontal lines', hray: 'horizontal rays', vline: 'vertical lines', cross: 'cross lines', box: 'rectangles', fib: 'fib retracements', measure: 'measures', rr: 'risk/reward', channel: 'trend channels', text: 'text labels' }[d.type] || d.type;
   style += `<div class="ds-defs"><button type="button" class="mini" id="dsSaveDef" title="New ${TOOL_NAME} will start with this style">Save as default</button><button type="button" class="mini" id="dsResetDef" ${drwDefaults[d.type] ? '' : 'disabled'} title="Forget the saved default for ${TOOL_NAME}">Reset default</button></div>`;
   let coords = '';
   if (d.type === 'hl') coords = pt('Price', 'p1', false, true);
@@ -2222,7 +2346,7 @@ function openDrawSettings(d, tab) {
   const all = !Array.isArray(d.visibleTFs);
   const vis = chk('v:all', 'All timeframes', all) + `<div class="ds-levels ${all ? 'ds-off' : ''}" id="dsTfs">${STD_TF.map(m => chk('tf:' + m, TF_LABEL(m), !all && d.visibleTFs.some(v => Math.abs(v - m) < 1e-6))).join('')}</div>`;
   const tabs = [['style', 'Style'], ['coords', 'Coordinates'], ['vis', 'Visibility']];
-  $('drawSettings').innerHTML = `<div class="dd-card ds-card"><div class="dd-h"><span class="dd-date">${({ tl: 'Trend line', ray: 'Ray', hl: 'Horizontal line', hray: 'Horizontal ray', vline: 'Vertical line', cross: 'Cross line', box: 'Rectangle', fib: 'Fib retracement', measure: 'Measure', rr: 'Risk/reward', channel: 'Trend channel' })[d.type] || d.type} settings</span><button class="mini ico-btn" id="dsClose" aria-label="Close"><span aria-hidden="true" class="material-symbols-outlined">close</span></button></div>` +
+  $('drawSettings').innerHTML = `<div class="dd-card ds-card"><div class="dd-h"><span class="dd-date">${({ tl: 'Trend line', ray: 'Ray', hl: 'Horizontal line', hray: 'Horizontal ray', vline: 'Vertical line', cross: 'Cross line', box: 'Rectangle', fib: 'Fib retracement', measure: 'Measure', rr: 'Risk/reward', channel: 'Trend channel', text: 'Text' })[d.type] || d.type} settings</span><button class="mini ico-btn" id="dsClose" aria-label="Close"><span aria-hidden="true" class="material-symbols-outlined">close</span></button></div>` +
     `<div class="ds-tabs">${tabs.map(([k, n]) => `<button class="ds-tab ${dsTab === k ? 'active' : ''}" data-tab="${k}">${n}</button>`).join('')}</div>` +
     `<div class="ds-body"><div class="ds-pane" data-pane="style" ${dsTab === 'style' ? '' : 'hidden'}>${style}</div><div class="ds-pane" data-pane="coords" ${dsTab === 'coords' ? '' : 'hidden'}>${coords}</div><div class="ds-pane" data-pane="vis" ${dsTab === 'vis' ? '' : 'hidden'}>${vis}</div></div></div>`;
   const el = $('drawSettings'); el.classList.add('open'); modalOpened(el);
@@ -2237,16 +2361,19 @@ function openDrawSettings(d, tab) {
   el.querySelectorAll('[data-k]').forEach(inp => { inp[inp.type === 'color' || inp.type === 'number' ? 'oninput' : 'onchange'] = () => applyDrawSetting(d, inp.dataset.k, inp.type === 'checkbox' ? inp.checked : inp.value); });
 }
 function applyDrawSetting(d, k, v) {   // live apply (TV applies as you edit); every change persists + repaints (+ undo snapshot, G21)
-  const [kind, key] = k.split(':'); snapshot();
+  const [kind, key] = k.split(':'); if (/^(p|t)$/.test(kind) || (kind === 'd' && (key === 'stop' || key === 'target'))) { if (String(v).trim() === '' || !isFinite(+v)) return; }   // half-typed / cleared number: wait for a real value
+  snapshot();
   if (kind === 's') { d.style[key] = key === 'color' ? v : +v; if (key === 'color') d.color = v; }
   else if (kind === 'd') d[key] = (key === 'stop' || key === 'target') ? +v : (key === 'extend' ? v : !!v);
+  else if (kind === 'ts') d.style[key] = typeof v === 'boolean' ? v : /Color$/.test(key) ? v : +v;   // text format (kept in style so Save as default carries it)
+  else if (kind === 'tx') { const t = cleanText(v).replace(/\s+$/, ''); if (t.trim()) d.text = t; else { const ta = $('drawSettings').querySelector('[data-k="tx:text"]'); if (ta) ta.value = d.text; } }   // clearing the box keeps the old text (delete the drawing instead)
   else if (kind === 'p') { const n = +v; if (isFinite(n)) d[key].p = n; }
   else if (kind === 't') { const n = +v; if (isFinite(n)) { const t = logicalToTime(n - seriesFrom); if (t != null) d[key].t = t; } }   // bar number -> time (future bars allowed)
   else if (kind === 'lv') d.levels = String(v).split(/[\s,]+/).map(Number).filter(n => isFinite(n) && n !== 0 && n !== 100);   // NT Trend Channel Levels, % of channel (0 = trend line, 100 = parallel)
   else if (kind === 'fib') { const lv = new Set(Array.isArray(d.fibLevels) ? d.fibLevels : FIB_DEFAULT); if (v) lv.add(+key); else lv.forEach(x => { if (Math.abs(x - +key) < 1e-6) lv.delete(x); }); d.fibLevels = [...lv].sort((a, b) => a - b); }
   else if (kind === 'v') { d.visibleTFs = v ? null : [tf]; const box = $('dsTfs'); if (box) { box.classList.toggle('ds-off', !!v); box.querySelectorAll('input').forEach(i => { i.checked = !v && Math.abs(+i.dataset.k.slice(3) - tf) < 1e-6; }); } }
   else if (kind === 'tf') { const set = new Set(Array.isArray(d.visibleTFs) ? d.visibleTFs : []); if (v) set.add(+key); else set.forEach(x => { if (Math.abs(x - +key) < 1e-6) set.delete(x); }); d.visibleTFs = [...set].sort((a, b) => a - b); }
-  saveJSON('rt_drawings', drawings); if (selDrawing === d) syncDrawToolbar(); repaintOverlays();
+  dropNoopSnapshot(); saveJSON('rt_drawings', drawings); if (selDrawing === d) syncDrawToolbar(); repaintOverlays();
 }
 
 // ---------- timeframe aggregation ----------
@@ -2485,9 +2612,10 @@ function prefetchTickNeighbours(day) {   // nearest first, one download at a tim
   todo.forEach(u => tickBufCache.set(u, null));   // reserve
   (async () => { for (const url of todo) { try { const r = await fetch(url); const buf = r.ok ? await r.arrayBuffer() : null; if (buf && tickBufCache.has(url)) tickBufCache.set(url, buf); else tickBufCache.delete(url); } catch (e) { tickBufCache.delete(url); } } })();
 }
-async function loadDataset(ds) {
+async function loadDataset(ds, wantT) {   // wantT (epoch s): open the day that holds this moment instead of the newest day
+  endTextEdit();
   if (ds && ds.tick) return enterTickMode(ds);          // Tradovate-style per-day tick replay
-  if (ds && ds.deep) return enterDeepMode(ds);          // GitHub-safe monthly-chunked deep 15s history, loaded on demand
+  if (ds && ds.deep) return enterDeepMode(ds, wantT);   // GitHub-safe monthly-chunked deep 15s history, loaded on demand
   tickMode = false; deepMode = false; setSpeedOptions(false);
   const url = typeof ds === 'string' ? ds : ds.url;   // tolerate a bare url too
   let data;
@@ -2527,8 +2655,8 @@ function finishLoad(data, ds) {   // shared tail of loadDataset() / loadDeepMont
 
 // ---------- deep history: monthly-chunked 15s (fetch only the month you're looking at) ----------
 // (state vars declared up top near tickMode — see the TDZ note there)
-async function enterDeepMode(ds) {
-  tickMode = false;
+async function enterDeepMode(ds, wantT) {
+  tickMode = false; deepMonth = null;   // the month chunk in memory belongs to the previous symbol: never reuse it
   if (ds && ds.instr) { INSTR = ds.instr; TICK = INSTR.tickSize; if ($('symbol')) $('symbol').textContent = INSTR.symbol; if ($('entryPrice')) $('entryPrice').step = String(TICK); }
   deepSym = (ds && ds.chunks) || INSTR.symbol;   // which 15s chunk folder to read (micros share the big contract's)
   let idx;
@@ -2542,12 +2670,14 @@ async function enterDeepMode(ds) {
   dbTickDays = await idxOf(`index_${INSTR.symbol}.json`); ntTickDays = await idxOf(`index_${INSTR.symbol}_nt.json`);
   deepTickDays = new Set([...dbTickDays, ...ntTickDays]);
   deepAllDays = new Set(deepIndex.flatMap(m => m.days).concat([...deepTickDays]));
-  if (!deepIndex.length) { deepMode = true; toast('No deep-history months yet — run fetch_15s_bulk.py + split_monthly.py'); if (!wired) { wire(); wired = true; } return true; }
+  if (!deepIndex.length && !deepTickDays.size) { deepMode = true; toast('No deep-history months yet — run fetch_15s_bulk.py + split_monthly.py'); if (!wired) { wire(); wired = true; return true; } return false; }
   // Boot onto the newest day OVERALL. The tick coverage runs past the 15s chunks, so defaulting to
   // the latest month chunk landed on a 15s day and the Tick-bars timeframes never showed on boot.
+  const want = wantT != null ? tradingDayKey(wantT) : null;
+  if (want && deepAllDays.has(want)) { deepMode = true; return jumpToDeepDay(want); }   // same trading day on the new symbol (ticks if it has them, else its 15s month)
   const newest = [...deepAllDays].sort().pop();
   if (deepTickDays.has(newest)) { deepMode = true; return loadTickDay(newest); }   // deepMode stays on so the calendar union and [ / ] day-stepping work from the first day
-  return loadDeepMonth(deepIndex[deepIndex.length - 1].month);   // default: most recent available month
+  return deepIndex.length ? loadDeepMonth(deepIndex[deepIndex.length - 1].month) : false;   // default: most recent available month
 }
 async function loadDeepMonth(month) {
   const mi = deepIndex.findIndex(m => m.month === month); if (mi < 0) return false;
@@ -2993,6 +3123,59 @@ function setMtf(layout, tfs) {
   rebuildMtf();
 }
 function rthOpenIdx(s) { for (let i = s.start; i <= s.end; i++) { const m = etMinutes(baseBars[i].time); if (m >= 570 && m < 960) return i; } return s.start; }  // first bar in 09:30–15:59 ET = US cash open (skips the 18:00 ET Globex open)
+function replayTime() { const b = baseBars[baseIdx]; return b ? b.time : null; }   // the replay clock: time of the last revealed print / base bar
+function applyView(view) {   // no auto-fit: same bar width, latest bar at the right edge; a manual price view keeps its % height on the new instrument (NQ ~31k vs ES ~7.7k)
+  const ts = chart.timeScale(); if (view && view.spacing) ts.applyOptions({ barSpacing: view.spacing }); ts.scrollToPosition(6, false);
+  const r = view && view.price > 0 && bars[idx] ? bars[idx].close / view.price : 0;
+  if (view && view.px && r > 0 && isFinite(r)) { pxFix = { mid: bars[idx].close, half: view.px.half * r }; priceAuto = false; }
+  applyPriceZoom();
+}
+function viewNow() { return { spacing: chart.timeScale().options().barSpacing, px: pxFix ? { ...pxFix } : null, price: bars[idx] && bars[idx].close }; }   // what seekReplayTime keeps across a reload
+function seekReplayTime(T, view, quietLate) {   // quietLate: T sits just before this day's first print by design (a trade entered on the opening print)   // park on the last COMPLETE bar at or before T (nothing after T is ever revealed); same bar width; manual price zoom rescaled to the new instrument
+  if (!baseBars.length || T == null) return false;
+  let lo = 0, hi = baseBars.length - 1, ans = -1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (baseBars[m].time <= T) { ans = m; lo = m + 1; } else hi = m - 1; }
+  const late = ans < 0; if (late) ans = 0;   // this tape starts after T (e.g. an export that begins late): its first print, and say so below
+  pause(); baseIdx = ans; syncIdxFromBase();
+  if (baseIdx > ans && idx > 0) { idx--; baseIdx = bars[idx].subEnd; }   // T opened a new bar: syncIdxFromBase would show that whole bar, so step back to the last complete one
+  hardReveal(); applyView(view); renderAll();
+  if (late && !quietLate) toast(`${INSTR.symbol} data that day starts at ${tHM(baseBars[0].time)}: the replay clock moved forward to it`);
+  return true;
+}
+async function switchDataset(i, T, view) {   // load DATASETS[i] on the day of T; on failure put the previous one back (the loaders switch INSTR before they fetch)
+  const prev = dataIdx;
+  if (await loadDataset(DATASETS[i], T)) { dataIdx = i; $('dataSelect').value = String(i); return true; }
+  $('dataSelect').value = String(prev);
+  if (i !== prev && await loadDataset(DATASETS[prev], T)) { if (T != null && tradingDayKey(replayTime()) === tradingDayKey(T)) seekReplayTime(T, view); }
+  toast(`Couldn't load ${DATASETS[i].label}: staying on ${DATASETS[prev].label}`);
+  return false;
+}
+// ---- replay a past trade: its symbol, its day, the timeframe it was taken on, parked one second before the entry so it can be stepped into again ----
+async function rewindToTrade(t) {
+  if (!t || !t.entryTime) return false;
+  if (locked()) { toast("Can't jump while in a position / working order"); return false; }
+  if (rndMode) exitRnd();
+  if (!await gotoMoment(t.sym, t.entryTime - 1, t.tf, tradingDayKey(t.entryTime))) return false;   // the ENTRY's trading day: entry-1 s can fall before 18:00 ET (previous day)
+  toast(`${t.side === 'long' ? 'Long' : 'Short'} ${t.qty} @ ${f2(t.entry)}, ${tFmt(t.entryTime)}: step forward to replay it`);
+  return true;
+}
+async function gotoMoment(sym, T, tfv, dayKey) {   // that symbol (old records without one: the current), that trading day, that timeframe when the data can draw it, parked at T
+  const day = dayKey || tradingDayKey(T), view = viewNow();
+  const di = DATASETS.findIndex(d => !d.hidden && d.instr && d.instr.symbol === sym), ds = di >= 0 ? di : dataIdx;
+  if (sym && di < 0) toast(`${sym} is not available here: using ${INSTR.symbol}`);
+  const inMem = ds === dataIdx && baseBars.length && baseBars[0].time <= T && T <= baseBars[baseBars.length - 1].time
+    && (tickMode ? curTickDay === day : !(deepMode && deepTickDays.has(day)));   // a tick day inside the loaded 15s month: load its ticks (tick-bar timeframes need them)
+  if (!inMem) {
+    const ok = ds === dataIdx && deepMode ? await jumpToDeepDay(day) : await switchDataset(ds, T, view);
+    if (!ok) { if (ds === dataIdx) toast(`No ${INSTR.symbol} data on ${dayLbl(day)}`); return false; }   // (switchDataset already said why it failed)
+    if (tradingDayKey(replayTime()) !== day) { toast(`No ${INSTR.symbol} data on ${dayLbl(day)} any more`); return false; }
+  }
+  const v = String(tfv == null ? '' : tfv);
+  if (v[0] === 't') { const n = +v.slice(1); if (tickMode && TF_TICKS.includes(n) && tfTicks !== n) { setTf(v); buildTfSelect(); } }
+  else if (+v > 0 && (tfTicks || Math.abs(+v - tf) > 1e-9) && TF_OPTIONS.some(m => Math.abs(m - +v) < 1e-9)) { setTf(v); buildTfSelect(); }
+  seekReplayTime(T, view, !!dayKey);
+  return true;
+}
 function gotoSession(i) {
   if (locked()) return toast("Can't jump while in a position / working order");
   const sp = chart.timeScale().options().barSpacing;
@@ -3023,6 +3206,7 @@ function setStart(biVal) {
   pause(); baseIdx = Math.max(0, Math.min(baseBars.length - 1, biVal)); syncIdxFromBase(); hardReveal(); renderLive();
 }
 function setTf(m) {
+  endTextEdit();
   if (locked()) { buildTfSelect(); return toast("Can't change timeframe while in a position / working order"); }
   pause();
   const v = String(m);
@@ -3756,7 +3940,7 @@ function renderTrades() {
     <td class="mono">${f2(t.entry)}</td><td class="mono">${f2(t.exit)}</td>
     <td>${t.ticks >= 0 ? '+' : ''}${t.ticks}</td><td class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</td>
     <td>${t.R == null ? '–' : t.R.toFixed(2)}</td><td class="mono" title="${t.planRR == null ? '' : `planned at entry: stop ${t.planSl}t, target ${Math.round(t.planTp)}t`}">${fmtPlanRR(t)}</td><td>${atmLbl(t.atm)}</td><td>${EXIT_LBL[t.exitType] || t.exitType}</td>
-    <td><button class="trade-del" data-ti="${i}" title="Delete this trade" aria-label="Delete this trade"><span aria-hidden="true" class="material-symbols-outlined">close</span></button></td></tr>`).reverse().join('');
+    <td class="trade-acts"><button class="trade-go" data-ti="${i}" title="Replay this trade: jump to just before the entry" aria-label="Replay trade ${i + 1}"><span aria-hidden="true" class="material-symbols-outlined">history</span></button><button class="trade-del" data-ti="${i}" title="Delete this trade" aria-label="Delete this trade"><span aria-hidden="true" class="material-symbols-outlined">close</span></button></td></tr>`).reverse().join('');
   const net = trades.reduce((s, t) => s + t.pnl, 0);
   const td = todayStats();
   $('tradesSummary').innerHTML = `<span><b>${trades.length}</b> trade${trades.length === 1 ? '' : 's'}</span><span>Net <b>${usd(net)}</b></span>`
@@ -3952,13 +4136,14 @@ function openDayDetail(key) {
   el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">${dayLbl(key)}</span><span class="dd-meta"><b class="${net >= 0 ? 'pos' : 'neg'}">${usd(net)}</b><span>${ts.length} trade${ts.length === 1 ? '' : 's'}, ${w} won, ${l} lost</span></span></div>`
     + `<button class="dd-x" id="ddClose" aria-label="Close"><span aria-hidden="true" class="material-symbols-outlined">close</span></button></div><div class="dd-list">`
     + ts.map((t, i) => { const long = t.side === 'long';
-      return `<div class="dd-trade"><div class="dd-tinfo"><div class="dd-trow"><span>#${i + 1}</span><span class="${long ? 'long-tag' : 'short-tag'}">${long ? 'Long' : 'Short'} ${t.qty}</span><b class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</b><span>${t.ticks >= 0 ? '+' : ''}${t.ticks} ticks</span><span>${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + ' R'}</span>${t.planRR != null ? `<span>Plan ${fmtPlanRR(t)}</span>` : ''}</div>`
+      return `<div class="dd-trade"><div class="dd-tinfo"><div class="dd-trow"><button class="dd-go" data-ti="${i}" title="Replay this trade: jump to just before the entry" aria-label="Replay trade ${i + 1}"><span aria-hidden="true" class="material-symbols-outlined">history</span>Replay</button><span>#${i + 1}</span><span class="${long ? 'long-tag' : 'short-tag'}">${long ? 'Long' : 'Short'} ${t.qty}</span><b class="${t.pnl >= 0 ? 'pos' : 'neg'}">${usd(t.pnl)}</b><span>${t.ticks >= 0 ? '+' : ''}${t.ticks} ticks</span><span>${t.R == null ? '–' : (t.R >= 0 ? '+' : '') + t.R.toFixed(2) + ' R'}</span>${t.planRR != null ? `<span>Plan ${fmtPlanRR(t)}</span>` : ''}</div>`
         + `<div class="dd-sub"><span>${tHM(t.entryTime)} → ${tHM(t.exitTime)}</span><span>${f2(t.entry)} → ${f2(t.exit)}</span><span>${atmLbl(t.atm)}</span><span>${EXIT_LBL[t.exitType] || t.exitType}</span></div></div>`
         + `<canvas class="dd-chart" data-ti="${i}" title="Scroll to zoom, drag to pan, double-click to reset"></canvas></div>`; }).join('')
     + `</div></div>`;
   el.classList.add('open'); modalOpened(el);
   requestAnimationFrame(() => el.querySelectorAll('.dd-chart').forEach(c => mountTradeChart(c, ts[+c.dataset.ti])));   // draw after layout so canvas clientWidth is real
   $('ddClose').onclick = closeDayDetail;
+  el.querySelectorAll('.dd-go').forEach(b => { b.onclick = async () => { const t = ts[+b.dataset.ti]; closeDayDetail(); await rewindToTrade(t); }; });
 }
 function closeDayDetail() { const el = $('dayDetail'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } modalClosed(); }
 // ---------- Tradervue-style session overview ----------
@@ -4263,53 +4448,103 @@ function deleteTrade(i) {   // remove a single trade record AND its entry/exit a
   refreshMarkers(); renderAll();
 }
 
-// ---------- saved trade logs (snapshot the current trades under a name, recall/delete later) ----------
+// ---------- saved sessions: trades + drawings (text too) + placed / trade arrows + where the replay stood (symbol, moment, timeframe) ----------
+// v2 entries carry the whole workspace; the older trades-only logs (no .v) still load their trades. Stored in rt_trade_logs (one list).
+const clone = (x) => JSON.parse(JSON.stringify(x == null ? null : x));
+function saveLogs() { try { saveJSON('rt_trade_logs', tradeLogs); return true; } catch (e) { toast('Browser storage is full: export and delete old sessions'); return false; } }
+function sessionLbl(l) { return l.v >= 2 && num(l.t) && l.t > 0 ? `${l.sym || ''} ${dayLbl(tradingDayKey(l.t))} ${tHM(l.t)}` : ''; }
 function saveTradeLog() {
-  if (!trades.length) return toast('No trades to save');
-  const def = `${(sessions[currentSessionIdx()] || {}).key || 'Log'} ${INSTR.symbol}`;
-  const name = (prompt('Save current trades as:', def) || '').trim();
+  endTextEdit();
+  if (!trades.length && !drawings.length && !annotations.length) return toast('Nothing to save yet: no trades, drawings or markers');
+  if (locked()) return toast('Close the position / working orders first: an open trade is not saved');
+  const t = replayTime(), def = `${t ? tradingDayKey(t) : 'Session'} ${INSTR.symbol}${t ? ' ' + tHM(t) : ''}`;
+  const name = (prompt('Save this session (trades, drawings, markers, replay position) as:', def) || '').trim();
   if (!name) return;
-  const net = trades.reduce((s, t) => s + t.pnl, 0);
-  tradeLogs.push({ id: 'log' + Date.now(), name, ts: Math.floor(Date.now() / 1000), n: trades.length, net, trades: JSON.parse(JSON.stringify(trades)) });
-  saveJSON('rt_trade_logs', tradeLogs); toast(`Saved "${name}" (${trades.length} trades)`);
+  const net = trades.reduce((s, x) => s + x.pnl, 0);
+  const log = { id: 'log' + Date.now(), v: 2, name, ts: Math.floor(Date.now() / 1000), n: trades.length, net, trades: clone(trades),
+    drawings: clone(drawings), annotations: clone(annotations), markers: clone(markers), sym: INSTR.symbol, t, tf: tfTicks ? 't' + tfTicks : tf };
+  tradeLogs.push(log);
+  if (!saveLogs()) { tradeLogs.pop(); return; }
+  toast(`Saved "${name}": ${trades.length} trade${trades.length === 1 ? '' : 's'}, ${drawings.length} drawing${drawings.length === 1 ? '' : 's'}`);
 }
-function loadTradeLog(id) {
+async function loadTradeLog(id) {
   const log = tradeLogs.find(l => l.id === id); if (!log) return;
-  if (trades.length && !confirm(`Load "${log.name}" (${log.trades.length} trades)? This replaces the current trade list — save it first if you want to keep it.`)) return;
-  trades = JSON.parse(JSON.stringify(log.trades)); saveJSON('rt_trades', trades);
-  pnlCalY = 0; renderAll(); closeLogs(); switchTab(true); toast(`Loaded "${log.name}"`);
+  const full = log.v >= 2, have = trades.length || (full && (drawings.length || annotations.length));
+  if (full && locked()) return toast("Can't load a session while in a position / working order");
+  if (have && !confirm(full ? `Load session "${log.name}"? It replaces the current trades, drawings and markers${log.t ? ` and jumps to ${sessionLbl(log)}` : ''}. Save the current one first if you want to keep it.`
+                            : `Load "${log.name}" (${log.trades.length} trades)? This replaces the current trade list — save it first if you want to keep it.`)) return;
+  closeLogs();
+  if (full) {
+    endTextEdit(); if (rndMode) exitRnd();
+    if (log.t) await gotoMoment(log.sym, log.t, log.tf);   // missing data -> stays put (gotoMoment toasts), the rest still loads
+    drawings = migrateDrawings(clone(log.drawings || [])); annotations = clone(log.annotations || []); markers = clone(log.markers || []);
+    clearSelection(); hoverDrawing = null; undoStack.length = 0; redoStack.length = 0;   // a loaded session starts a fresh history
+  }
+  trades = clone(log.trades);
+  let stored = true; try { saveJSON('rt_trades', trades); if (full) { saveJSON('rt_drawings', drawings); saveJSON('rt_annotations', annotations); } } catch (e) { stored = false; }
+  if (full) { repaintOverlays(); refreshMarkers(true); }
+  pnlCalY = 0; renderAll(); switchTab(true);
+  toast(stored ? `Loaded "${log.name}"` : `Loaded "${log.name}", but browser storage is full: it will not survive a reload (export and delete old sessions)`);
+}
+function exportSession(id) {   // one .json file per session: moves it between this computer's app and the GitHub Pages copy (separate browser storage), or backs it up
+  const log = tradeLogs.find(l => l.id === id); if (!log) return;
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify({ kind: 'replay-trainer-session', ...log })], { type: 'application/json' }));
+  a.download = `${log.name.replace(/[\\/:*?"<>|]+/g, '_')}.session.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+const num = (v) => typeof v === 'number' && isFinite(v);
+function cleanSession(o, fname) {   // an imported file is untrusted: rebuild it from well-formed parts only (a bad record must never break boot, the list or Load)
+  if (!o || typeof o !== 'object' || !Array.isArray(o.trades)) return null;
+  const objs = (v) => Array.isArray(v) ? v.filter(x => x && typeof x === 'object' && !Array.isArray(x)) : [];
+  const trades = objs(o.trades).filter(t => num(t.pnl) && num(t.entryTime) && num(t.exitTime) && num(t.entry) && num(t.exit));
+  const out = { id: 'log' + Date.now() + Math.random().toString(36).slice(2, 6), name: String(o.name || fname).slice(0, 120), ts: num(o.ts) ? o.ts : Math.floor(Date.now() / 1000),
+    n: trades.length, net: trades.reduce((a, t) => a + t.pnl, 0), trades };
+  if (o.v >= 2) Object.assign(out, { v: 2, drawings: objs(o.drawings).filter(d => typeof d.type === 'string' && d.p1 && typeof d.p1 === 'object'), annotations: objs(o.annotations), markers: objs(o.markers),
+    sym: typeof o.sym === 'string' ? o.sym.slice(0, 8) : '', t: num(o.t) && o.t > 0 ? o.t : null, tf: num(o.tf) || /^t\d+$/.test(o.tf) ? o.tf : null });
+  return out;
+}
+function importSessions(files) {
+  [...files].forEach(f => { const r = new FileReader(); r.onload = () => {
+    let o; try { o = JSON.parse(r.result); } catch (e) { return toast(`${f.name}: not a session file`); }
+    const c = cleanSession(o, f.name); if (!c) return toast(`${f.name}: not a session file`);
+    tradeLogs.push(c); if (!saveLogs()) { tradeLogs.pop(); return; } renderLogList(); toast(`Imported "${c.name}"`);
+  }; r.readAsText(f); });
 }
 function deleteTradeLog(id) {
   const log = tradeLogs.find(l => l.id === id); if (!log) return;
   if (!confirm(`Delete saved log "${log.name}"? (your current trades are not affected)`)) return;
-  tradeLogs = tradeLogs.filter(l => l.id !== id); saveJSON('rt_trade_logs', tradeLogs); renderLogList();
+  tradeLogs = tradeLogs.filter(l => l.id !== id); saveLogs(); renderLogList();
 }
 function renameTradeLog(id) {
   const log = tradeLogs.find(l => l.id === id); if (!log) return;
   const name = (prompt('Rename log:', log.name) || '').trim();
   if (!name || name === log.name) return;
-  log.name = name; saveJSON('rt_trade_logs', tradeLogs); renderLogList();
+  log.name = name; saveLogs(); renderLogList();
 }
 function escHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function openLogs() { renderLogList(); $('logModal').classList.add('open'); modalOpened($('logModal')); }
 function closeLogs() { const el = $('logModal'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } modalClosed(); }
 function renderLogList() {
   const el = $('logModal'); if (!el) return;
-  const logs = tradeLogs.slice().sort((a, b) => b.ts - a.ts);
+  const logs = tradeLogs.map((l, k) => [l, k]).sort((a, b) => (b[0].ts - a[0].ts) || (b[1] - a[1])).map(x => x[0]);   // newest first; same second -> the later save first
   const rows = logs.length ? logs.map(l => {
-    const net = l.net != null ? l.net : l.trades.reduce((s, t) => s + t.pnl, 0), n = l.n != null ? l.n : l.trades.length;
+    const net = num(l.net) ? l.net : l.trades.reduce((s, t) => s + (num(t.pnl) ? t.pnl : 0), 0), n = num(l.n) ? l.n : l.trades.length;
     return `<div class="log-row"><div class="log-info"><div class="log-name" title="${escHtml(l.name)}">${escHtml(l.name)}</div>`
-      + `<div class="log-sub"><span>${tFmt(l.ts)}</span><span>${n} trade${n === 1 ? '' : 's'}</span><b class="${net >= 0 ? 'pos' : 'neg'}">${usd(net)}</b></div></div>`
+      + `<div class="log-sub">${sessionLbl(l) ? `<span class="log-at">${escHtml(sessionLbl(l))}</span>` : ''}<span>${n} trade${n === 1 ? '' : 's'}</span><b class="${net >= 0 ? 'pos' : 'neg'}">${usd(net)}</b>`
+      + `${l.v >= 2 ? `<span>${(l.drawings || []).length} drawing${(l.drawings || []).length === 1 ? '' : 's'}</span>` : '<span>trades only</span>'}<span>saved ${tFmt(l.ts)}</span></div></div>`
       + `<div class="log-act"><button class="log-load" data-id="${l.id}"><span aria-hidden="true" class="material-symbols-outlined">download_for_offline</span>Load</button>`
+      + `<button class="log-export" data-id="${l.id}" title="Export to a file" aria-label="Export to a file"><span aria-hidden="true" class="material-symbols-outlined">file_export</span></button>`
       + `<button class="log-rename" data-id="${l.id}" title="Rename log" aria-label="Rename log"><span aria-hidden="true" class="material-symbols-outlined">edit</span></button>`
       + `<button class="log-del" data-id="${l.id}" title="Delete saved log" aria-label="Delete saved log"><span aria-hidden="true" class="material-symbols-outlined">delete</span></button></div></div>`;
-  }).join('') : `<div class="log-empty">No saved logs yet. Trade, then hit “Save log”.</div>`;
-  el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">Saved trade logs</span><span class="dd-n">${logs.length}</span></div>`
-    + `<button class="dd-x" id="logClose" aria-label="Close"><span aria-hidden="true" class="material-symbols-outlined">close</span></button></div>`
+  }).join('') : `<div class="log-empty">No saved sessions yet. “Save session” keeps the trades, drawings, markers and where the replay is.</div>`;
+  el.innerHTML = `<div class="dd-card"><div class="dd-h"><div><span class="dd-date">Saved sessions</span><span class="dd-n">${logs.length}</span></div>`
+    + `<div class="log-hacts"><label class="mini ico-btn log-import" title="Import session files (.json)"><span aria-hidden="true" class="material-symbols-outlined">upload_file</span>Import<input type="file" id="logImport" accept=".json,application/json" multiple hidden></label>`
+    + `<button class="dd-x" id="logClose" aria-label="Close"><span aria-hidden="true" class="material-symbols-outlined">close</span></button></div></div>`
     + `<div class="dd-list">${rows}</div></div>`;
   $('logClose').onclick = closeLogs;
   el.querySelectorAll('.log-load').forEach(b => b.onclick = () => loadTradeLog(b.dataset.id));
   el.querySelectorAll('.log-rename').forEach(b => b.onclick = () => renameTradeLog(b.dataset.id));
+  el.querySelectorAll('.log-export').forEach(b => b.onclick = () => exportSession(b.dataset.id));
+  $('logImport').onchange = (e) => { importSessions(e.target.files); e.target.value = ''; };
   el.querySelectorAll('.log-del').forEach(b => b.onclick = () => deleteTradeLog(b.dataset.id));
 }
 
@@ -4324,7 +4559,15 @@ function wire() {
   $('sessionSelect').onchange = (e) => gotoSession(+e.target.value);
   wireCalendar();
   $('tfSelect').onchange = (e) => setTf(e.target.value);   // string: may be minutes or "t<N>" tick bars
-  $('dataSelect').onchange = async (e) => { if (locked()) { $('dataSelect').value = dataIdx; return toast("Can't switch dataset while in a position / working order"); } const i = +e.target.value; const ok = await loadDataset(DATASETS[i]); if (ok) { if (rndMode) exitRnd(); dataIdx = i; } else $('dataSelect').value = dataIdx; };
+  $('dataSelect').onchange = async (e) => {   // switching NQ <-> ES (or a micro) keeps the replay clock: same day, same moment, same timeframe and bar width
+    if (locked()) { $('dataSelect').value = dataIdx; return toast("Can't switch dataset while in a position / working order"); }
+    const i = +e.target.value, keepT = replayTime(), view = viewNow();
+    if (!await switchDataset(i, keepT, view)) return;
+    if (rndMode) exitRnd();
+    if (keepT == null) return;
+    if (tradingDayKey(keepT) !== tradingDayKey(replayTime())) { applyView(view); return toast(`${INSTR.symbol} has no data on ${dayLbl(tradingDayKey(keepT))}: showing its latest day`); }
+    seekReplayTime(keepT, view);
+  };
   $('tickSrcSel').onchange = (e) => { tickSrc = e.target.value; saveJSON('rt_ticksrc', tickSrc); if (tickMode && curTickDay) loadTickDay(curTickDay); };
   $('speedSelect').onchange = () => { saveJSON('rt_speed', $('speedSelect').value); if (playing) { pause(); play(); } };   // remember the pick across reloads
   $('startSlider').oninput = (e) => setStart(+e.target.value);
@@ -4355,6 +4598,7 @@ function wire() {
   $('drwHRay').onclick = () => setTool('hray');   // one-point tools (TV: Horizontal ray / Vertical line / Crossline)
   $('drwVLine').onclick = () => setTool('vline');
   $('drwCross').onclick = () => setTool('cross');
+  $('drwText').onclick = () => setTool('text');
   $('toolCursor').onclick = () => setTool('');   // deselect any active drawing/annotation tool
   // Magnet: button body toggles off <-> last chosen strength; the chevron on its right edge opens Weak / Strong + Snap to indicators (G8/G11)
   const magnetUI = () => { $('btnMagnet').classList.toggle('active', magnet !== 'off'); $('btnMagnet').title = 'Magnet — ' + (magnet === 'off' ? 'off' : magnet + ' (snaps to OHLC)') + '. Hold Ctrl to invert while placing / dragging'; $('magWeak').classList.toggle('sel', magnetMode === 'weak'); $('magStrong').classList.toggle('sel', magnetMode === 'strong'); $('magInd').checked = magnetInd; };
@@ -4453,7 +4697,7 @@ function wire() {
   $('btnHideTrades').onclick = () => setShowTrades(!showTrades);
   $('btnHideTradesTop').onclick = () => setShowTrades(!showTrades);
   setShowTrades(showTrades);
-  $('tradesTable').addEventListener('click', (e) => { const b = e.target.closest('.trade-del'); if (b) deleteTrade(+b.dataset.ti); });
+  $('tradesTable').addEventListener('click', (e) => { const g = e.target.closest('.trade-go'); if (g) return rewindToTrade(trades[+g.dataset.ti]); const b = e.target.closest('.trade-del'); if (b) deleteTrade(+b.dataset.ti); });
 
   document.addEventListener('change', (e) => {   // NT: after picking a timeframe / toggling a box, keys go back to the chart (B/S/F2/Space would otherwise stay dead until a chart click)
     const t = e.target;
@@ -4511,6 +4755,7 @@ const HELP_KEYS = [
   ['Orders', [['B', 'Buy market'], ['S', 'Sell market'], ['F', 'Buy stop above the bar'], ['J', 'Sell stop below the bar'], ['X', 'Flatten']]],
   ['Drawings', [['Esc', 'Drop tool / deselect'], ['Del|Middle-click', 'Delete selected drawing'], ['Shift+Del', 'Clear all drawings'], ['Ctrl+Z|Ctrl+Y', 'Undo / redo'], ['Ctrl+C|Ctrl+V', 'Copy / paste selection'], ['Arrows', 'Nudge selection: bar / tick'], ['Ctrl+Alt+H', 'Hide / show all drawings'], ['Right-click (placing)', 'Cancel the drawing']]],
   ['Drawing tools', [['Alt+T|F2', 'Trend line'], ['Ctrl+2|Alt+2', 'Trend channel (3 clicks)'], ['Alt+H', 'Horizontal line'], ['Alt+J', 'Horizontal ray'], ['Alt+V', 'Vertical line'], ['Alt+C', 'Cross line'], ['Alt+F', 'Fib retracement'], ['Shift+Alt+R', 'Rectangle']]],
+  ['Text', [['Double-click', 'Edit a text in place'], ['Enter', 'New line'], ['Esc|Ctrl+Enter', 'Finish typing (or click outside)']]],
   ['Editing', [['Ctrl+Click', 'Multi-select'], ['Ctrl+Drag', 'Clone a drawing'], ['Shift+Drag', 'Move along one axis only'], ['Shift+Click', '2nd point: 45° line / square box'], ['Ctrl+Click (tool)', 'Invert magnet while placing']]],
 ];
 const HELP_TOUCH = ['Touch', [['Tap ▶', 'Play / pause'], ['Tap ›', 'Next bar'], ['Drag chart', 'Pan'], ['Pinch', 'Zoom'], ['Drag seam', 'Resize panels'], ['Drag card', 'Move HUD / quiz card']]];
@@ -4529,7 +4774,9 @@ function switchTab(t) { $('tabTrades').classList.toggle('active', t); $('tabDash
 window.__rt = { state: () => ({ tf, idx, baseIdx, bars: bars.length, base: baseBars.length, pos: position && { ...position }, orders: orders.map(o => ({ ...o })), entryOrder }), bar: (i) => bars[i], sub: (i) => baseBars[i], agg: (m) => aggregate(baseBars, m), dresize: (w, h) => chart.resize(w, h, true), sc: sizeChart, chartOpts: () => chart.options(), priceToY: (p) => candle.priceToCoordinate(p), coordToPrice: (y) => candle.coordinateToPrice(y), chartRect: () => $('chart').getBoundingClientRect(), setTool: (t) => setTool(t), getTool: () => tool, placeAnn: (t, time) => placeAnnotation(t, time), annCount: () => annotations.length, ripster: () => ({ on: ripsterOn, clouds: ripsterData.length }), drawCount: () => drawings.length, addDraw: (t, time, price) => handleDrawClick(t, time, price), rthOpenET: (i) => etMinutes(baseBars[rthOpenIdx(sessions[i])].time), nextDay, prevDay, curSession: () => currentSessionIdx(),
   instr: () => ({ ...INSTR, TICK }),
   handles: () => drawingHandles().map(h => ({ horiz: !!h.horiz, hx: h.hx, hy: h.hy })),
-  drawingsList: () => drawings.map(d => ({ type: d.type, p1: d.p1 && { ...d.p1 }, p2: d.p2 && { ...d.p2 }, p3: d.p3 && { ...d.p3 }, levels: d.levels })),
+  drawingsList: () => drawings.map(d => ({ type: d.type, p1: d.p1 && { ...d.p1 }, p2: d.p2 && { ...d.p2 }, p3: d.p3 && { ...d.p3 }, levels: d.levels, text: d.text })),
+  textRect: (i) => { const d = drawings[i], r = d && d.type === 'text' ? textRect(d) : null; return r && { x: r.x, y: r.y, w: r.w, h: r.h }; },
+  textEditing: () => { const el = $('txtEditor'); return txtEd && el ? { id: txtEd.id, isNew: txtEd.isNew, value: el.value, focused: document.activeElement === el, rect: el.getBoundingClientRect().toJSON() } : null; },
   editAt: (x, y, nx, ny) => { const h = nearestHandle(x, y); if (!h) return null; const p = candle.coordinateToPrice(ny); if (p == null) return { noprice: true }; snapshot(); h.apply(h.horiz ? null : xToTime(nx), rnd(p)); saveJSON('rt_drawings', drawings); repaintOverlays(); return { moved: true }; },
   selType: () => selDrawing && selDrawing.type,
   setSel: (i) => { selectDrawing(drawings[i] || null, false); repaintOverlays(); return selDrawing && selDrawing.type; },

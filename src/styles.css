@@ -348,6 +348,13 @@ td.neg{color:var(--neg)}
 .trade-del{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;padding:0;border:none;background:transparent;color:var(--dim);cursor:pointer;opacity:.55}
 .trade-del:hover{background:rgba(255,0,0,.16);color:var(--neg);opacity:1}
 .trade-del .material-symbols-outlined{font-size:16px}
+.trade-acts{white-space:nowrap}
+.trade-go{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;padding:0;border:none;background:transparent;color:var(--dim);cursor:pointer}
+.trade-go:hover{background:var(--panel2);color:var(--brand)}
+.trade-go .material-symbols-outlined{font-size:17px}
+.dd-go{display:inline-flex;align-items:center;gap:3px;height:24px;padding:0 8px 0 5px;border:1px solid var(--line);background:var(--panel);color:var(--txt);font:inherit;font-size:12px;font-weight:500;cursor:pointer}
+.dd-go:hover{border-color:var(--brand);color:var(--brand)}
+.dd-go .material-symbols-outlined{font-size:16px}
 
 /* ---- dashboard ---------------------------------------------------------- */
 .todaypnl{
@@ -450,10 +457,10 @@ button.pc-day{font:inherit;text-align:left;color:var(--txt);align-items:stretch}
 .log-load{display:inline-flex;align-items:center;gap:4px;padding:8px 12px;border:1px solid var(--line);background:var(--panel);color:var(--txt);cursor:pointer;font-size:12px;font-weight:600}
 .log-load:hover{background:var(--hover);border-color:var(--line-hi)}
 .log-load .material-symbols-outlined{font-size:16px}
-.log-rename,.log-del{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:none;background:transparent;color:var(--dim);cursor:pointer}
-.log-rename:hover{background:var(--panel);color:var(--txt)}
+.log-rename,.log-export,.log-del{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:none;background:transparent;color:var(--dim);cursor:pointer}
+.log-rename:hover,.log-export:hover{background:var(--panel);color:var(--txt)}
 .log-del:hover{background:rgba(255,0,0,.16);color:var(--neg)}
-.log-rename .material-symbols-outlined,.log-del .material-symbols-outlined{font-size:18px}
+.log-rename .material-symbols-outlined,.log-export .material-symbols-outlined,.log-del .material-symbols-outlined{font-size:18px}
 .log-empty{color:var(--dim);font-size:12px;text-align:center;padding:24px 8px}
 
 /* shared pnl helpers (used outside #posBox too) */
@@ -692,6 +699,20 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 /* ===================== Floating drawing toolbar + Settings panel (TV_DRAWING_GAP G13 / G17 / G41 / G42) ===================== */
 .drw-tb{ position:fixed; z-index:150; display:flex; align-items:center; gap:4px; padding:4px 4px; background:var(--bg); border:1px solid var(--line); }
 .drw-tb[hidden]{ display:none; }
+.drw-tb select[hidden]{ display:none; }
+/* Text tool: inline editor laid exactly over the canvas text box (font / padding / line-height set from JS) */
+.txt-ed{ position:fixed; z-index:140; margin:0; border:0; border-radius:0; outline:none; background:transparent; color:transparent; resize:none; overflow:hidden; white-space:pre; box-sizing:border-box; box-shadow:none; }
+.txt-ed[hidden]{ display:none; }
+.txt-ed::placeholder{ color:var(--txt-c, #0288D1); opacity:.45; }
+.txt-ed::selection{ background:rgba(100,149,237,.35); color:transparent; }   /* the canvas paints the glyphs; the textarea only carries caret, selection and IME */
+.ds-row.ds-col{ flex-direction:column; align-items:stretch; gap:4px; cursor:default; }
+.ds-col textarea{ width:100%; min-height:56px; resize:vertical; font:inherit; padding:4px 6px; box-sizing:border-box; }
+.ds-inline{ gap:16px; cursor:default; }
+.ds-inline > .ds-row, .ds-pair > .ds-row{ padding:0; }
+.ds-row.ds-pair{ justify-content:space-between; cursor:default; }
+.ds-ctl{ display:inline-flex; align-items:center; gap:6px; }
+.ds-ctl input[type=color]{ width:40px; height:26px; padding:1px 2px; }
+.ds-ctl select{ padding:4px 24px 4px 8px; font-size:12px; }   /* right padding = room for the chevron */
 .drw-tb input[type=color]{ width:26px; height:24px; padding:1px 2px; border:1px solid var(--line); background:var(--panel2); cursor:pointer; }
 .drw-tb select{ height:24px; min-width:64px; padding:1px 16px 1px 4px; font-size:11px; }
 .drw-tb .dt-btn{ width:26px; height:24px; padding:0; display:inline-flex; align-items:center; justify-content:center; background:transparent; border:1px solid transparent; color:var(--dim); }
@@ -1226,3 +1247,8 @@ input, select, button{ -webkit-tap-highlight-color:transparent; }
 #btnWade.on .material-symbols-outlined{ color:var(--on-brand); }
 #btnWade.none{ opacity:.45; }
 #btnWade.none .material-symbols-outlined{ color:var(--dim); }
+
+/* saved sessions dialog: header actions + what a session holds */
+.log-hacts{display:flex;align-items:center;gap:6px}
+.log-import{cursor:pointer}
+.log-at{color:var(--txt);font-weight:600}
