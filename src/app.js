@@ -3774,7 +3774,7 @@ function processSub(b, bi) {   // bi = index of this print, when the base IS pri
       if (!position) break;
       const tP = tg.price, thru = rnd(long ? tP + TP_THROUGH * TICK : tP - TP_THROUGH * TICK);   // a resting limit is filled only when price trades THROUGH it (target 7740.25 -> a 7740.50 print); a mere touch is not a fill
       const hit = long ? (b.open >= thru || b.high >= thru) : (b.open <= thru || b.low <= thru);
-      if (hit) { const raw = tickMode ? tP : long ? (b.open >= thru ? b.open : tP) : (b.open <= thru ? b.open : tP); orders = orders.filter(o => o !== tg); exitQty(tg.qty, raw, b.time, 'target'); }   // a target is a resting LIMIT: it fills at its own price (or the better gap open), never across the spread — crossing used the bid, which lags several ticks in a sweep (09/25 ES 13:01:21: target 7797.75 printed, bid still 7796.25 -> a +4t target booked as -2t)
+      if (hit) { const raw = tickMode ? tP : long ? (b.open > thru ? b.open : tP) : (b.open < thru ? b.open : tP); orders = orders.filter(o => o !== tg); exitQty(tg.qty, raw, b.time, 'target'); }   // a target is a resting LIMIT: it fills at its own price (or the better gap open), never across the spread — crossing used the bid, which lags several ticks in a sweep (09/25 ES 13:01:21: target 7797.75 printed, bid still 7796.25 -> a +4t target booked as -2t)
     }
   };
   if (stopFirst) { if (doStop()) return; doTargets(); }   // stop side reached first this sub-bar
@@ -4171,12 +4171,13 @@ function patsFitTall(p, r, h) {   // the player (video + clip editor) always fit
 function cpToggle(open = !cp.open) {
   const p = $('patsPanel'), P = $('clipPanel'); if (!P || (open && !patsCur)) return;
   if (open === cp.open) return;
+  const hadFocus = !open && P.contains(document.activeElement);   // closing from inside (Alt+C / Esc): focus moves to the scissors so Alt+C reopens it instead of reaching the chart's Cross tool
   const r0 = patsBox(p); cp.open = open; P.hidden = !open; $('clipToggle').classList.toggle('on', open); $('clipToggle').setAttribute('aria-expanded', String(open));
   const extra = P.offsetHeight || 0, h = r0.height + (open ? extra : -cp.panelH || 0);   // the player grows by the editor's height, the video keeps its size
   if (open) cp.panelH = extra;
   patsFitTall(p, r0, Math.max(160, h));
   if (open) { cpLoadVideo(); clearInterval(cp.timer); cp.timer = setInterval(() => { cpSync(); cpRenderTray(); }, 150); cpRender(); P.focus({ preventScroll: true }); }
-  else { clearInterval(cp.timer); cp.timer = null; cpStopPreview(); cpHideHover(); }
+  else { clearInterval(cp.timer); cp.timer = null; cpStopPreview(); cpHideHover(); if (hadFocus) $('clipToggle').focus({ preventScroll: true }); }
 }
 function cpDrag(e, onMove, onEnd) {   // timeline = seek; red box = move; handles = trim (the video follows, throttled)
   if (!cpDur() || e.button !== 0) return;
