@@ -3774,7 +3774,7 @@ function processSub(b, bi) {   // bi = index of this print, when the base IS pri
       if (!position) break;
       const tP = tg.price, thru = rnd(long ? tP + TP_THROUGH * TICK : tP - TP_THROUGH * TICK);   // a resting limit is filled only when price trades THROUGH it (target 7740.25 -> a 7740.50 print); a mere touch is not a fill
       const hit = long ? (b.open >= thru || b.high >= thru) : (b.open <= thru || b.low <= thru);
-      if (hit) { const raw = long ? (b.open >= thru ? b.open : tP) : (b.open <= thru ? b.open : tP); orders = orders.filter(o => o !== tg); exitQty(tg.qty, raw, b.time, 'target'); }   // a target is a resting LIMIT: it fills at its own price (or the better gap open), never across the spread — crossing used the bid, which lags several ticks in a sweep (09/25 ES 13:01:21: target 7797.75 printed, bid still 7796.25 -> a +4t target booked as -2t)
+      if (hit) { const raw = tickMode ? tP : long ? (b.open >= thru ? b.open : tP) : (b.open <= thru ? b.open : tP); orders = orders.filter(o => o !== tg); exitQty(tg.qty, raw, b.time, 'target'); }   // a target is a resting LIMIT: it fills at its own price (or the better gap open), never across the spread — crossing used the bid, which lags several ticks in a sweep (09/25 ES 13:01:21: target 7797.75 printed, bid still 7796.25 -> a +4t target booked as -2t)
     }
   };
   if (stopFirst) { if (doStop()) return; doTargets(); }   // stop side reached first this sub-bar
