@@ -1907,7 +1907,8 @@ function dropNoopSnapshot() {   // a drag that never moved (plain click), an unc
   undoStack.pop(); if (top.evicted) undoStack.unshift(top.evicted); if (top.redo) redoStack.push(...top.redo);
 }
 function restoreSnapshot(s) {   // hideCtx: a context menu opened before the undo would act on detached drawings
-  dropTextEditor(); hideCtx(); drawings = migrateDrawings(s.drawings); annotations = s.annotations; clearSelection(); hoverDrawing = null; dragBody = null; dragH = null; ctrlPress = null;
+  dropTextEditor(); hideCtx(); if (annDrag) { annDrag = null; chart.applyOptions({ handleScroll: true, handleScale: true }); }   // Ctrl+Z mid-drag: the restored arrows are not the dragged one
+  drawings = migrateDrawings(s.drawings); annotations = s.annotations; clearSelection(); hoverDrawing = null; dragBody = null; dragH = null; ctrlPress = null;
   saveJSON('rt_drawings', drawings); saveJSON('rt_annotations', annotations); if ($('drawSettings').classList.contains('open')) closeDrawSettings(); repaintOverlays(); refreshMarkers(true);
 }
 function undo() { endTextEdit(); if (!undoStack.length) return toast('Nothing to undo'); const cur = { key: JSON.stringify(drawings), drawings: JSON.parse(JSON.stringify(drawings)), annotations: JSON.parse(JSON.stringify(annotations)) }; redoStack.push(cur); restoreSnapshot(undoStack.pop()); toast('Undo'); }
@@ -1947,6 +1948,7 @@ function nudgeSelection(key) {   // G23: arrow keys move the selection one bar (
   dropNoopSnapshot(); saveJSON('rt_drawings', drawings); repaintOverlays();
 }
 let annotations = loadJSON('rt_annotations', []);   // {baseTime, position, color, shape, text}
+let annDrag = null;   // dragging a placed arrow to another bar: {i, x0, y0, t0, k0, k, moved}; trade fill arrows are records (click deletes, no drag)
 let drawings = loadJSON('rt_drawings', []);         // {type:'hl'|'tl'|'ray'|'box'|'fib'|'measure'|'rr'|'hray'|'vline'|'cross'|'channel', p1:{t,p}, p2?:{t,p}, p3?:{t,p}, levels?:number[], color, style:{color,width,dash}, locked, hidden, z, visibleTFs, id}
 // rt_drawings v0 -> v1 (TV_DRAWING_GAP §1.3): add style/locked/hidden/z/visibleTFs/id; keep color + p1/p2/stop/target untouched so older builds still read the file
 let _drwSeq = 0;
@@ -1969,15 +1971,34 @@ function clearAnnotations() { if (!annotations.length && !markers.length) return
 // click directly on a placed arrow (annotation OR trade marker) to delete just that one — TradingView-style
 function markerXY(m) {
   const t = mBucket(m.baseTime), x = chart.timeScale().timeToCoordinate(t); if (x == null) return null;
-  let b = null; for (let k = Math.min(idx, bars.length - 1); k >= 0; k--) { if (bars[k].time <= t) { b = bars[k]; break; } }
-  if (!b) b = bars[Math.min(idx, bars.length - 1)]; if (!b) return null;
+  let lo = 0, hi = Math.min(idx, bars.length - 1), k = -1; while (lo <= hi) { const mid = (lo + hi) >> 1; if (bars[mid].time <= t) { k = mid; lo = mid + 1; } else hi = mid - 1; }   // last revealed bar at or before t (binary: the hover test runs per mouse move)
+  const b = bars[k >= 0 ? k : Math.min(idx, bars.length - 1)]; if (!b) return null;
   const yEdge = candle.priceToCoordinate(m.position === 'belowBar' ? b.low : b.high); if (yEdge == null) return null;
   return { x, y: yEdge + (m.position === 'belowBar' ? 14 : -14) };
 }
-function markerAt(px, py) {
-  const all = annotations.map((a, i) => ({ a, i, src: 'ann' })).concat(markers.map((a, i) => ({ a, i, src: 'mk' })));
-  for (let j = all.length - 1; j >= 0; j--) { const p = markerXY(all[j].a); if (p && Math.abs(p.x - px) <= 13 && Math.abs(p.y - py) <= 16) return all[j]; }
-  return null;
+// Lightweight Charts stacks markers of one bar + side outward from the bar, in the order refreshMarkers hands them over (fills, then placed
+// arrows). Glyph height and gap grow with bar spacing; a text label sits outside its glyph. Measured on v4 (headless pixel probe, 2026-10-05):
+// spacing <=12: first glyph centre 7.5 px off the bar, step 13; 20: 12 / 21; >=30: 17 / 31; a text label adds 14 px.
+const MK_FIT = [[12, 7.5, 13], [20, 12, 21], [30, 17, 31]];   // [bar spacing, first glyph centre off the bar, step to the next glyph]
+function markerStackY(edge, dir, k, texts) {   // centre of the k-th glyph of a stack (texts[j]: glyph j carries a label)
+  const bs = chart.timeScale().options().barSpacing, lo = bs <= 20 ? MK_FIT[0] : MK_FIT[1], hi = bs <= 20 ? MK_FIT[1] : MK_FIT[2], t = Math.max(0, Math.min(1, (bs - lo[0]) / (hi[0] - lo[0])));
+  const first = lo[1] + (hi[1] - lo[1]) * t, step = lo[2] + (hi[2] - lo[2]) * t;
+  let off = first; for (let j = 0; j < k; j++) off += step + (texts[j] ? 14 : 0);
+  return edge + dir * off;
+}
+function markerAt(px, py) {   // only arrows that are on screen: placed ones vanish with Hide > Drawings, fills with Hide trades
+  const all = (showTrades ? markers.map((a, i) => ({ a, i, src: 'mk' })) : []).concat(hideFlags.drawings ? [] : annotations.map((a, i) => ({ a, i, src: 'ann' })));   // the order refreshMarkers stacks them in
+  let best = null, bx = Infinity;
+  for (const h of all) { const p = markerXY(h.a); if (!p) continue; const dx = Math.abs(p.x - px); if (dx <= 13 && dx < bx - 0.5) { bx = dx; best = p.x; } }   // the bar column nearest the pointer
+  if (best == null) return null;
+  const col = all.filter(h => { const p = markerXY(h.a); return p && Math.abs(p.x - best) < 0.5; });
+  let hit = null, hd = Infinity;
+  for (const side of ['aboveBar', 'belowBar']) {
+    const st = col.filter(h => h.a.position === side); if (!st.length) continue;
+    const p0 = markerXY(st[0].a), dir = side === 'belowBar' ? 1 : -1, edge = p0.y - dir * 14, texts = st.map(h => !!h.a.text);
+    st.forEach((h, k) => { const cy = markerStackY(edge, dir, k, texts), dy = Math.abs(cy - py); if (dy <= 16 && dy < hd) { hd = dy; hit = h; } });
+  }
+  return hit;
 }
 function removeMarker(hit) {
   if (hit.src === 'ann') { snapshot(); annotations.splice(hit.i, 1); saveJSON('rt_annotations', annotations); } else markers.splice(hit.i, 1);
@@ -2149,7 +2170,12 @@ $('chart').addEventListener('pointerdown', e => {
   if (e.button !== 0 || tool) return;             // left-button only; while a tool is armed, clicks place points
   const rect = dragRect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
   const _ocx = orderCancelAt(x, y); if (_ocx != null) { cancelOrder(_ocx); e.preventDefault(); return; }   // ✕ on an order tag → cancel that order
-  const _mk = markerAt(x, y); if (_mk) { removeMarker(_mk); e.preventDefault(); return; }   // click an arrow marker → delete just that one
+  const _mk = markerAt(x, y);
+  if (_mk) {   // a placed arrow: press + move drags it to another bar (Lock all blocks that); a plain click deletes it, as before. Trade fill arrows: click deletes.
+    e.preventDefault();
+    if (_mk.src === 'ann') { const t0 = _mk.a.baseTime, k0 = barIdxAtTime(mBucket(t0)); annDrag = { i: _mk.i, x0: x, y0: y, t0, k0, k: k0, moved: false, locked: drawingsLocked }; chart.applyOptions({ handleScroll: false, handleScale: false }); return; }   // locked: no move, a click still deletes on release
+    removeMarker(_mk); return;
+  }
   const h = (e.ctrlKey || e.metaKey) ? null : nearestHandle(x, y);   // 1) drawing anchor (endpoint) — most specific; also selects it (lock blocks the drag, not the select — G43). Ctrl/Cmd skips it: hl/vline anchors span the whole line, so the clone / multiselect branch below (G18 / G19) must own every Ctrl press; Ctrl pressed after mousedown still inverts the magnet mid-drag (G9)
   if (h) { selectDrawing(h.d, false); if (canDrag(h.d)) { snapshot(); dragH = h; chart.applyOptions({ handleScroll: false, handleScale: false }); } repaintOverlays(); e.preventDefault(); return; }   // G21: snapshot at pointerdown — p1/p2 are rewritten in place during pointermove
   const hd = drawingAt(x, y);                     // 2) drawing body — select + move the whole selection
@@ -2165,6 +2191,17 @@ $('chart').addEventListener('pointerdown', e => {
 });
 window.addEventListener('pointermove', e => {
   const rect = dragRect || $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
+  if (annDrag) {   // arrow follows the bar under the pointer, never past the replay edge (an unrevealed bar has no marker slot)
+    if (!annDrag.moved && Math.hypot(x - annDrag.x0, y - annDrag.y0) <= 3) return;
+    const a = annotations[annDrag.i]; if (!a) { annDrag = null; chart.applyOptions({ handleScroll: true, handleScale: true }); return; }
+    if (annDrag.locked) { annDrag.moved = true; return; }   // Lock all: a press that moves does nothing (not a delete either)
+    if (!annDrag.moved) { annDrag.moved = true; snapshot(); }
+    const lg = chart.timeScale().coordinateToLogical(x); let k = lg == null ? idx : Math.round(lg) + seriesFrom;
+    k = Math.max(Math.max(0, seriesFrom), Math.min(idx, bars.length - 1, k));
+    if (k !== annDrag.k) { annDrag.k = k; a.baseTime = k === annDrag.k0 ? annDrag.t0 : bars[k].time; refreshMarkers(true); }
+    $('chart').style.cursor = 'grabbing';
+    return;
+  }
   if (dragH) {                                    // editing a drawing endpoint: free time + price, magnet (Ctrl/Cmd inverts it, G9) decides the snap
     const p = candle.coordinateToPrice(y), ft = xToFreeTime(x);
     if (p != null && ft != null) {
@@ -2196,8 +2233,19 @@ window.addEventListener('pointermove', e => {
   const p = candle.coordinateToPrice(y);
   if (p != null) { drag.set(rnd(p)); drawLines(); renderLive(); }
 });
+window.addEventListener('pointercancel', () => {   // the OS took the pointer mid-drag (touch scroll, alt-tab): put the arrow back, no history
+  if (!annDrag) return; const d = annDrag; annDrag = null; chart.applyOptions({ handleScroll: true, handleScale: true }); $('chart').style.cursor = '';
+  const a = annotations[d.i]; if (d.moved && !d.locked && a) { a.baseTime = d.t0; refreshMarkers(true); dropNoopSnapshot(); }
+});
 window.addEventListener('pointerup', () => {
   vpan = null; dragRect = null;
+  if (annDrag) {
+    const d = annDrag; annDrag = null; chart.applyOptions({ handleScroll: true, handleScale: true }); $('chart').style.cursor = '';
+    if (!d.moved) { if (annotations[d.i]) removeMarker({ a: annotations[d.i], i: d.i, src: 'ann' }); return; }   // a plain click: delete, as before
+    if (d.locked) return;
+    if (d.k === d.k0) { dropNoopSnapshot(); return; }   // dropped where it started: no history (drawings are unchanged, so the snapshot is a no-op)
+    saveJSON('rt_annotations', annotations); return;
+  }
   if (dragH) { dragH = null; dropNoopSnapshot(); saveJSON('rt_drawings', drawings); chart.applyOptions({ handleScroll: true, handleScale: true }); return; }
   if (ctrlPress) {                                // release without motion = Ctrl+click multiselect toggle (G19)
     const cp = ctrlPress; ctrlPress = null; chart.applyOptions({ handleScroll: true, handleScale: true });
@@ -2219,6 +2267,7 @@ $('chart').addEventListener('pointermove', e => {
     return;
   }
   const rect = $('chart').getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
+  if (orderCancelAt(x, y) == null) { const mk = markerAt(x, y); if (mk) { if (hoverDrawing) { hoverDrawing = null; repaintOverlays(); } $('chart').style.cursor = mk.src === 'ann' && !drawingsLocked ? 'grab' : 'pointer'; return; } }   // an arrow wins a press, so it wins the hover too
   const hh = nearestHandle(x, y), hv = hh ? hh.d : drawingAt(x, y);
   if (hv !== hoverDrawing) { hoverDrawing = hv; repaintOverlays(); }   // G12: anchors appear on hover
   if (hv) { $('chart').style.cursor = canDrag(hv) ? (hh ? 'pointer' : 'move') : 'default'; return; }   // hovering a drawing/anchor
@@ -4762,7 +4811,7 @@ const HELP_KEYS = [
   ['Drawings', [['Esc', 'Drop tool / deselect'], ['Del|Middle-click', 'Delete selected drawing'], ['Shift+Del', 'Clear all drawings'], ['Ctrl+Z|Ctrl+Y', 'Undo / redo'], ['Ctrl+C|Ctrl+V', 'Copy / paste selection'], ['Arrows', 'Nudge selection: bar / tick'], ['Ctrl+Alt+H', 'Hide / show all drawings'], ['Right-click (placing)', 'Cancel the drawing']]],
   ['Drawing tools', [['Alt+T|F2', 'Trend line'], ['Ctrl+2|Alt+2', 'Trend channel (3 clicks)'], ['Alt+H', 'Horizontal line'], ['Alt+J', 'Horizontal ray'], ['Alt+V', 'Vertical line'], ['Alt+C', 'Cross line'], ['Alt+F', 'Fib retracement'], ['Shift+Alt+R', 'Rectangle']]],
   ['Text', [['Double-click', 'Edit a text in place'], ['Enter', 'New line'], ['Esc|Ctrl+Enter', 'Finish typing (or click outside)']]],
-  ['Editing', [['Ctrl+Click', 'Multi-select'], ['Ctrl+Drag', 'Clone a drawing'], ['Shift+Drag', 'Move along one axis only'], ['Shift+Click', '2nd point: 45° line / square box'], ['Ctrl+Click (tool)', 'Invert magnet while placing']]],
+  ['Editing', [['Drag an arrow', 'Move it to another bar (click deletes it)'], ['Ctrl+Click', 'Multi-select'], ['Ctrl+Drag', 'Clone a drawing'], ['Shift+Drag', 'Move along one axis only'], ['Shift+Click', '2nd point: 45° line / square box'], ['Ctrl+Click (tool)', 'Invert magnet while placing']]],
 ];
 const HELP_TOUCH = ['Touch', [['Tap ▶', 'Play / pause'], ['Tap ›', 'Next bar'], ['Drag chart', 'Pan'], ['Pinch', 'Zoom'], ['Drag seam', 'Resize panels'], ['Drag card', 'Move HUD / quiz card']]];
 function toggleHelp(on) {
