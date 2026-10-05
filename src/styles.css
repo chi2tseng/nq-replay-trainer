@@ -82,7 +82,7 @@ input[type=checkbox]{
      driven by CSS vars that JS updates on gutter drag (single source of truth).
      Toolbar row is `auto`, not a fixed px, because it wraps to 1-3 rows depending
      on viewport width (see the toolbar tier media queries below). */
-  grid-template-rows:auto minmax(0,1fr) 6px var(--bottom-h,252px);
+  grid-template-rows:auto minmax(0,1fr) 1px var(--bottom-h,252px);   /* 1px seam: the gutter's grab area overhangs it (::after), no gray band */
   height:100vh;min-height:560px;
   background:var(--bg);
   outline:1px solid var(--frame);
@@ -119,7 +119,6 @@ input[type=checkbox]{
    the toolbar's row breaks deterministic across a tier's whole width range. */
 .tb-break{flex-basis:100%;width:0;height:0;padding:0;margin:0;border:0;display:none}
 
-#symbol{font-weight:600;font-size:12px;color:var(--txt)}
 
 /* transport: play = neutral face; orange only while playing (.on set in play()/pause()) */
 #btnPlay,#btnPlay.play{min-width:42px;font-size:14px}
@@ -171,7 +170,7 @@ input[type=checkbox]{
 /* cols: chart | gutterCol | side.  minmax(0,1fr) + min-width:0 let the chart
    column actually SHRINK (a default grid track won't go below its content). */
 /* cols: left drawing toolbar | chart | gutterCol | side */
-#main{display:grid;grid-template-columns:46px minmax(0,1fr) 6px var(--side-w,320px);min-height:0}
+#main{display:grid;grid-template-columns:46px minmax(0,1fr) 1px var(--side-w,320px);min-height:0}
 #main>#chartwrap{min-width:0;min-height:0}
 #main>#side{min-width:0}
 #chartwrap{position:relative;border-right:1px solid var(--line);background:var(--bg)}
@@ -179,10 +178,11 @@ input[type=checkbox]{
 
 #side{
   overflow:auto;
-  padding:12px;
-  display:flex;flex-direction:column;gap:12px;
-  background:var(--bg);
+  padding:0;
+  display:flex;flex-direction:column;gap:0;
+  background:var(--panel);   /* flat: cards sit edge to edge, split by hairlines (no gray gutters, user 2026-10-05) */
 }
+#side > .card{ border:none; border-bottom:1px solid var(--line); }
 
 /* ---- cards -------------------------------------------------------------- */
 .card{
@@ -560,7 +560,7 @@ button.pc-day{font:inherit;text-align:left;color:var(--txt);align-items:stretch}
 .gutter.col::before{top:0;bottom:0;left:50%;width:1px;transform:translateX(-50%)}
 .gutter.col::after{top:0;bottom:0;left:-5px;right:-5px}
 /* horizontal gutter (between #main and #bottom): drag bottom-panel height */
-.gutter.row{cursor:row-resize}
+.gutter.row{cursor:row-resize;margin:0}   /* margin:0 — the order panel's generic .row{margin} must not shove the seam out of its 1px track */
 .gutter.row::before{left:0;right:0;top:50%;height:1px;transform:translateY(-50%)}
 .gutter.row::after{left:0;right:0;top:-5px;bottom:-5px}
 /* hover / active highlight in brand amber */
@@ -607,9 +607,10 @@ body.resizing-y,body.resizing-y *{cursor:row-resize!important}
 #chartLegend .up{color:var(--pos)}
 #chartLegend .down{color:var(--neg)}
 
+/* the indicator rows start where the OHLCV row's text starts (12px): left 3 + row border 1 + row padding 8 */
 /* ===== On-chart indicator legend (TradingView-style: stacked rows top-left) ===== */
 #indLegend{
-  position:absolute; left:10px; top:32px; z-index:6;   /* sits just under the OHLCV legend */
+  position:absolute; left:3px; top:32px; z-index:6;   /* sits just under the OHLCV legend */
   display:flex; flex-direction:column; align-items:flex-start; gap:0;
   max-width:calc(100% - 70px);
   font-size:12px; line-height:1.3;
@@ -989,7 +990,6 @@ button.bs-stop.buy:hover:not(:disabled), button.bs-stop.sell:hover:not(:disabled
 
 /* Short screens (laptops): reclaim vertical room in the order panel so BUY/SELL stay above the fold */
 @media (max-height: 900px){
-  #side{ padding:8px; gap:8px; }
   .ord-grid{ gap:8px; margin:8px 0; }
   .seg{ margin:8px 0; }
   .row{ margin:4px 0; }
@@ -1068,7 +1068,6 @@ button.bs-stop.buy:hover:not(:disabled), button.bs-stop.sell:hover:not(:disabled
 /* 720p/768p laptops: smaller (still uniform) control tokens so the POSITION card's live P&L sits on-panel */
 @media (max-height: 800px){
   :root{ --ctl:32px; --ctl-lg:36px; --ctl-xl:44px; }
-  #side{ padding:8px; gap:8px; }
   .card{ padding:8px; }
   .card-h{ margin-bottom:8px; }
   .ord-grid{ gap:4px; margin:4px 0; }
@@ -1122,7 +1121,6 @@ button.bs-stop.buy:hover:not(:disabled), button.bs-stop.sell:hover:not(:disabled
 /* ---- T2b (<=1499): STILL one row — ladder step 9 (last resort) so 1366..1499 laptops keep the single row ---- */
 @media (max-width:1499px){
   #toolbar{ padding-left:6px; padding-right:6px; }
-  #symbol{ display:none; }                               /* "NQ" duplicates the #dataSelect value (labels are NQ / ES / MNQ / MES) */
   #btnMtf.tb-btn, #btnIndicators.tb-btn, #btnPats.tb-btn, #btnWade.tb-btn{ font-size:0; gap:0; }         /* icon + title only; the icon keeps its own font-size */
   #btnMtf .material-symbols-outlined, #btnPats .material-symbols-outlined, #btnWade .material-symbols-outlined{ font-size:18px; }
   #startSlider{ --sl-w:clamp(80px, calc(80px + (100vw - 1366px) * .5), 240px); } /* 80px at 1366 -> 146px at 1499 */

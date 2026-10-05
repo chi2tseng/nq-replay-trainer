@@ -3867,7 +3867,13 @@ function patsSave() { const p = $('patsPanel'); if (p.hidden) return; const r = 
   const rsEnd = () => { if (!rs) return; rs = null; p.classList.remove('resizing'); patsSave(); };
   grip.addEventListener('pointerup', rsEnd); grip.addEventListener('pointercancel', rsEnd);
 })();
-function renderAll() { renderLive(); renderTrades(); renderDash(); }
+function renderAll() { renderLive(); renderTrades(); renderDash(); syncPickers(); }
+function syncPickers() {   // the toolbar pickers always name what is actually loaded: a reload, a stale tab or a failed load must never leave "ES" / "2000 ticks" over NQ 2m bars
+  const i = DATASETS.findIndex(d => !d.hidden && d.instr && d.instr.symbol === INSTR.symbol), ds = $('dataSelect');
+  if (i >= 0) { dataIdx = i; if (ds && ds.value !== String(i)) ds.value = String(i); }
+  const tv = tfTicks ? 't' + tfTicks : String(tf), ts = $('tfSelect');
+  if (ts && ts.value !== tv && [...ts.options].some(o => o.value === tv)) ts.value = tv;
+}
 function renderLive() {
   patsSync();
   { const ck = $('clock'), full = baseBars.length ? tFmt(curBaseT()) : '', tOnly = full.replace(/^\d\d\/\d\d\s*/, '');   // blind modes: time only, date hidden; <=1799 the CSS hides .ck-d too

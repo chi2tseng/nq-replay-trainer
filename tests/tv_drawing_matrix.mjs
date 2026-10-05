@@ -134,8 +134,11 @@ try {
   // ================= G5 price free (magnet off) =================
   await clear(); await setMagnet('off');
   {
-    let y = Math.round(geo.H * 0.5), p = await page.evaluate((y) => candle.coordinateToPrice(y), y);
-    for (let i = 0; i < 40 && Math.abs(p / 0.25 - Math.round(p / 0.25)) < 0.05; i++) { y += 1; p = await page.evaluate((y) => candle.coordinateToPrice(y), y); }
+    // the real click lands up to ±0.5 px off y (the chart's page top is fractional), so pick a y whose whole ±0.6 px band is clearly off the tick grid
+    const offAt = (y) => page.evaluate((y) => [-0.6, -0.3, 0, 0.3, 0.6].every(d => { const q = candle.coordinateToPrice(y + d) / 0.25; return Math.abs(q - Math.round(q)) > 0.1; }), y);
+    let y = Math.round(geo.H * 0.5);
+    for (let i = 0; i < 60 && !(await offAt(y)); i++) y += 1;
+    const p = await page.evaluate((y) => candle.coordinateToPrice(y), y);
     await clickTool('#drwHL'); await clickChart(await barX(k), y);
     const r = await page.evaluate(() => ({ n: drawings.length, p: drawings[0] && drawings[0].p1.p, tool }));
     const offTick = r.p != null && Math.abs(r.p / 0.25 - Math.round(r.p / 0.25)) > 0.01;
