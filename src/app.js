@@ -201,7 +201,7 @@ if (loadJSON('rt_atm_v', 0) < 7) {   // openStop boolean -> stopSrc ('open' | 'e
   for (const k in atm) { const a = atm[k]; if (a.struct && !a.stopSrc) { a.stopSrc = a.openStop ? 'open' : 'extreme'; delete a.openStop; } }
   saveJSON('rt_atm', atm); saveJSON('rt_atm_v', 7);
 }
-let activeAtm = Object.keys(atm)[0];
+let activeAtm = (k => (typeof k === 'string' && atm[k]) ? k : Object.keys(atm)[0])((loadJSON('rt_ui', null) || {}).atm);   // the template picked last time (rt_ui), else the first
 let riskOn = loadJSON('rt_risk_on', false), riskUsd = loadJSON('rt_risk_usd', 200);   // fixed-$ position sizing: contracts derived from $risk ÷ stop
 
 function defaultAtms() {
@@ -2645,21 +2645,43 @@ const mBucket = (ts) => {
 
 // ---------- init ----------
 init();
-async function init() {   // a reload comes back to the last symbol, moment and timeframe (rt_last_pos); first visit / unusable record: the default dataset
+async function init() {   // a reload comes back to the last symbol, moment and timeframe (rt_last_pos) and the order panel / tab / review player (rt_ui); first visit / unusable record: the default dataset
   buildDataSelect(); initLayout();
   const last = loadJSON('rt_last_pos', null), ds = last && DATASETS[last.ds];
-  if (ds && !ds.hidden && ds.instr && typeof last.t === 'number' && isFinite(last.t)) { try { if (await gotoMoment(ds.instr.symbol, last.t, last.tf)) return; } catch (e) {} }
-  if (!baseBars.length) await loadDataset(DATASETS[0]);
+  let ok = false;
+  if (ds && !ds.hidden && ds.instr && typeof last.t === 'number' && isFinite(last.t)) { try { ok = await gotoMoment(ds.instr.symbol, last.t, last.tf); } catch (e) {} }
+  if (!ok && !baseBars.length) await loadDataset(DATASETS[0]);
+  try { restoreUi(); } catch (e) {}
+}
+// ---- the order panel, side tab and review player as they were (rt_ui; the ATM template is read where activeAtm is declared) ----
+var patsResume = null;   // {id, t}: reopen the review video where it was (var: patsLoad may run before this line during start-up)
+function saveUi() {
+  const y = typeof ytp === 'function' ? ytp() : null, vt = y && typeof y.getCurrentTime === 'function' ? Math.floor(y.getCurrentTime() || 0) : null;
+  saveJSON('rt_ui', { atm: activeAtm, qty: Math.max(1, parseInt($('qty').value, 10) || 1), entry: $('entryType').value, tab: $('tabTrades').classList.contains('active') ? 'trades' : 'dash',
+    pats: patsOpen && !rndMode && !quizMode ? { src: revSrc, id: patsCur ? patsCur.id : null, t: vt, min: !!patsMin } : null });
+}
+function restoreUi() {
+  const u = loadJSON('rt_ui', null); if (!u || typeof u !== 'object') return;
+  if (Number.isFinite(u.qty) && u.qty >= 1) $('qty').value = Math.floor(u.qty);
+  if (/^(market|limit|stop)$/.test(u.entry)) { const b = document.querySelector(`#entrySeg .seg-btn[data-type="${u.entry}"]`); if (b) b.click(); }
+  if (u.tab === 'dash') switchTab(false);
+  const pv = u.pats;
+  if (pv && typeof pv === 'object' && REV_SRC[pv.src] && patsAllowed()) {
+    if (typeof pv.id === 'string' && Number.isFinite(pv.t) && pv.t > 0) patsResume = { id: pv.id, t: pv.t };
+    patsShow(curDayKey(), pv.src); if (pv.min) patsMinimize(true, true);
+  }
+  renderRiskReadout();
 }
 // ---- remember where the replay is (symbol, moment, timeframe) so a reload resumes there; the blind practice modes are never recorded ----
 function saveLastPos(force) {   // trailing: the state a second after the last change is the one kept; never mid-load (the old bars under the new symbol)
   if (!force) { if (!_lastPosTimer) _lastPosTimer = setTimeout(() => { _lastPosTimer = 0; saveLastPos(true); }, 1000); return; }
+  try { saveUi(); } catch (e) {}   // (order panel / player: kept in every mode)
   if (_dsBusy || rndMode || quizMode || !baseBars.length) return;
   const t = replayTime(); if (t == null) return;
   saveJSON('rt_last_pos', { ds: dataIdx, t, tf: tfTicks ? 't' + tfTicks : tf });
 }
-window.addEventListener('pagehide', () => saveLastPos(true));
-document.addEventListener('visibilitychange', () => { if (document.hidden) saveLastPos(true); });
+window.addEventListener('pagehide', () => { saveLastPos(true); saveUi(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { saveLastPos(true); saveUi(); } });
 
 function detectBaseTf(b) { let mn = Infinity; for (let i = 1; i < Math.min(b.length, 800); i++) { const dl = b[i].time - b[i - 1].time; if (dl > 0 && dl < mn) mn = dl; } return mn === Infinity ? 1 : Math.max(1 / 60, mn / 60); }  // floor 1s so 15s/30s bases detect correctly
 function buildTfOptions() { const bs = Math.round(BASE_TF * 60); TF_OPTIONS = [BASE_TF, ...STD_TF.filter(m => m > BASE_TF && Math.round(m * 60) % bs === 0)]; }   // only clean multiples of the base (so 20s never shows on a 15s base, etc.)
@@ -3912,7 +3934,8 @@ function patsLoad(v) {
   $('patsTitle').textContent = v ? `${revSrc === 'wade' ? 'Wade' : 'PATs'}: ${v.t}` : s.none;
   $('patsEmpty').textContent = s.none;
   $('patsEmpty').hidden = !!v; $('patsFrame').hidden = !v;
-  const src = v ? `https://www.youtube-nocookie.com/embed/${v.id}?rel=0&modestbranding=1&vq=hd1080&enablejsapi=1&origin=${encodeURIComponent(location.origin)}${v.at ? '&start=' + v.at : ''}` : 'about:blank';   // vq = quality hint only (YouTube picks by player size); at = where the matched chart appears; enablejsapi: the clip bar reads the clock
+  const at = v ? (patsResume && patsResume.id === v.id ? patsResume.t : v.at) : null; patsResume = null;   // a reload reopens the video where it was
+  const src = v ? `https://www.youtube-nocookie.com/embed/${v.id}?rel=0&modestbranding=1&vq=hd1080&enablejsapi=1&origin=${encodeURIComponent(location.origin)}${at ? '&start=' + at : ''}` : 'about:blank';   // vq = quality hint only (YouTube picks by player size); at = where the matched chart appears; enablejsapi: the clip bar reads the clock
   const changed = !v || !patsCur || patsCur.id !== v.id;
   patsCur = v ? { id: v.id, t: v.t, src: revSrc } : null;
   if ($('patsFrame').getAttribute('src') !== src) {
@@ -4271,7 +4294,7 @@ function cpWire() {
       const g = dg; dg = null; card.onpointermove = card.onpointerup = card.onpointercancel = null; cp.cancelDrag = null; cp.dragging = false;
       if (!g) return; if (g.ghost) cpGhostEnd(g.ghost);
       if (ev.type === 'pointercancel') return cpRenderTray();
-      if (!g.ghost) { const pw = chart.timeScale().width(), lx = drawX(bars[Math.min(idx, bars.length - 1)].time), w = 320, h = clipBoxH(w); placeClip(Math.max(w / 2 + 8, (lx == null ? pw : lx) - w / 2 - 24), h / 2 + 12, g.it); cp.msg = cp.err = ''; cpRender(); return; }   // a click: next to the last bar
+      if (!g.ghost) { const pw = chart.timeScale().width(), lx = drawX(bars[Math.min(idx, bars.length - 1)].time), w = 320, h = clipBoxH(w); placeClip(Math.max(w / 2 + 8, (lx == null ? pw : lx) - w / 2 - 24), h + 12, g.it); cp.msg = cp.err = ''; cpRender(); return; }   // a click: next to the last bar
       if (cpDropClip(ev, g.it)) { cp.msg = cp.err = ''; cpRender(); } else cpRenderTray();
     };
   });
@@ -4297,21 +4320,21 @@ function cpWire() {
   });
 }
 // ---------- clips on the chart ----------
-// A clip is a drawing {type:'clip', p1:{t,p} = the box's CENTRE, clip:{vid,a,b,title,src}, size:{w}} (sessions / undo carry it) shown as a
+// A clip is a drawing {type:'clip', p1:{t,p} = the box's BOTTOM-CENTRE (anchor:'bottom'; older ones without it: the centre), clip:{vid,a,b,title,src}, size:{w}} (sessions / undo carry it) shown as a
 // DOM box over the chart. The local server cuts it once with yt-clip into data/clips/<vid>_<a>_<b>.mp4 (that name is the cache); without
 // the server (GitHub Pages) the box plays that range straight from YouTube. Videos start paused.
 const CLIP_MAX = 600;   // seconds per clip (serve.py MAX_LEN)
 const clipTooLong = (a, b) => b - a > CLIP_MAX + 1e-6;   // (tenths of a second subtract with float noise: 600.0 s must pass)
 const validClip = (c) => !!c && typeof c.vid === 'string' && /^[\w-]{11}$/.test(c.vid) && isFinite(c.a) && isFinite(c.b) && +c.b > +c.a;
 const clipKey = (c) => `${c.vid}_${(+c.a).toFixed(1)}_${(+c.b).toFixed(1)}`;
-function placeClip(x, y, c) {   // x, y: chart pixels of the box's CENTRE (its anchor); c: {vid, a, b, title, src}
+function placeClip(x, y, c) {   // x, y: chart pixels of the box's BOTTOM-CENTRE (its anchor: the video's bottom edge marks the price); c: {vid, a, b, title, src}
   if (hideFlags.drawings) return toast('Drawings are hidden: show them to place a clip');
   if (!validClip(c)) return;
   { const w = 320, h = clipBoxH(w), W = chart.timeScale().width(), H = paneHeight();   // fully inside the pane, so its grip can be reached
-    x = Math.min(Math.max(x, w / 2), Math.max(w / 2, W - w / 2)); y = Math.min(Math.max(y, h / 2), Math.max(h / 2, H - h / 2)); }
+    x = Math.min(Math.max(x, w / 2), Math.max(w / 2, W - w / 2)); y = Math.min(Math.max(y, h), Math.max(h, H)); }
   const t = xToFreeTime(x), pr = candle.coordinateToPrice(y); if (t == null || pr == null) return;
   const cc = { vid: c.vid, a: +c.a, b: +c.b, title: String(c.title || '').slice(0, 160), src: c.src === 'wade' ? 'wade' : 'pats' };
-  snapshot(); const d = newDrawing({ type: 'clip', p1: { t, p: pr }, clip: cc, size: { w: 320 }, color: '#000000' }); drawings.push(d);
+  snapshot(); const d = newDrawing({ type: 'clip', p1: { t, p: pr }, anchor: 'bottom', clip: cc, size: { w: 320 }, color: '#000000' }); drawings.push(d);
   saveJSON('rt_drawings', drawings); ensureClip(cc); repaintOverlays();
 }
 // ---- cutting (local server) / cache state, per clip key ----
@@ -4353,7 +4376,8 @@ function clipLayer() {
   return L;
 }
 const clipW = (d) => Math.max(200, Math.min(960, +(d.size && d.size.w) || 320));
-const clipBoxH = (w) => Math.round((w - 2) * 9 / 16) + 25;   // borders + 22 px header + 16:9 body
+const clipBoxH = (w) => (w - 2) * 9 / 16 + 24;
+const clipLift = (d, h) => (d && d.anchor === 'bottom' ? h : h / 2);   // anchor -> box top: bottom-centre anchors (new) lift the whole box, older centre anchors half of it   // borders + 22 px header + 16:9 body
 function clipHead(c) { return `${c.src === 'wade' ? 'Wade' : 'PATs'} ${fmtClipT(c.a)} – ${fmtClipT(c.b)}`; }
 function syncClipBoxes(W, H) {
   const layer = clipLayer();
@@ -4366,7 +4390,7 @@ function syncClipBoxes(W, H) {
     el._d = d;
     const x = drawX(d.p1.t), y = drawY(d.p1.p);
     if (x == null || y == null) { el.style.display = 'none'; continue; }
-    const w = clipW(d); el.style.display = ''; el.style.left = Math.round(x - w / 2) + 'px'; el.style.top = Math.round(y - clipBoxH(w) / 2) + 'px'; el.style.width = w + 'px';   // anchored at its centre
+    const w = clipW(d); el.style.display = ''; el.style.left = Math.round(x - w / 2) + 'px'; el.style.top = Math.round(y - clipLift(d, clipBoxH(w))) + 'px'; el.style.width = w + 'px';   // anchored at its bottom-centre (older clips: centre)
     clipBody(el, d.clip);
   }
   for (const [id, el] of clipBoxes) if (!live.has(id)) { const v = el.querySelector('video'); if (v) v.pause(); el.remove(); clipBoxes.delete(id); }
@@ -4414,12 +4438,12 @@ function makeClipBox() {
   grip.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || drawingsLocked || (el._d && el._d.locked)) return;
     const d = el._d, w = clipW(d), x0 = drawX(d.p1.t), y0 = drawY(d.p1.p); if (x0 == null || y0 == null) return;
-    rs = { cx: e.clientX, w, left: x0 - w / 2, top: y0 - clipBoxH(w) / 2, moved: false }; grip.setPointerCapture(e.pointerId); e.preventDefault();
+    rs = { cx: e.clientX, w, left: x0 - w / 2, top: y0 - clipLift(d, clipBoxH(w)), moved: false }; grip.setPointerCapture(e.pointerId); e.preventDefault();
   });
   grip.addEventListener('pointermove', (e) => {
     if (!rs) return; const dx = e.clientX - rs.cx; if (!rs.moved && Math.abs(dx) <= 2) return;
     if (!rs.moved) { rs.moved = true; snapshot(); }
-    const d = el._d, w = Math.max(200, Math.min(960, Math.round(rs.w + dx))), t = xToFreeTime(rs.left + w / 2), pr = candle.coordinateToPrice(rs.top + clipBoxH(w) / 2);
+    const d = el._d, w = Math.max(200, Math.min(960, Math.round(rs.w + dx))), t = xToFreeTime(rs.left + w / 2), pr = candle.coordinateToPrice(rs.top + clipLift(d, clipBoxH(w)));
     d.size = { w }; if (t != null && pr != null) d.p1 = { t, p: pr }; repaintOverlays();
   });
   const rsEnd = () => { if (!rs) return; const m = rs; rs = null; if (m.moved) saveJSON('rt_drawings', drawings); };

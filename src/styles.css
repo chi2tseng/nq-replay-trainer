@@ -1103,6 +1103,9 @@ button.bs-stop.buy:hover:not(:disabled), button.bs-stop.sell:hover:not(:disabled
 #toolbar .grp.tools .tl-txt{ display:none; font-size:11px; font-weight:400; }
 @media (min-width:2100px){ #toolbar .grp.tools .tl-txt{ display:inline; } }
 
+/* replay clock / last price / bid x ask are not shown in the toolbar (user, 2026-10-06): the date button and the axes carry them */
+#toolbar #clock, #toolbar #clockPrice, #toolbar #bboTag{ display:none !important; }
+
 /* ---- T2 (<=1799): still one row; ladder steps 1-8 ---- */
 @media (max-width:1799px){
   #toolbar{ column-gap:6px; }                            /* 8: gaps 6/4/6, dividers dropped */
